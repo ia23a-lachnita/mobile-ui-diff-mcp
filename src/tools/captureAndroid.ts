@@ -1,14 +1,13 @@
 import * as path from 'path';
 import { spawnAndPipe } from '../utils/exec';
 import { resolveAbsolutePath, ensureDir } from '../utils/fs';
-import { ANDROID_DEVICE_ID_REGEX } from '../utils/validation';
 
 export async function captureAndroidScreenshot(outputPath: string, deviceId?: string): Promise<{ outputPath: string }> {
   try {
     const absPath = resolveAbsolutePath(outputPath);
     await ensureDir(path.dirname(absPath));
     
-    if (deviceId && !ANDROID_DEVICE_ID_REGEX.test(deviceId)) {
+    if (deviceId && !/^[a-zA-Z0-9.:_-]+$/.test(deviceId)) {
       throw new Error(`Invalid deviceId format`);
     }
     

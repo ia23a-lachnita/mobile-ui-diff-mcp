@@ -127,5 +127,5 @@ For each returned region, `analysisStatus` describes the state of the VLM feedba
 ## Limitations
 - Only standard PNG files are fully supported.
 - Requires your own adb setup for Android or macOS Xcode tools simulator.
-- VLM feedback requires Ollama reachable at the configured `OLLAMA_BASE_URL`. By default that is `http://localhost:11434` with `qwen2.5vl:7b`, and both the URL and model can be overridden with `OLLAMA_BASE_URL` and `OLLAMA_MODEL`.
+- Defaults to Ollama at localhost:11434 using qwen2.5vl:7b, but can be overridden with OLLAMA_BASE_URL and OLLAMA_MODEL.
 - **Static Screenshots Only:** This tool compares static screenshots and does not navigate app flows. It expects the app to already be perfectly positioned on the correct screen.

@@ -7,7 +7,6 @@ import { compareImages } from "../tools/compareImages";
 import { runMobileUiDiff } from "../tools/runMobileUiDiff";
 import { captureAndroidScreenshot } from "../tools/captureAndroid";
 import { captureIosSimulatorScreenshot } from "../tools/captureIosSimulator";
-import { ANDROID_DEVICE_ID_PATTERN, IOS_SIMULATOR_ID_PATTERN } from "../utils/validation";
 
 export const ignoreRegionSchema = z.object({
   x: z.number().int().nonnegative(),
@@ -32,12 +31,12 @@ export const compareImagesSchema = z.object({
 
 export const captureAndroidSchema = z.object({
   outputPath: z.string().min(1),
-  deviceId: z.string().regex(new RegExp(ANDROID_DEVICE_ID_PATTERN)).optional()
+  deviceId: z.string().regex(/^[a-zA-Z0-9.:_-]+$/).optional()
 });
 
 export const captureIosSchema = z.object({
   outputPath: z.string().min(1),
-  simulator: z.string().regex(new RegExp(IOS_SIMULATOR_ID_PATTERN)).optional()
+  simulator: z.string().regex(/^[a-zA-Z0-9.\-:_]+$/).optional()
 });
 
 export const runMobileUiDiffSchema = z.object({
@@ -72,7 +71,7 @@ export function createServer() {
               expectedImage: { type: "string", minLength: 1, description: "Path to the expected design/mockup PNG." },
               actualImage: { type: "string", minLength: 1, description: "Path to the actual screenshot PNG." },
               outputDir: { type: "string", minLength: 1, description: "Directory where diff artifacts and region crops will be written." },
-              threshold: { type: "number", minimum: 0, maximum: 1, description: "Deprecated alias for pixelmatchThreshold. Used only when pixelmatchThreshold is omitted." },
+              threshold: { type: "number", minimum: 0, maximum: 1, default: 0.1, description: "Deprecated alias for pixelmatchThreshold. Used only when pixelmatchThreshold is omitted." },
               pixelmatchThreshold: { type: "number", minimum: 0, maximum: 1, default: 0.1, description: "Color sensitivity for pixel differences. Default: 0.1." },
               maxDiffPercent: { type: "number", minimum: 0, maximum: 1, default: 0.001, description: "Maximum differing-pixel ratio allowed before failing the report. Default: 0.001." },
               maxRegions: { type: "integer", minimum: 1, maximum: 500, default: 50, description: "Maximum number of diff regions to return, keeping the largest regions first. Default: 50." },
@@ -104,7 +103,7 @@ export function createServer() {
             type: "object",
             properties: {
               outputPath: { type: "string", minLength: 1, description: "Path where the captured Android screenshot will be written." },
-              deviceId: { type: "string", pattern: ANDROID_DEVICE_ID_PATTERN, description: "Optional adb device ID, including TCP IDs like 192.168.1.50:5555." }
+              deviceId: { type: "string", pattern: "^[a-zA-Z0-9.:_-]+$", description: "Optional adb device ID, including TCP IDs like 192.168.1.50:5555." }
             },
             required: ["outputPath"]
           }
@@ -116,7 +115,7 @@ export function createServer() {
             type: "object",
             properties: {
               outputPath: { type: "string", minLength: 1, description: "Path where the captured iOS Simulator screenshot will be written." },
-              simulator: { type: "string", pattern: IOS_SIMULATOR_ID_PATTERN, default: "booted", description: "Optional simctl simulator identifier. Default: booted." }
+              simulator: { type: "string", pattern: "^[a-zA-Z0-9.\\-:_]+$", default: "booted", description: "Optional simctl simulator identifier. Default: booted." }
             },
             required: ["outputPath"]
           }
@@ -131,7 +130,7 @@ export function createServer() {
               expectedImage: { type: "string", minLength: 1, description: "Path to the expected design/mockup PNG." },
               actualImage: { type: "string", minLength: 1, description: "Optional path to an existing actual screenshot PNG. Required when platform is none." },
               outputDir: { type: "string", minLength: 1, description: "Directory where screenshots, diff artifacts, and region crops will be written." },
-              threshold: { type: "number", minimum: 0, maximum: 1, description: "Deprecated alias for pixelmatchThreshold. Used only when pixelmatchThreshold is omitted." },
+              threshold: { type: "number", minimum: 0, maximum: 1, default: 0.1, description: "Deprecated alias for pixelmatchThreshold. Used only when pixelmatchThreshold is omitted." },
               pixelmatchThreshold: { type: "number", minimum: 0, maximum: 1, default: 0.1, description: "Color sensitivity for pixel differences. Default: 0.1." },
               maxDiffPercent: { type: "number", minimum: 0, maximum: 1, default: 0.001, description: "Maximum differing-pixel ratio allowed before failing the report. Default: 0.001." },
               maxRegions: { type: "integer", minimum: 1, maximum: 500, default: 50, description: "Maximum number of diff regions to return, keeping the largest regions first. Default: 50." },
