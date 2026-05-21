@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "dist/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
     "build": "tsc",
     "start": "node dist/index.js",
     "compare": "ts-node src/cli/compare.ts"
@@ -26,6 +26,7 @@
     "@types/pngjs": "^6.0.5",
     "@types/sharp": "^0.31.1",
     "ts-node": "^10.9.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
   }
 }

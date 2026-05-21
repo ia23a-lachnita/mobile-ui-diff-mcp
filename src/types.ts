@@ -22,6 +22,7 @@ export interface RegionReport {
     actual: string;
     diff: string;
   };
+  analysisStatus: "analyzed" | "skipped";
   analysis: VlmAnalysis | null;
 }
 
@@ -30,7 +31,8 @@ export interface DiffReport {
   diffPixels: number;
   totalPixels: number;
   diffPercent: number;
-  threshold: number;
+  pixelmatchThreshold: number;
+  maxDiffPercent: number;
   regions: RegionReport[];
   artifacts: {
     expected: string;

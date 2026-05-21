@@ -11,6 +11,10 @@ export interface RunMobileUiDiffInput {
   actualImage?: string;
   outputDir: string;
   threshold?: number;
+  pixelmatchThreshold?: number;
+  maxDiffPercent?: number;
+  maxRegions?: number;
+  maxVlmRegions?: number;
   includeVlmAnalysis?: boolean;
   ignoreRegions?: IgnoreRegion[];
 }
@@ -36,8 +40,12 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
   return await compareImages({
     expectedImage: input.expectedImage,
     actualImage: actualImagePath,
-    outputDir: input.outputDir, // rely on resolve taking place inside compareImages
+    outputDir: input.outputDir,
     threshold: input.threshold,
+    pixelmatchThreshold: input.pixelmatchThreshold,
+    maxDiffPercent: input.maxDiffPercent,
+    maxRegions: input.maxRegions,
+    maxVlmRegions: input.maxVlmRegions,
     includeVlmAnalysis: input.includeVlmAnalysis,
     ignoreRegions: input.ignoreRegions
   });

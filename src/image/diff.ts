@@ -6,11 +6,11 @@ export function createDiffErrorMask(expected: PNG, actual: PNG, threshold: numbe
   const height = expected.height;
   
   const diffImage = new PNG({ width, height });
+  const maskImage = new PNG({ width, height });
   
-  // Custom pixelmatch wrapper to also track exact mismatch locations
   const mismatchMask: boolean[][] = Array(height).fill(null).map(() => Array(width).fill(false));
   
-  // We run standard pixelmatch first to get the diff image colored nicely
+  // First run: generate the user-facing diff image
   const diffPixels = pixelmatch(
     expected.data,
     actual.data,
@@ -20,17 +20,21 @@ export function createDiffErrorMask(expected: PNG, actual: PNG, threshold: numbe
     { threshold, includeAA: true }
   );
 
-  // Re-evaluate quickly to build mask (pixelmatch doesn't output the mask directly)
-  // Or we can just look at diffImage.data (pixelmatch paints diff as red: 255, 0, 0, 255 typically)
+  // Second run: generate pure diff mask to accurately isolate mismatches
+  pixelmatch(
+    expected.data,
+    actual.data,
+    maskImage.data,
+    width,
+    height,
+    { threshold, includeAA: true, diffMask: true, diffColor: [255, 0, 0] }
+  );
+
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = (width * y + x) << 2;
-      // pixelmatch defaults: diffColor = [255, 0, 0]
-      const r = diffImage.data[idx];
-      const g = diffImage.data[idx+1];
-      const b = diffImage.data[idx+2];
-      const a = diffImage.data[idx+3];
-      if (r === 255 && g === 0 && b === 0 && a === 255) {
+      // When diffMask is true, only differing pixels are colored, others are transparent (alpha 0)
+      if (maskImage.data[idx+3] !== 0) {
         mismatchMask[y][x] = true;
       }
     }

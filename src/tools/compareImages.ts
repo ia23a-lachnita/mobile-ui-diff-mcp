@@ -14,12 +14,19 @@ export interface CompareImagesInput {
   actualImage: string;
   outputDir: string;
   threshold?: number;
+  pixelmatchThreshold?: number;
+  maxDiffPercent?: number;
+  maxRegions?: number;
+  maxVlmRegions?: number;
   includeVlmAnalysis?: boolean;
   ignoreRegions?: IgnoreRegion[];
 }
 
 export async function compareImages(input: CompareImagesInput): Promise<DiffReport> {
-  const threshold = input.threshold ?? 0.1;
+  const pixelmatchThreshold = input.pixelmatchThreshold ?? input.threshold ?? 0.1;
+  const maxDiffPercent = input.maxDiffPercent ?? 0.001;
+  const maxRegions = input.maxRegions ?? 50;
+  const maxVlmRegions = input.maxVlmRegions ?? 10;
   const includeVlmAnalysis = input.includeVlmAnalysis ?? false;
   const ignoreRegions = input.ignoreRegions ?? [];
   const outputDir = resolveAbsolutePath(input.outputDir);
@@ -48,7 +55,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
   applyIgnoreRegions(expectedPng, ignoreRegions);
   applyIgnoreRegions(actualPng, ignoreRegions);
 
-  const { diffImage, diffPixels, mismatchMask } = createDiffErrorMask(expectedPng, actualPng, threshold);
+  const { diffImage, diffPixels, mismatchMask } = createDiffErrorMask(expectedPng, actualPng, pixelmatchThreshold);
 
   const totalPixels = expectedPng.width * expectedPng.height;
   const diffPercent = diffPixels / totalPixels;
@@ -62,9 +69,14 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
   await writePng(expectedPng, processedExpectedPath);
   await writePng(actualPng, processedActualPath);
 
-  const rawRegions = detectRegions(mismatchMask);
-  // limit VLM to top 10 to avoid slow runs
-  const topRegions = rawRegions.slice(0, 10);
+  let rawRegions = detectRegions(mismatchMask);
+  
+  if (rawRegions.length > maxRegions) {
+    rawRegions = rawRegions.slice(0, maxRegions);
+  }
+
+  const sortedByArea = [...rawRegions].sort((a, b) => (b.width * b.height) - (a.width * a.height));
+  const vlmCandidates = new Set(sortedByArea.slice(0, maxVlmRegions));
 
   const regions: RegionReport[] = [];
 
@@ -80,7 +92,10 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     await cropAndSave(diffAbsPath, box, diffCrop);
 
     let analysis = null;
-    if (includeVlmAnalysis && i < 10) {
+    let analysisStatus: "analyzed" | "skipped" = "skipped";
+    
+    if (includeVlmAnalysis && vlmCandidates.has(box)) {
+      analysisStatus = "analyzed";
       analysis = await explainDiffUsingOllama(expCrop, actCrop, diffCrop);
     }
 
@@ -93,16 +108,18 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
         actual: actCrop,
         diff: diffCrop
       },
+      analysisStatus,
       analysis
     });
   }
 
   return {
-    status: diffPixels > 0 ? "fail" : "pass",
+    status: diffPercent <= maxDiffPercent ? "pass" : "fail",
     diffPixels,
     totalPixels,
     diffPercent,
-    threshold,
+    pixelmatchThreshold,
+    maxDiffPercent,
     regions,
     artifacts: {
       expected: processedExpectedPath,

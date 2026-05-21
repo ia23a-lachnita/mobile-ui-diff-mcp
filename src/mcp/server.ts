@@ -104,45 +104,82 @@ export function createServer() {
     };
   });
 
+const ignoreRegionSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
+  reason: z.string().optional()
+});
+
+const compareImagesSchema = z.object({
+  expectedImage: z.string(),
+  actualImage: z.string(),
+  outputDir: z.string(),
+  threshold: z.number().optional(),
+  pixelmatchThreshold: z.number().optional(),
+  maxDiffPercent: z.number().optional(),
+  maxRegions: z.number().optional(),
+  maxVlmRegions: z.number().optional(),
+  includeVlmAnalysis: z.boolean().optional(),
+  ignoreRegions: z.array(ignoreRegionSchema).optional()
+});
+
+const captureAndroidSchema = z.object({
+  outputPath: z.string(),
+  deviceId: z.string().optional()
+});
+
+const captureIosSchema = z.object({
+  outputPath: z.string(),
+  simulator: z.string().optional()
+});
+
+const runMobileUiDiffSchema = z.object({
+  platform: z.enum(['android', 'ios', 'none']),
+  expectedImage: z.string(),
+  actualImage: z.string().optional(),
+  outputDir: z.string(),
+  threshold: z.number().optional(),
+  pixelmatchThreshold: z.number().optional(),
+  maxDiffPercent: z.number().optional(),
+  maxRegions: z.number().optional(),
+  maxVlmRegions: z.number().optional(),
+  includeVlmAnalysis: z.boolean().optional(),
+  ignoreRegions: z.array(ignoreRegionSchema).optional()
+});
+
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    switch (request.params.name) {
-      case "compare_images": {
-        const args = request.params.arguments as any;
-        const result = await compareImages({
-          expectedImage: args.expectedImage,
-          actualImage: args.actualImage,
-          outputDir: args.outputDir,
-          threshold: args.threshold,
-          includeVlmAnalysis: args.includeVlmAnalysis,
-          ignoreRegions: args.ignoreRegions
-        });
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    try {
+      switch (request.params.name) {
+        case "compare_images": {
+          const args = compareImagesSchema.parse(request.params.arguments);
+          const result = await compareImages(args as any);
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+        case "capture_android_screenshot": {
+          const args = captureAndroidSchema.parse(request.params.arguments);
+          const result = await captureAndroidScreenshot(args.outputPath, args.deviceId);
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+        case "capture_ios_simulator_screenshot": {
+          const args = captureIosSchema.parse(request.params.arguments);
+          const result = await captureIosSimulatorScreenshot(args.outputPath, args.simulator);
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+        case "run_mobile_ui_diff": {
+          const args = runMobileUiDiffSchema.parse(request.params.arguments);
+          const result = await runMobileUiDiff(args as any);
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+        default:
+          throw new Error(`Unknown tool: ${request.params.name}`);
       }
-      case "capture_android_screenshot": {
-        const args = request.params.arguments as any;
-        const result = await captureAndroidScreenshot(args.outputPath, args.deviceId);
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-      case "capture_ios_simulator_screenshot": {
-        const args = request.params.arguments as any;
-        const result = await captureIosSimulatorScreenshot(args.outputPath, args.simulator);
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-      case "run_mobile_ui_diff": {
-        const args = request.params.arguments as any;
-        const result = await runMobileUiDiff({
-          platform: args.platform,
-          expectedImage: args.expectedImage,
-          actualImage: args.actualImage,
-          outputDir: args.outputDir,
-          threshold: args.threshold,
-          includeVlmAnalysis: args.includeVlmAnalysis,
-          ignoreRegions: args.ignoreRegions
-        });
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      }
-      default:
-        throw new Error(`Unknown tool: ${request.params.name}`);
+    } catch (err: any) {
+      return { 
+        isError: true,
+        content: [{ type: "text", text: err.stack || err.message || String(err) }] 
+      };
     }
   });
 
