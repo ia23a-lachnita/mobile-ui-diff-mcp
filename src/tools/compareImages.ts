@@ -71,12 +71,20 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
 
   let rawRegions = detectRegions(mismatchMask);
   
+  // Sort regions by area descending, effectively keeping the largest ones
+  rawRegions.sort((a, b) => (b.width * b.height) - (a.width * a.height));
+  
   if (rawRegions.length > maxRegions) {
     rawRegions = rawRegions.slice(0, maxRegions);
   }
 
-  const sortedByArea = [...rawRegions].sort((a, b) => (b.width * b.height) - (a.width * a.height));
-  const vlmCandidates = new Set(sortedByArea.slice(0, maxVlmRegions));
+  const vlmCandidates = new Set(rawRegions.slice(0, maxVlmRegions));
+
+  // Sort back to top-to-bottom, left-to-right for reporting readability
+  rawRegions.sort((a, b) => {
+    if (a.y !== b.y) return a.y - b.y;
+    return a.x - b.x;
+  });
 
   const regions: RegionReport[] = [];
 
@@ -92,11 +100,12 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     await cropAndSave(diffAbsPath, box, diffCrop);
 
     let analysis = null;
-    let analysisStatus: "analyzed" | "skipped" = "skipped";
+    let analysisStatus: "skipped" | "ok" | "fallback" | "error" = "skipped";
     
     if (includeVlmAnalysis && vlmCandidates.has(box)) {
-      analysisStatus = "analyzed";
-      analysis = await explainDiffUsingOllama(expCrop, actCrop, diffCrop);
+      const ollamaResult = await explainDiffUsingOllama(expCrop, actCrop, diffCrop);
+      analysis = ollamaResult.analysis;
+      analysisStatus = ollamaResult.status;
     }
 
     regions.push({

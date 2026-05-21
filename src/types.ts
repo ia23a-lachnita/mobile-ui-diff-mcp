@@ -22,7 +22,7 @@ export interface RegionReport {
     actual: string;
     diff: string;
   };
-  analysisStatus: "analyzed" | "skipped";
+  analysisStatus: "skipped" | "ok" | "fallback" | "error";
   analysis: VlmAnalysis | null;
 }
 

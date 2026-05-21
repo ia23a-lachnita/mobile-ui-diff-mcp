@@ -5,12 +5,25 @@ export async function explainDiffUsingOllama(
   expectedCropPath: string,
   actualCropPath: string,
   diffCropPath: string
-): Promise<VlmAnalysis> {
-  const defaultResponse = (msg: string): VlmAnalysis => ({
-    type: 'unknown',
-    severity: 'medium',
-    description: msg,
-    likelyFix: 'Inspect the crop manually.'
+): Promise<{ analysis: VlmAnalysis | null, status: "ok" | "fallback" | "error" }> {
+  const fallbackResponse = (msg: string): { analysis: VlmAnalysis, status: "fallback" } => ({
+    status: "fallback",
+    analysis: {
+      type: 'unknown',
+      severity: 'medium',
+      description: msg,
+      likelyFix: 'Inspect the crop manually.'
+    }
+  });
+
+  const errorResponse = (msg: string): { analysis: VlmAnalysis, status: "error" } => ({
+    status: "error",
+    analysis: {
+      type: 'unknown',
+      severity: 'medium',
+      description: msg,
+      likelyFix: 'Inspect the crop manually.'
+    }
   });
 
   try {
@@ -48,12 +61,12 @@ export async function explainDiffUsingOllama(
       });
     } catch (err: any) {
       if (err.name === 'AbortError' || err.type === 'aborted') {
-        return defaultResponse('VLM timeout exceeded.');
+        return fallbackResponse('VLM timeout exceeded.');
       }
       if (err.code === 'ECONNREFUSED' || err.message.includes('fetch failed') || err.message.includes('network')) {
-        return defaultResponse('Ollama unreachable. Is it running?');
+        return fallbackResponse('Ollama unreachable. Is it running?');
       }
-      throw err;
+      return errorResponse(`Network error: ${err.message}`);
     } finally {
       clearTimeout(timeoutId);
     }
@@ -61,28 +74,31 @@ export async function explainDiffUsingOllama(
     if (!response.ok) {
       const text = await response.text();
       if (response.status === 404 && text.includes('model')) {
-         return defaultResponse('Ollama model missing. Pull it first.');
+         return fallbackResponse('Ollama model missing. Pull it first.');
       }
-      return defaultResponse(`Ollama request failed: ${response.status} ${text}`);
+      return errorResponse(`Ollama request failed: ${response.status} ${text}`);
     }
 
     const data = await response.json();
     const content = data?.message?.content;
-    if (!content) return defaultResponse('VLM returned empty response.');
+    if (!content) return errorResponse('VLM returned empty response.');
 
     try {
       const parsed = JSON.parse(content);
       return {
-        type: parsed.type || 'unknown',
-        severity: parsed.severity || 'medium',
-        description: parsed.description || 'No description provided.',
-        likelyFix: parsed.likelyFix || 'Unknown fix.'
+        status: "ok",
+        analysis: {
+          type: parsed.type || 'unknown',
+          severity: parsed.severity || 'medium',
+          description: parsed.description || 'No description provided.',
+          likelyFix: parsed.likelyFix || 'Unknown fix.'
+        }
       };
     } catch (e) {
-      return defaultResponse('Invalid JSON response from VLM.');
+      return fallbackResponse('Invalid JSON response from VLM.');
     }
   } catch (error: any) {
     console.error('Failed to explain diff with Ollama:', error);
-    return defaultResponse(`VLM error: ${error.message}`);
+    return errorResponse(`VLM error: ${error.message}`);
   }
 }

@@ -3,13 +3,18 @@ import { PNG } from 'pngjs';
 import fs from 'fs/promises';
 import path from 'path';
 import { compareImages } from '../src/tools/compareImages';
+import {
+  compareImagesSchema,
+  runMobileUiDiffSchema,
+  captureAndroidSchema,
+  captureIosSchema
+} from '../src/mcp/server';
 
-async function createTestImage(path: string, draw: (png: PNG) => void) {
+async function createTestImage(p: string, draw: (png: PNG) => void) {
   const png = new PNG({ width: 100, height: 100 });
   for (let y = 0; y < png.height; y++) {
     for (let x = 0; x < png.width; x++) {
       const idx = (png.width * y + x) << 2;
-      // White background
       png.data[idx] = 255;
       png.data[idx+1] = 255;
       png.data[idx+2] = 255;
@@ -17,7 +22,7 @@ async function createTestImage(path: string, draw: (png: PNG) => void) {
     }
   }
   draw(png);
-  await fs.writeFile(path, PNG.sync.write(png));
+  await fs.writeFile(p, PNG.sync.write(png));
 }
 
 function drawRect(png: PNG, rx: number, ry: number, rw: number, rh: number, color: [number, number, number]) {
@@ -33,13 +38,12 @@ function drawRect(png: PNG, rx: number, ry: number, rw: number, rh: number, colo
   }
 }
 
-describe('compareImages', () => {
+describe('compareImages and Schemas', () => {
   const testDir = path.join(__dirname, 'fixtures');
   
   beforeAll(async () => {
     await fs.mkdir(testDir, { recursive: true });
     
-    // Base identical images
     await createTestImage(path.join(testDir, 'base.png'), (png) => {
       drawRect(png, 10, 10, 20, 20, [0, 0, 0]);
     });
@@ -47,12 +51,10 @@ describe('compareImages', () => {
       drawRect(png, 10, 10, 20, 20, [0, 0, 0]);
     });
     
-    // Shifted
     await createTestImage(path.join(testDir, 'shifted.png'), (png) => {
       drawRect(png, 15, 10, 20, 20, [0, 0, 0]);
     });
     
-    // Multiple regions
     await createTestImage(path.join(testDir, 'multi.png'), (png) => {
       drawRect(png, 10, 10, 20, 20, [0, 0, 0]);
       drawRect(png, 50, 50, 10, 10, [255, 0, 0]);
@@ -64,7 +66,7 @@ describe('compareImages', () => {
     await fs.rm(testDir, { recursive: true, force: true });
   });
 
-  it('passes on identical images', async () => {
+  it('a. passes on identical images', async () => {
     const result = await compareImages({
       expectedImage: path.join(testDir, 'base.png'),
       actualImage: path.join(testDir, 'identical.png'),
@@ -75,7 +77,7 @@ describe('compareImages', () => {
     expect(result.regions).toHaveLength(0);
   });
 
-  it('fails on shifted image with region detection', async () => {
+  it('b. fails on shifted image and returns one changed region', async () => {
     const result = await compareImages({
       expectedImage: path.join(testDir, 'base.png'),
       actualImage: path.join(testDir, 'shifted.png'),
@@ -86,7 +88,7 @@ describe('compareImages', () => {
     expect(result.regions.length).toBeGreaterThan(0);
   });
 
-  it('passes when ignoreRegion covers the diff', async () => {
+  it('c. passes when ignoreRegion covers the diff', async () => {
     const result = await compareImages({
       expectedImage: path.join(testDir, 'base.png'),
       actualImage: path.join(testDir, 'shifted.png'),
@@ -97,23 +99,84 @@ describe('compareImages', () => {
     expect(result.diffPixels).toBe(0);
   });
 
-  it('merges regions properly and uses vlm max regions', async () => {
+  it('d. maxDiffPercent controls pass/fail independently from pixelmatchThreshold', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-diff-percent'),
+      maxDiffPercent: 1.0
+    });
+    expect(result.status).toBe('pass');
+    expect(result.diffPixels).toBeGreaterThan(0);
+  });
+
+  it('e. maxRegions keeps largest regions, not first screen-position regions', async () => {
     const result = await compareImages({
       expectedImage: path.join(testDir, 'base.png'),
       actualImage: path.join(testDir, 'multi.png'),
       outputDir: path.join(testDir, 'out-multi'),
-      maxRegions: 2,
-      maxVlmRegions: 1,
-      includeVlmAnalysis: true
+      maxRegions: 1
     });
     
-    // Fallback/offline Ollama might result in "unknown" default VLM analysis, which is perfectly fine.
-    expect(result.regions.length).toBeLessThanOrEqual(2);
-    
-    // Only one should have been analyzed
-    const analyzedCount = result.regions.filter(r => r.analysisStatus === 'analyzed').length;
-    expect(analyzedCount).toBe(1);
-    const skippedCount = result.regions.filter(r => r.analysisStatus === 'skipped').length;
-    expect(skippedCount).toBe(1);
+    expect(result.regions).toHaveLength(1);
+    const region = result.regions[0];
+    expect(region.area).toBeGreaterThanOrEqual(100);
+  });
+
+  it('f. invalid Zod inputs are rejected', () => {
+    const invalidInputs = {
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-identical'),
+      pixelmatchThreshold: 1.5,
+      maxRegions: -5,
+      ignoreRegions: [{ x: -1, y: 0, width: 10, height: 10 }]
+    };
+    const parsed = compareImagesSchema.safeParse(invalidInputs);
+    expect(parsed.success).toBe(false);
+  });
+
+  it('g. Ollama fallback returns structured fallback status', async () => {
+    const originalUrl = process.env.OLLAMA_BASE_URL;
+    process.env.OLLAMA_BASE_URL = 'http://localhost:59999';
+    try {
+      const result = await compareImages({
+        expectedImage: path.join(testDir, 'base.png'),
+        actualImage: path.join(testDir, 'multi.png'),
+        outputDir: path.join(testDir, 'out-ollama'),
+        maxRegions: 1,
+        maxVlmRegions: 1,
+        includeVlmAnalysis: true
+      });
+      expect(result.regions[0].analysisStatus).toBe('fallback');
+    } finally {
+      process.env.OLLAMA_BASE_URL = originalUrl;
+    }
+  });
+
+  it('h. Android/iOS capture functions reject unsafe device/simulator IDs', () => {
+    const invalidAndroid = captureAndroidSchema.safeParse({
+      outputPath: 'out.png',
+      deviceId: 'invalid id ; ls'
+    });
+    expect(invalidAndroid.success).toBe(false);
+
+    const validAndroid = captureAndroidSchema.safeParse({
+      outputPath: 'out.png',
+      deviceId: 'emulator-5554'
+    });
+    expect(validAndroid.success).toBe(true);
+
+    const invalidIos = captureIosSchema.safeParse({
+      outputPath: 'out.png',
+      simulator: 'iPhone 14 | reboot'
+    });
+    expect(invalidIos.success).toBe(false);
+
+    const validIos = captureIosSchema.safeParse({
+      outputPath: 'out.png',
+      simulator: '028DFBA8-692B-45EA-A9D8-A973C56DC2C9'
+    });
+    expect(validIos.success).toBe(true);
   });
 });

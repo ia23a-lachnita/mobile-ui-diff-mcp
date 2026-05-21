@@ -1,4 +1,5 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+const fs = require('fs');
+fs.writeFileSync('src/mcp/server.ts', `import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -181,7 +182,7 @@ export function createServer() {
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
         default:
-          throw new Error(`Unknown tool: ${request.params.name}`);
+          throw new Error(\`Unknown tool: \${request.params.name}\`);
       }
     } catch (err: any) {
       return { 
@@ -200,3 +201,4 @@ export async function runServer() {
   await server.connect(transport);
   console.error("mobile-ui-diff-mcp running on stdio");
 }
+`);
