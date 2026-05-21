@@ -32,6 +32,20 @@ npm install
 npm run build
 ```
 
+## CLI Usage
+
+You can run the comparison from the command line:
+
+```sh
+npm run compare -- --expected examples/mockups/login.png --actual examples/actual/login.png --out artifacts/login \
+  --pixelmatchThreshold 0.1 \
+  --maxDiffPercent 0.001 \
+  --maxRegions 50 \
+  --maxVlmRegions 10 \
+  --ignoreRegions '[{"x":0,"y":0,"width":390,"height":48}]' \
+  --vlm
+```
+
 ## Connecting to Claude Code or other MCP hosts
 
 Update your MCP config (e.g., `~/.claude/claude_mcp.json` or your project settings):
