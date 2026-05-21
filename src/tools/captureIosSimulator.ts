@@ -1,6 +1,7 @@
 import * as path from 'path';
 import { execFileAsync } from '../utils/exec';
 import { resolveAbsolutePath, ensureDir } from '../utils/fs';
+import { IOS_SIMULATOR_ID_REGEX } from '../utils/validation';
 
 export async function captureIosSimulatorScreenshot(outputPath: string, simulator: string = 'booted'): Promise<{ outputPath: string }> {
   try {
@@ -10,7 +11,7 @@ export async function captureIosSimulatorScreenshot(outputPath: string, simulato
     if (!simulator || simulator.trim() === '') {
        simulator = 'booted';
     }
-    if (!/^[a-zA-Z0-9.\-:_]+$/.test(simulator)) {
+    if (!IOS_SIMULATOR_ID_REGEX.test(simulator)) {
       throw new Error(`Invalid simulator identifier format`);
     }
     

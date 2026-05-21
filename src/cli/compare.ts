@@ -1,7 +1,15 @@
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { compareImages } from '../tools/compareImages';
 
 const program = new Command();
+
+function parseIgnoreRegions(value: string) {
+  try {
+    return JSON.parse(value);
+  } catch (err: any) {
+    throw new InvalidArgumentError(`Invalid JSON for --ignoreRegions: ${err.message}`);
+  }
+}
 
 program
   .requiredOption('--expected <path>', 'Expected mockup PNG')
@@ -10,9 +18,9 @@ program
   .option('--threshold <number>', 'Legacy Pixelmatch threshold', parseFloat, 0.1)
   .option('--pixelmatchThreshold <number>', 'Pixelmatch threshold', parseFloat, 0.1)
   .option('--maxDiffPercent <number>', 'Max diff percent', parseFloat, 0.001)
-  .option('--maxRegions <number>', 'Maximum number of diff regions', parseInt, 50)
-  .option('--maxVlmRegions <number>', 'Maximum number of VLM regions', parseInt, 10)
-  .option('--ignoreRegions <json>', 'JSON string array of regions to ignore', JSON.parse)
+  .option('--maxRegions <number>', 'Maximum number of diff regions', (value) => Number.parseInt(value, 10), 50)
+  .option('--maxVlmRegions <number>', 'Maximum number of VLM regions', (value) => Number.parseInt(value, 10), 10)
+  .option('--ignoreRegions <json>', 'JSON string array of regions to ignore', parseIgnoreRegions)
   .option('--vlm', 'Include VLM Analysis via Ollama')
   .action(async (options) => {
     try {

@@ -163,7 +163,7 @@ describe('compareImages and Schemas', () => {
 
     const validAndroid = captureAndroidSchema.safeParse({
       outputPath: 'out.png',
-      deviceId: 'emulator-5554'
+      deviceId: '192.168.1.50:5555'
     });
     expect(validAndroid.success).toBe(true);
 
@@ -178,5 +178,24 @@ describe('compareImages and Schemas', () => {
       simulator: '028DFBA8-692B-45EA-A9D8-A973C56DC2C9'
     });
     expect(validIos.success).toBe(true);
+  });
+
+  it('i. applies default region limits through Zod schemas', () => {
+    const parsedCompare = compareImagesSchema.parse({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-defaults')
+    });
+    expect(parsedCompare.maxRegions).toBe(50);
+    expect(parsedCompare.maxVlmRegions).toBe(10);
+
+    const parsedRun = runMobileUiDiffSchema.parse({
+      platform: 'none',
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-run-defaults')
+    });
+    expect(parsedRun.maxRegions).toBe(50);
+    expect(parsedRun.maxVlmRegions).toBe(10);
   });
 });

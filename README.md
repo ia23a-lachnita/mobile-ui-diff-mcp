@@ -10,7 +10,7 @@ An MCP server that helps AI agents compare mobile app screenshots against design
 
 - **Android:** Requires the Android SDK (specifically adb) installed and available in your PATH.
 - **iOS Simulator:** Requires macOS with Xcode installed (xcrun simctl must be available).
-- **Ollama (Optional):** For VLM analysis, Ollama must be running with the model downloaded (`ollama run qwen2.5vl:7b`).
+- **Ollama (Optional):** For VLM analysis, Ollama defaults to `http://localhost:11434` with `qwen2.5vl:7b` downloaded (`ollama run qwen2.5vl:7b`). Override with `OLLAMA_BASE_URL` and `OLLAMA_MODEL` when needed.
 
 ## Features
 - **Screenshot Capture:** Uses adb for Android and simctl for iOS Simulator.
@@ -127,5 +127,5 @@ For each returned region, `analysisStatus` describes the state of the VLM feedba
 ## Limitations
 - Only standard PNG files are fully supported.
 - Requires your own adb setup for Android or macOS Xcode tools simulator.
-- Requires Ollama running on `localhost:11434` with `qwen2.5vl:7b` pulled for VLM feedback.
+- VLM feedback requires Ollama reachable at the configured `OLLAMA_BASE_URL`. By default that is `http://localhost:11434` with `qwen2.5vl:7b`, and both the URL and model can be overridden with `OLLAMA_BASE_URL` and `OLLAMA_MODEL`.
 - **Static Screenshots Only:** This tool compares static screenshots and does not navigate app flows. It expects the app to already be perfectly positioned on the correct screen.

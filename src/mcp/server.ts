@@ -7,6 +7,7 @@ import { compareImages } from "../tools/compareImages";
 import { runMobileUiDiff } from "../tools/runMobileUiDiff";
 import { captureAndroidScreenshot } from "../tools/captureAndroid";
 import { captureIosSimulatorScreenshot } from "../tools/captureIosSimulator";
+import { ANDROID_DEVICE_ID_PATTERN, IOS_SIMULATOR_ID_PATTERN } from "../utils/validation";
 
 export const ignoreRegionSchema = z.object({
   x: z.number().int().nonnegative(),
@@ -23,20 +24,20 @@ export const compareImagesSchema = z.object({
   threshold: z.number().min(0).max(1).optional(),
   pixelmatchThreshold: z.number().min(0).max(1).optional(),
   maxDiffPercent: z.number().min(0).max(1).optional(),
-  maxRegions: z.number().int().positive().max(500).default(50).optional(),
-  maxVlmRegions: z.number().int().nonnegative().max(50).default(10).optional(),
+  maxRegions: z.number().int().positive().max(500).default(50),
+  maxVlmRegions: z.number().int().nonnegative().max(50).default(10),
   includeVlmAnalysis: z.boolean().optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional()
 });
 
 export const captureAndroidSchema = z.object({
   outputPath: z.string().min(1),
-  deviceId: z.string().regex(/^[a-zA-Z0-9_.-]+$/).optional()
+  deviceId: z.string().regex(new RegExp(ANDROID_DEVICE_ID_PATTERN)).optional()
 });
 
 export const captureIosSchema = z.object({
   outputPath: z.string().min(1),
-  simulator: z.string().regex(/^[a-zA-Z0-9_.-]+$/).optional()
+  simulator: z.string().regex(new RegExp(IOS_SIMULATOR_ID_PATTERN)).optional()
 });
 
 export const runMobileUiDiffSchema = z.object({
@@ -47,8 +48,8 @@ export const runMobileUiDiffSchema = z.object({
   threshold: z.number().min(0).max(1).optional(),
   pixelmatchThreshold: z.number().min(0).max(1).optional(),
   maxDiffPercent: z.number().min(0).max(1).optional(),
-  maxRegions: z.number().int().positive().max(500).default(50).optional(),
-  maxVlmRegions: z.number().int().nonnegative().max(50).default(10).optional(),
+  maxRegions: z.number().int().positive().max(500).default(50),
+  maxVlmRegions: z.number().int().nonnegative().max(50).default(10),
   includeVlmAnalysis: z.boolean().optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional()
 });
@@ -68,25 +69,26 @@ export function createServer() {
           inputSchema: {
             type: "object",
             properties: {
-              expectedImage: { type: "string" },
-              actualImage: { type: "string" },
-              outputDir: { type: "string" },
-              threshold: { type: "number", description: "Deprecated alias for pixelmatchThreshold." },
-              pixelmatchThreshold: { type: "number", description: "Color sensitivity for pixel differences (0-1)." },
-              maxDiffPercent: { type: "number", description: "Percentage of different pixels allowed before failing the test (0-1)." },
-              maxRegions: { type: "number", description: "Maximum number of diff regions to return. Keeps the largest ones. Default 50." },
-              maxVlmRegions: { type: "number", description: "Maximum number of regions to analyze with VLM. Default 10." },
-              includeVlmAnalysis: { type: "boolean", description: "Whether to run Ollama on diff regions." },
+              expectedImage: { type: "string", minLength: 1, description: "Path to the expected design/mockup PNG." },
+              actualImage: { type: "string", minLength: 1, description: "Path to the actual screenshot PNG." },
+              outputDir: { type: "string", minLength: 1, description: "Directory where diff artifacts and region crops will be written." },
+              threshold: { type: "number", minimum: 0, maximum: 1, description: "Deprecated alias for pixelmatchThreshold. Used only when pixelmatchThreshold is omitted." },
+              pixelmatchThreshold: { type: "number", minimum: 0, maximum: 1, default: 0.1, description: "Color sensitivity for pixel differences. Default: 0.1." },
+              maxDiffPercent: { type: "number", minimum: 0, maximum: 1, default: 0.001, description: "Maximum differing-pixel ratio allowed before failing the report. Default: 0.001." },
+              maxRegions: { type: "integer", minimum: 1, maximum: 500, default: 50, description: "Maximum number of diff regions to return, keeping the largest regions first. Default: 50." },
+              maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, default: 10, description: "Maximum number of returned regions to analyze with VLM. Default: 10." },
+              includeVlmAnalysis: { type: "boolean", default: false, description: "Whether to run Ollama on diff regions. Default: false." },
               ignoreRegions: {
                 type: "array",
+                description: "Pixel regions to mask before comparison.",
                 items: {
                   type: "object",
                   properties: {
-                    x: { type: "number" },
-                    y: { type: "number" },
-                    width: { type: "number" },
-                    height: { type: "number" },
-                    reason: { type: "string" }
+                    x: { type: "integer", minimum: 0 },
+                    y: { type: "integer", minimum: 0 },
+                    width: { type: "integer", minimum: 1 },
+                    height: { type: "integer", minimum: 1 },
+                    reason: { type: "string", description: "Optional human-readable reason for masking this region." }
                   },
                   required: ["x", "y", "width", "height"]
                 }
@@ -101,8 +103,8 @@ export function createServer() {
           inputSchema: {
             type: "object",
             properties: {
-              outputPath: { type: "string" },
-              deviceId: { type: "string" }
+              outputPath: { type: "string", minLength: 1, description: "Path where the captured Android screenshot will be written." },
+              deviceId: { type: "string", pattern: ANDROID_DEVICE_ID_PATTERN, description: "Optional adb device ID, including TCP IDs like 192.168.1.50:5555." }
             },
             required: ["outputPath"]
           }
@@ -113,8 +115,8 @@ export function createServer() {
           inputSchema: {
             type: "object",
             properties: {
-              outputPath: { type: "string" },
-              simulator: { type: "string" }
+              outputPath: { type: "string", minLength: 1, description: "Path where the captured iOS Simulator screenshot will be written." },
+              simulator: { type: "string", pattern: IOS_SIMULATOR_ID_PATTERN, default: "booted", description: "Optional simctl simulator identifier. Default: booted." }
             },
             required: ["outputPath"]
           }
@@ -126,25 +128,26 @@ export function createServer() {
             type: "object",
             properties: {
               platform: { type: "string", enum: ["android", "ios", "none"] },
-              expectedImage: { type: "string" },
-              actualImage: { type: "string" },
-              outputDir: { type: "string" },
-              threshold: { type: "number", description: "Deprecated alias for pixelmatchThreshold." },
-              pixelmatchThreshold: { type: "number", description: "Color sensitivity for pixel differences (0-1)." },
-              maxDiffPercent: { type: "number", description: "Percentage of different pixels allowed before failing the test (0-1)." },
-              maxRegions: { type: "number", description: "Maximum number of diff regions to return. Keeps the largest ones. Default 50." },
-              maxVlmRegions: { type: "number", description: "Maximum number of regions to analyze with VLM. Default 10." },
-              includeVlmAnalysis: { type: "boolean", description: "Whether to run Ollama on diff regions." },
+              expectedImage: { type: "string", minLength: 1, description: "Path to the expected design/mockup PNG." },
+              actualImage: { type: "string", minLength: 1, description: "Optional path to an existing actual screenshot PNG. Required when platform is none." },
+              outputDir: { type: "string", minLength: 1, description: "Directory where screenshots, diff artifacts, and region crops will be written." },
+              threshold: { type: "number", minimum: 0, maximum: 1, description: "Deprecated alias for pixelmatchThreshold. Used only when pixelmatchThreshold is omitted." },
+              pixelmatchThreshold: { type: "number", minimum: 0, maximum: 1, default: 0.1, description: "Color sensitivity for pixel differences. Default: 0.1." },
+              maxDiffPercent: { type: "number", minimum: 0, maximum: 1, default: 0.001, description: "Maximum differing-pixel ratio allowed before failing the report. Default: 0.001." },
+              maxRegions: { type: "integer", minimum: 1, maximum: 500, default: 50, description: "Maximum number of diff regions to return, keeping the largest regions first. Default: 50." },
+              maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, default: 10, description: "Maximum number of returned regions to analyze with VLM. Default: 10." },
+              includeVlmAnalysis: { type: "boolean", default: false, description: "Whether to run Ollama on diff regions. Default: false." },
               ignoreRegions: {
                 type: "array",
+                description: "Pixel regions to mask before comparison.",
                 items: {
                   type: "object",
                   properties: {
-                    x: { type: "number" },
-                    y: { type: "number" },
-                    width: { type: "number" },
-                    height: { type: "number" },
-                    reason: { type: "string" }
+                    x: { type: "integer", minimum: 0 },
+                    y: { type: "integer", minimum: 0 },
+                    width: { type: "integer", minimum: 1 },
+                    height: { type: "integer", minimum: 1 },
+                    reason: { type: "string", description: "Optional human-readable reason for masking this region." }
                   },
                   required: ["x", "y", "width", "height"]
                 }
