@@ -1,9 +1,10 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { loadUiDiffConfig } from '../config/uiDiffConfig';
-import { DiffReport, IgnoreRegion } from '../types';
+import { DiffReport, IgnoreRegion, VlmConfig } from '../types';
 import { resolveAbsolutePath } from '../utils/fs';
 import { runMobileUiDiff } from './runMobileUiDiff';
+import { preflightOllama, resolveOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 
 export interface RunScreenUiDiffInput {
   screen: string;
@@ -18,6 +19,8 @@ export interface RunScreenUiDiffInput {
   maxRegions?: number;
   maxVlmRegions?: number;
   includeVlmAnalysis?: boolean;
+  requireVlmAnalysis?: boolean;
+  vlm?: VlmConfig;
   ignoreRegions?: IgnoreRegion[];
 }
 
@@ -185,6 +188,42 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     ignoreRegions: input.ignoreRegions ?? screenConfig.ignoreRegions
   };
 
+  const includeVlmAnalysis = merged.includeVlmAnalysis ?? false;
+  const resolvedVlmOverrides = input.vlm ?? {};
+  const screenVlm = screenConfig.vlm ?? {};
+  const requireVlmAnalysis = includeVlmAnalysis
+    ? (input.requireVlmAnalysis ?? resolvedVlmOverrides.require ?? screenVlm.require ?? false)
+    : false;
+  const resolvedVlmConfig = resolveOllamaConfig({
+    baseUrl: resolvedVlmOverrides.baseUrl ?? screenVlm.baseUrl,
+    model: resolvedVlmOverrides.model ?? screenVlm.model,
+    fallbackModels: resolvedVlmOverrides.fallbackModels ?? screenVlm.fallbackModels ?? [],
+    keepAlive: resolvedVlmOverrides.keepAlive ?? screenVlm.keepAlive,
+    timeoutMs: resolvedVlmOverrides.timeoutMs ?? screenVlm.timeoutMs
+  });
+  const preflightEnabled = (resolvedVlmOverrides.preflight ?? screenVlm.preflight) !== false;
+  let vlmPreflight: VlmPreflightResult | undefined;
+
+  if (includeVlmAnalysis) {
+    if (preflightEnabled || requireVlmAnalysis) {
+      vlmPreflight = await preflightOllama(resolvedVlmConfig, true);
+      if (requireVlmAnalysis && !vlmPreflight.available) {
+        throw new Error('VLM analysis is required but no configured Ollama model could be loaded. Run vlm_health for details.');
+      }
+    } else {
+      vlmPreflight = {
+        available: true,
+        selectedModel: resolvedVlmConfig.model,
+        fallbackUsed: false,
+        warnings: ['VLM preflight disabled. Availability has not been verified.'],
+        healthStatus: 'warning',
+        baseUrl: resolvedVlmConfig.baseUrl,
+        timeoutMs: resolvedVlmConfig.timeoutMs,
+        keepAlive: resolvedVlmConfig.keepAlive
+      };
+    }
+  }
+
   const baseOutputDir = merged.outputDir;
   const resolvedBaseOutputDir = resolveAbsolutePath(baseOutputDir);
   const effectiveRunName = input.runName ?? await nextRunName(resolvedBaseOutputDir);
@@ -200,7 +239,10 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     maxDiffPercent: merged.maxDiffPercent,
     maxRegions: merged.maxRegions,
     maxVlmRegions: merged.maxVlmRegions,
-    includeVlmAnalysis: merged.includeVlmAnalysis,
+    includeVlmAnalysis: includeVlmAnalysis,
+    requireVlmAnalysis,
+    vlmConfig: resolvedVlmConfig,
+    vlmPreflight,
     ignoreRegions: merged.ignoreRegions
   });
 

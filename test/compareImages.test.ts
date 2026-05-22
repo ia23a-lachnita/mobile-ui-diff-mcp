@@ -149,6 +149,7 @@ describe('compareImages and Schemas', () => {
         includeVlmAnalysis: true
       });
       expect(result.regions[0].analysisStatus).toBe('fallback');
+      expect(result.warnings).toContain('VLM analysis was requested but unavailable. Region analysis fell back to error/fallback statuses. Run vlm_health or start Ollama.');
     } finally {
       process.env.OLLAMA_BASE_URL = originalUrl;
     }
@@ -197,5 +198,14 @@ describe('compareImages and Schemas', () => {
     });
     expect(parsedRun.maxRegions).toBe(50);
     expect(parsedRun.maxVlmRegions).toBe(10);
+  });
+
+  it('j. warns when VLM analysis is disabled', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-no-vlm')
+    });
+    expect(result.warnings).toContain('VLM analysis disabled. Enable includeVlmAnalysis for semantic region explanations.');
   });
 });

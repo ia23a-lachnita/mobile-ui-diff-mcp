@@ -13,6 +13,29 @@ export interface VlmAnalysis {
   likelyFix: string;
 }
 
+export interface VlmConfig {
+  provider?: "ollama";
+  baseUrl?: string;
+  model?: string;
+  fallbackModels?: string[];
+  keepAlive?: string;
+  preflight?: boolean;
+  require?: boolean;
+  autoPull?: boolean;
+  timeoutMs?: number;
+}
+
+export interface VlmSummary {
+  requested: boolean;
+  required: boolean;
+  provider: "ollama";
+  baseUrl: string;
+  selectedModel: string | null;
+  fallbackUsed: boolean;
+  healthStatus: "ok" | "warning" | "error";
+  warnings: string[];
+}
+
 export interface RegionReport {
   id: string;
   box: { x: number; y: number; width: number; height: number };
@@ -40,4 +63,6 @@ export interface DiffReport {
     diff: string;
     regionsDir: string;
   };
+  warnings?: string[];
+  vlm?: VlmSummary;
 }

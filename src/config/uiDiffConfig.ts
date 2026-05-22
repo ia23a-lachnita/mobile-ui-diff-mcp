@@ -10,6 +10,18 @@ export const ignoreRegionSchema = z.object({
   reason: z.string().optional()
 });
 
+export const vlmConfigSchema = z.object({
+  provider: z.enum(['ollama']).optional(),
+  baseUrl: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  fallbackModels: z.array(z.string().min(1)).optional(),
+  keepAlive: z.string().min(1).optional(),
+  preflight: z.boolean().optional(),
+  require: z.boolean().optional(),
+  autoPull: z.boolean().optional(),
+  timeoutMs: z.number().int().positive().optional()
+}).optional();
+
 export const uiDiffScreenSchema = z.object({
   platform: z.enum(['android', 'ios', 'none']),
   expectedImage: z.string().min(1),
@@ -19,7 +31,8 @@ export const uiDiffScreenSchema = z.object({
   maxRegions: z.number().int().positive().max(500).optional(),
   maxVlmRegions: z.number().int().nonnegative().max(50).optional(),
   includeVlmAnalysis: z.boolean().optional(),
-  ignoreRegions: z.array(ignoreRegionSchema).optional()
+  ignoreRegions: z.array(ignoreRegionSchema).optional(),
+  vlm: vlmConfigSchema
 });
 
 export const uiDiffConfigSchema = z.object({

@@ -5,8 +5,8 @@ import { applyIgnoreRegions } from '../image/mask';
 import { createDiffErrorMask } from '../image/diff';
 import { detectRegions } from '../image/regions';
 import { cropAndSave } from '../image/crops';
-import { explainDiffUsingOllama } from '../vlm/ollama';
-import { IgnoreRegion, RegionReport, DiffReport } from '../types';
+import { explainDiffUsingOllama, preflightOllama, resolveOllamaConfig, ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
+import { IgnoreRegion, RegionReport, DiffReport, VlmSummary, VlmAnalysis } from '../types';
 import fs from 'fs/promises';
 
 export interface CompareImagesInput {
@@ -19,7 +19,10 @@ export interface CompareImagesInput {
   maxRegions?: number;
   maxVlmRegions?: number;
   includeVlmAnalysis?: boolean;
+  requireVlmAnalysis?: boolean;
   ignoreRegions?: IgnoreRegion[];
+  vlmConfig?: ResolvedOllamaConfig;
+  vlmPreflight?: VlmPreflightResult;
 }
 
 export async function compareImages(input: CompareImagesInput): Promise<DiffReport> {
@@ -28,9 +31,42 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
   const maxRegions = input.maxRegions ?? 50;
   const maxVlmRegions = input.maxVlmRegions ?? 10;
   const includeVlmAnalysis = input.includeVlmAnalysis ?? false;
+  const requireVlmAnalysis = input.requireVlmAnalysis ?? false;
   const ignoreRegions = input.ignoreRegions ?? [];
   const outputDir = resolveAbsolutePath(input.outputDir);
   const regionsDir = path.join(outputDir, 'regions');
+  const warnings: string[] = [];
+  let vlmSummary: VlmSummary | undefined;
+  let vlmPreflight = input.vlmPreflight;
+  const vlmConfig = input.vlmConfig ?? resolveOllamaConfig();
+  const vlmUnavailableWarning = 'VLM analysis was requested but unavailable. Region analysis fell back to error/fallback statuses. Run vlm_health or start Ollama.';
+  const vlmDisabledWarning = 'VLM analysis disabled. Enable includeVlmAnalysis for semantic region explanations.';
+
+  if (!includeVlmAnalysis) {
+    warnings.push(vlmDisabledWarning);
+  } else {
+    if (!vlmPreflight) {
+      vlmPreflight = await preflightOllama(vlmConfig, true);
+    }
+    vlmSummary = {
+      requested: true,
+      required: requireVlmAnalysis,
+      provider: 'ollama',
+      baseUrl: vlmPreflight.baseUrl,
+      selectedModel: vlmPreflight.selectedModel,
+      fallbackUsed: vlmPreflight.fallbackUsed,
+      healthStatus: vlmPreflight.healthStatus,
+      warnings: [...vlmPreflight.warnings]
+    };
+    warnings.push(...vlmPreflight.warnings);
+    if (!vlmPreflight.available) {
+      if (requireVlmAnalysis) {
+        throw new Error('VLM analysis is required but no configured Ollama model could be loaded. Run vlm_health for details.');
+      }
+      warnings.push(vlmUnavailableWarning);
+      vlmSummary.warnings.push(vlmUnavailableWarning);
+    }
+  }
 
   await ensureDir(outputDir);
   await ensureDir(regionsDir);
@@ -99,13 +135,28 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     await cropAndSave(processedActualPath, box, actCrop);
     await cropAndSave(diffAbsPath, box, diffCrop);
 
-    let analysis = null;
+    let analysis: VlmAnalysis | null = null;
     let analysisStatus: "skipped" | "ok" | "fallback" | "error" = "skipped";
     
     if (includeVlmAnalysis && vlmCandidates.has(box)) {
-      const ollamaResult = await explainDiffUsingOllama(expCrop, actCrop, diffCrop);
-      analysis = ollamaResult.analysis;
-      analysisStatus = ollamaResult.status;
+     if (vlmPreflight?.available && vlmPreflight.selectedModel) {
+       const ollamaResult = await explainDiffUsingOllama(expCrop, actCrop, diffCrop, {
+         baseUrl: vlmConfig.baseUrl,
+         model: vlmPreflight.selectedModel,
+         timeoutMs: vlmConfig.timeoutMs,
+         keepAlive: vlmConfig.keepAlive
+       });
+       analysis = ollamaResult.analysis;
+       analysisStatus = ollamaResult.status;
+     } else {
+       analysis = {
+         type: 'unknown',
+         severity: 'medium',
+         description: vlmPreflight?.failureMessage ?? 'VLM unavailable. Inspect the crop manually.',
+         likelyFix: 'Inspect the crop manually.'
+       };
+       analysisStatus = "fallback";
+     }
     }
 
     regions.push({
@@ -135,6 +186,8 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       actual: processedActualPath,
       diff: diffAbsPath,
       regionsDir
-    }
+    },
+    warnings: warnings.length ? warnings : undefined,
+    vlm: vlmSummary
   };
 }
