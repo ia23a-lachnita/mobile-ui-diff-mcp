@@ -8,6 +8,7 @@ import { runMobileUiDiff } from "../tools/runMobileUiDiff";
 import { runScreenUiDiff } from "../tools/runScreenUiDiff";
 import { captureAndroidScreenshot } from "../tools/captureAndroid";
 import { captureIosSimulatorScreenshot } from "../tools/captureIosSimulator";
+import { checkOllamaHealth } from "../vlm/ollama";
 
 export const ignoreRegionSchema = z.object({
   x: z.number().int().nonnegative(),
@@ -16,6 +17,18 @@ export const ignoreRegionSchema = z.object({
   height: z.number().int().positive(),
   reason: z.string().optional()
 });
+
+export const vlmConfigSchema = z.object({
+  provider: z.enum(['ollama']).optional(),
+  baseUrl: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  fallbackModels: z.array(z.string().min(1)).optional(),
+  keepAlive: z.string().min(1).optional(),
+  preflight: z.boolean().optional(),
+  require: z.boolean().optional(),
+  autoPull: z.boolean().optional(),
+  timeoutMs: z.number().int().positive().optional()
+}).optional();
 
 export const compareImagesSchema = z.object({
   expectedImage: z.string().min(1),
@@ -27,6 +40,7 @@ export const compareImagesSchema = z.object({
   maxRegions: z.number().int().positive().max(500).default(50),
   maxVlmRegions: z.number().int().nonnegative().max(50).default(10),
   includeVlmAnalysis: z.boolean().optional(),
+  requireVlmAnalysis: z.boolean().optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional()
 });
 
@@ -51,6 +65,7 @@ export const runMobileUiDiffSchema = z.object({
   maxRegions: z.number().int().positive().max(500).default(50),
   maxVlmRegions: z.number().int().nonnegative().max(50).default(10),
   includeVlmAnalysis: z.boolean().optional(),
+  requireVlmAnalysis: z.boolean().optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional()
 });
 
@@ -67,7 +82,19 @@ export const runScreenUiDiffSchema = z.object({
   maxRegions: z.number().int().positive().max(500).optional(),
   maxVlmRegions: z.number().int().nonnegative().max(50).optional(),
   includeVlmAnalysis: z.boolean().optional(),
+  requireVlmAnalysis: z.boolean().optional(),
+  vlm: vlmConfigSchema,
   ignoreRegions: z.array(ignoreRegionSchema).optional()
+});
+
+export const vlmHealthSchema = z.object({
+  provider: z.enum(['ollama']).default('ollama'),
+  baseUrl: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  fallbackModels: z.array(z.string().min(1)).optional(),
+  checkLoad: z.boolean().default(true),
+  keepAlive: z.string().min(1).default('10m'),
+  timeoutMs: z.number().int().positive().default(30000)
 });
 
 export function getToolList() {
@@ -87,6 +114,7 @@ export function getToolList() {
           maxRegions: { type: "integer", minimum: 1, maximum: 500, default: 50, description: "Maximum number of diff regions to return, keeping the largest regions first. Default: 50." },
           maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, default: 10, description: "Maximum number of returned regions to analyze with VLM. Default: 10." },
           includeVlmAnalysis: { type: "boolean", default: false, description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
+          requireVlmAnalysis: { type: "boolean", default: false, description: "When true, fail early if VLM analysis is requested but no model can be loaded." },
           ignoreRegions: {
             type: "array",
             description: "Pixel regions to mask before comparison.",
@@ -146,6 +174,7 @@ export function getToolList() {
           maxRegions: { type: "integer", minimum: 1, maximum: 500, default: 50, description: "Maximum number of diff regions to return, keeping the largest regions first. Default: 50." },
           maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, default: 10, description: "Maximum number of returned regions to analyze with VLM. Default: 10." },
           includeVlmAnalysis: { type: "boolean", default: false, description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
+          requireVlmAnalysis: { type: "boolean", default: false, description: "When true, fail early if VLM analysis is requested but no model can be loaded." },
           ignoreRegions: {
             type: "array",
             description: "Pixel regions to mask before comparison.",
@@ -183,6 +212,22 @@ export function getToolList() {
           maxRegions: { type: "integer", minimum: 1, maximum: 500, description: "Optional override for max diff regions." },
           maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, description: "Optional override for max VLM regions." },
           includeVlmAnalysis: { type: "boolean", description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
+          requireVlmAnalysis: { type: "boolean", description: "When true, fail early if VLM analysis is requested but no model can be loaded." },
+          vlm: {
+            type: "object",
+            description: "Optional VLM overrides for this run.",
+            properties: {
+              provider: { type: "string", enum: ["ollama"] },
+              baseUrl: { type: "string", minLength: 1 },
+              model: { type: "string", minLength: 1 },
+              fallbackModels: { type: "array", items: { type: "string", minLength: 1 } },
+              keepAlive: { type: "string", minLength: 1 },
+              preflight: { type: "boolean" },
+              require: { type: "boolean" },
+              autoPull: { type: "boolean" },
+              timeoutMs: { type: "integer", minimum: 1 }
+            }
+          },
           ignoreRegions: {
             type: "array",
             description: "Optional override for pixel regions to mask before comparison.",
@@ -200,6 +245,22 @@ export function getToolList() {
           }
         },
         required: ["screen"]
+      }
+    },
+    {
+      name: "vlm_health",
+      description: "Check Ollama VLM health, installed/running models, and optionally warm a model.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          provider: { type: "string", enum: ["ollama"], default: "ollama" },
+          baseUrl: { type: "string", minLength: 1, description: "Optional Ollama base URL. Defaults to OLLAMA_BASE_URL or http://localhost:11434." },
+          model: { type: "string", minLength: 1, description: "Optional model name. Defaults to OLLAMA_MODEL or qwen2.5vl:7b." },
+          fallbackModels: { type: "array", items: { type: "string", minLength: 1 }, description: "Optional list of fallback models to check." },
+          checkLoad: { type: "boolean", default: true, description: "When true, attempt to warm the selected model." },
+          keepAlive: { type: "string", minLength: 1, default: "10m", description: "Keep-alive duration passed to Ollama warmup." },
+          timeoutMs: { type: "integer", minimum: 1, default: 30000, description: "Timeout in milliseconds for health checks." }
+        }
       }
     }
   ];
@@ -243,6 +304,11 @@ export function createServer() {
         case "run_screen_ui_diff": {
           const args = runScreenUiDiffSchema.parse(request.params.arguments);
           const result = await runScreenUiDiff(args);
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+        case "vlm_health": {
+          const args = vlmHealthSchema.parse(request.params.arguments);
+          const result = await checkOllamaHealth(args);
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
         default:

@@ -4,6 +4,7 @@ import { compareImages } from './compareImages';
 import { captureAndroidScreenshot } from './captureAndroid';
 import { captureIosSimulatorScreenshot } from './captureIosSimulator';
 import { DiffReport, IgnoreRegion } from '../types';
+import { ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 
 export interface RunMobileUiDiffInput {
   platform: 'android' | 'ios' | 'none';
@@ -16,7 +17,10 @@ export interface RunMobileUiDiffInput {
   maxRegions?: number;
   maxVlmRegions?: number;
   includeVlmAnalysis?: boolean;
+  requireVlmAnalysis?: boolean;
   ignoreRegions?: IgnoreRegion[];
+  vlmConfig?: ResolvedOllamaConfig;
+  vlmPreflight?: VlmPreflightResult;
 }
 
 export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<DiffReport> {
@@ -47,6 +51,9 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     maxRegions: input.maxRegions,
     maxVlmRegions: input.maxVlmRegions,
     includeVlmAnalysis: input.includeVlmAnalysis,
+    requireVlmAnalysis: input.requireVlmAnalysis,
+    vlmConfig: input.vlmConfig,
+    vlmPreflight: input.vlmPreflight,
     ignoreRegions: input.ignoreRegions
   });
 }

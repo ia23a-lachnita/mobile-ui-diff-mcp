@@ -25,6 +25,25 @@ When starting the MCP server or running queries, you can configure the VLM conne
 - `OLLAMA_MODEL`: The model to use for analysis (default: `qwen2.5vl:7b`)
 - `VLM_TIMEOUT_MS`: Max time to wait for a VLM response in milliseconds (default: `60000`)
 
+## VLM health and Ollama setup
+
+- Start Ollama:
+  ```sh
+  ollama serve
+  ```
+- Pull a model:
+  ```sh
+  ollama pull qwen2.5vl:7b
+  ```
+- Check health via MCP:
+  ```json
+  { "name": "vlm_health", "arguments": { "provider": "ollama" } }
+  ```
+- `/api/tags` lists installed models and `/api/ps` lists running/loaded models.
+- `requireVlmAnalysis` fails early if VLM analysis is requested but no model can load.
+- `fallbackModels` lets a screen profile try smaller models if the primary fails.
+- Large VLMs may fail to load on limited VRAM/RAM; try smaller models or free resources.
+
 ## Installation & Build
 
 ```sh
@@ -124,6 +143,16 @@ Create `ui-diff.config.json` in your working directory to define reusable screen
       "maxRegions": 20,
       "maxVlmRegions": 8,
       "includeVlmAnalysis": true,
+      "vlm": {
+        "provider": "ollama",
+        "model": "qwen2.5vl:7b",
+        "fallbackModels": ["llava:7b", "moondream:latest"],
+        "keepAlive": "10m",
+        "preflight": true,
+        "require": false,
+        "autoPull": false,
+        "timeoutMs": 30000
+      },
       "ignoreRegions": [
         { "x": 0, "y": 0, "width": 1080, "height": 80, "reason": "status bar" }
       ]
@@ -155,6 +184,7 @@ If `runName` is omitted, the tool scans `outputDir` for existing `run-###` folde
 - **maxDiffPercent**: The maximum percentage of differing pixels (from `0.0` to `1.0`) allowed for the report status to be marked as `pass`. Default: `0.001` (`0.1%`).
 - **maxRegions**: Maximum number of diff regions to return. Filters by keeping the regions with the largest area first. Default: `50` (Max: `500`).
 - **maxVlmRegions**: Maximum number of regions to send to Ollama for feedback. Default: `10` (Max: `50`).
+- **requireVlmAnalysis**: When true, fail early if VLM analysis is requested but no model can be loaded.
 
 ## Ignore Regions
 You can send `ignoreRegions` to mask system UI elements that change frequently, like the status bar or notch:
