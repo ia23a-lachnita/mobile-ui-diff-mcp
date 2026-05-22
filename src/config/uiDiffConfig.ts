@@ -31,6 +31,7 @@ export const uiDiffScreenSchema = z.object({
   maxRegions: z.number().int().positive().max(500).optional(),
   maxVlmRegions: z.number().int().nonnegative().max(50).optional(),
   includeVlmAnalysis: z.boolean().optional(),
+  requireVlmAnalysis: z.boolean().optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
   vlm: vlmConfigSchema
 });

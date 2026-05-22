@@ -7,6 +7,7 @@ export interface IgnoreRegion {
 }
 
 export interface VlmAnalysis {
+  label?: string;
   type: "layout" | "spacing" | "color" | "text" | "font" | "icon" | "missing" | "extra" | "size" | "unknown";
   severity: "low" | "medium" | "high";
   description: string;

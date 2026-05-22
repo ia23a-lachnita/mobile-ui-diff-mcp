@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { PNG } from 'pngjs';
 import fs from 'fs/promises';
 import path from 'path';
@@ -207,5 +207,72 @@ describe('compareImages and Schemas', () => {
       outputDir: path.join(testDir, 'out-no-vlm')
     });
     expect(result.warnings).toContain('VLM analysis disabled. Enable includeVlmAnalysis for semantic region explanations.');
+  });
+
+  it('k. parses optional VLM label when returned by Ollama', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url, options) => {
+      const urlString = String(url);
+      if (urlString.endsWith('/api/tags')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ models: [{ name: process.env.OLLAMA_MODEL || 'qwen2.5vl:7b' }] }),
+          text: async () => ''
+        } as Response;
+      }
+      if (urlString.endsWith('/api/ps')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ models: [] }),
+          text: async () => ''
+        } as Response;
+      }
+      if (urlString.endsWith('/api/chat')) {
+        const body = JSON.parse((options?.body as string) || '{}');
+        const imageCount = body?.messages?.[0]?.images?.length ?? 0;
+        if (imageCount === 1) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ message: { content: '{}' } }),
+            text: async () => ''
+          } as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            message: {
+              content: JSON.stringify({
+                label: 'bottom navigation',
+                type: 'layout',
+                severity: 'medium',
+                description: 'Navigation bar is shifted',
+                likelyFix: 'Align container constraints'
+              })
+            }
+          }),
+          text: async () => ''
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch URL: ${urlString}`);
+    }));
+
+    try {
+      const result = await compareImages({
+        expectedImage: path.join(testDir, 'base.png'),
+        actualImage: path.join(testDir, 'shifted.png'),
+        outputDir: path.join(testDir, 'out-vlm-label'),
+        includeVlmAnalysis: true,
+        maxRegions: 1,
+        maxVlmRegions: 1
+      });
+      expect(result.regions[0].analysisStatus).toBe('ok');
+      expect(result.regions[0].analysis?.label).toBe('bottom navigation');
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
 });

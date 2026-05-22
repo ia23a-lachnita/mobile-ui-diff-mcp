@@ -23,6 +23,7 @@ export interface OllamaModelInfo {
 export interface OllamaLoadCheck {
   attempted: boolean;
   ok: boolean;
+  imageInputVerified: boolean;
   status?: OllamaErrorStatus;
   message?: string;
 }
@@ -34,6 +35,7 @@ export interface OllamaHealthCheckInput {
   fallbackModels?: string[];
   checkLoad?: boolean;
   keepAlive?: string;
+  autoPull?: boolean;
   timeoutMs?: number;
 }
 
@@ -63,6 +65,7 @@ export interface ResolvedOllamaConfig {
   baseUrl: string;
   model: string;
   fallbackModels: string[];
+  autoPull?: boolean;
   keepAlive?: string;
   timeoutMs: number;
 }
@@ -98,6 +101,7 @@ export function resolveOllamaConfig(overrides: Partial<ResolvedOllamaConfig> = {
     baseUrl,
     model,
     fallbackModels: overrides.fallbackModels ?? [],
+    autoPull: overrides.autoPull,
     keepAlive: overrides.keepAlive,
     timeoutMs
   };
@@ -190,6 +194,7 @@ export async function getRunningModels(baseUrl: string, timeoutMs: number): Prom
 }
 
 export async function warmModel(baseUrl: string, model: string, keepAlive: string | undefined, timeoutMs: number): Promise<void> {
+  const tinyPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2QhXwAAAAASUVORK5CYII=';
   const response = await fetchWithTimeout(
     `${baseUrl}/api/chat`,
     {
@@ -197,7 +202,7 @@ export async function warmModel(baseUrl: string, model: string, keepAlive: strin
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model,
-        messages: [{ role: 'user', content: 'ping' }],
+        messages: [{ role: 'user', content: 'ping', images: [tinyPngBase64] }],
         stream: false,
         options: { num_predict: 1 },
         ...(keepAlive ? { keep_alive: keepAlive } : {})
@@ -230,7 +235,13 @@ export async function checkOllamaHealth(input: OllamaHealthCheckInput): Promise<
   const fallbackModels = input.fallbackModels ?? [];
   const candidates = [selectedModel, ...fallbackModels.filter((model) => model && model !== selectedModel)];
   const warnings: string[] = [];
-  const loadCheck: OllamaLoadCheck = { attempted: false, ok: false };
+  const loadCheck: OllamaLoadCheck = { attempted: false, ok: false, imageInputVerified: false };
+  if (input.provider && input.provider !== 'ollama') {
+    warnings.push('Only provider=ollama is supported.');
+  }
+  if (input.autoPull === true) {
+    warnings.push('autoPull is not implemented. Run `ollama pull <model>` manually.');
+  }
 
   let installedModels: OllamaModelInfo[] = [];
   let runningModels: OllamaModelInfo[] = [];
@@ -279,6 +290,7 @@ export async function checkOllamaHealth(input: OllamaHealthCheckInput): Promise<
       if (candidate === selectedModel) {
         loadCheck.attempted = true;
         loadCheck.ok = true;
+        loadCheck.imageInputVerified = true;
       }
     } catch (err) {
       if (candidate === selectedModel) {
@@ -392,7 +404,7 @@ export async function explainDiffUsingOllama(
     const actualBase64 = (await fs.readFile(actualCropPath)).toString('base64');
     const diffBase64 = (await fs.readFile(diffCropPath)).toString('base64');
 
-    const prompt = `You are comparing a mobile app implementation against a design mockup. You are given three images: expected crop, actual crop, and diff crop. Return JSON only with: type, severity, description, likelyFix. Be concrete. Prefer layout, spacing, color, text, font, icon, missing, extra, size, or unknown.`;
+    const prompt = `You are comparing a mobile app implementation against a design mockup. You are given three images: expected crop, actual crop, and diff crop. Return JSON only with: label, type, severity, description, likelyFix. label should be a short human-readable region name like "bottom navigation", "header", or "meal card". type must be one of: layout, spacing, color, text, font, icon, missing, extra, size, unknown.`;
 
     const resolved = resolveOllamaConfig({
       baseUrl: options.baseUrl,
@@ -449,6 +461,7 @@ export async function explainDiffUsingOllama(
       return {
         status: "ok",
         analysis: {
+          label: typeof parsed.label === 'string' && parsed.label.trim().length > 0 ? parsed.label.trim() : undefined,
           type: parsed.type || 'unknown',
           severity: parsed.severity || 'medium',
           description: parsed.description || 'No description provided.',

@@ -191,15 +191,18 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   const includeVlmAnalysis = merged.includeVlmAnalysis ?? false;
   const resolvedVlmOverrides = input.vlm ?? {};
   const screenVlm = screenConfig.vlm ?? {};
+  const autoPullEnabled = (resolvedVlmOverrides.autoPull ?? screenVlm.autoPull) === true;
+  const autoPullWarning = 'autoPull is not implemented. Run `ollama pull <model>` manually.';
   const requireVlmAnalysis = includeVlmAnalysis
-    ? (input.requireVlmAnalysis ?? resolvedVlmOverrides.require ?? screenVlm.require ?? false)
+    ? (input.requireVlmAnalysis ?? screenConfig.requireVlmAnalysis ?? resolvedVlmOverrides.require ?? screenVlm.require ?? false)
     : false;
   const resolvedVlmConfig = resolveOllamaConfig({
     baseUrl: resolvedVlmOverrides.baseUrl ?? screenVlm.baseUrl,
     model: resolvedVlmOverrides.model ?? screenVlm.model,
     fallbackModels: resolvedVlmOverrides.fallbackModels ?? screenVlm.fallbackModels ?? [],
     keepAlive: resolvedVlmOverrides.keepAlive ?? screenVlm.keepAlive,
-    timeoutMs: resolvedVlmOverrides.timeoutMs ?? screenVlm.timeoutMs
+    timeoutMs: resolvedVlmOverrides.timeoutMs ?? screenVlm.timeoutMs,
+    autoPull: autoPullEnabled
   });
   const preflightEnabled = (resolvedVlmOverrides.preflight ?? screenVlm.preflight) !== false;
   let vlmPreflight: VlmPreflightResult | undefined;
@@ -207,6 +210,9 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   if (includeVlmAnalysis) {
     if (preflightEnabled || requireVlmAnalysis) {
       vlmPreflight = await preflightOllama(resolvedVlmConfig, true);
+      if (autoPullEnabled) {
+        vlmPreflight.warnings.push(autoPullWarning);
+      }
       if (requireVlmAnalysis && !vlmPreflight.available) {
         throw new Error('VLM analysis is required but no configured Ollama model could be loaded. Run vlm_health for details.');
       }
@@ -221,6 +227,9 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
         timeoutMs: resolvedVlmConfig.timeoutMs,
         keepAlive: resolvedVlmConfig.keepAlive
       };
+      if (autoPullEnabled) {
+        vlmPreflight.warnings.push(autoPullWarning);
+      }
     }
   }
 
@@ -293,6 +302,20 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     run,
     delta
   };
+
+  if (autoPullEnabled) {
+    if (!finalReport.warnings?.includes(autoPullWarning)) {
+      finalReport.warnings = [...(finalReport.warnings ?? []), autoPullWarning];
+    }
+    if (finalReport.vlm) {
+      if (!finalReport.vlm.warnings.includes(autoPullWarning)) {
+        finalReport.vlm.warnings = [...finalReport.vlm.warnings, autoPullWarning];
+      }
+      if (finalReport.vlm.healthStatus === 'ok') {
+        finalReport.vlm.healthStatus = 'warning';
+      }
+    }
+  }
 
   await fs.writeFile(reportPath, JSON.stringify(finalReport, null, 2));
   return finalReport;

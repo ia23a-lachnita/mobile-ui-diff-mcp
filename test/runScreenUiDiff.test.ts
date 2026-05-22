@@ -75,6 +75,22 @@ describe('runScreenUiDiff', () => {
           vlm: {
             model: 'profile-model'
           }
+        },
+        requireTopLevel: {
+          platform: 'none',
+          expectedImage: expectedPath,
+          outputDir,
+          includeVlmAnalysis: true,
+          requireVlmAnalysis: true
+        },
+        autoPullProfile: {
+          platform: 'none',
+          expectedImage: expectedPath,
+          outputDir,
+          includeVlmAnalysis: true,
+          vlm: {
+            autoPull: true
+          }
         }
       }
     };
@@ -96,7 +112,7 @@ describe('runScreenUiDiff', () => {
       screen: 'missing',
       configPath,
       actualImage: actualIdentical
-    })).rejects.toThrow(/Available screens: home, settings/);
+    })).rejects.toThrow(/Available screens:/);
   });
 
   it('auto-assigns run folders, persists final report, and computes numbered deltas + trend', async () => {
@@ -221,6 +237,15 @@ describe('runScreenUiDiff', () => {
     })).rejects.toThrow('VLM analysis is required but no configured Ollama model could be loaded. Run vlm_health for details.');
   });
 
+  it('honors top-level screen profile requireVlmAnalysis', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch failed')));
+    await expect(runScreenUiDiff({
+      screen: 'requireTopLevel',
+      configPath,
+      actualImage: actualShifted
+    })).rejects.toThrow('VLM analysis is required but no configured Ollama model could be loaded. Run vlm_health for details.');
+  });
+
   it('continues with warning when VLM is unavailable but not required', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch failed')));
     const run = await runScreenUiDiff({
@@ -234,6 +259,21 @@ describe('runScreenUiDiff', () => {
     });
     expect(run.warnings).toContain('VLM analysis was requested but unavailable. Region analysis fell back to error/fallback statuses. Run vlm_health or start Ollama.');
     expect(run.regions[0].analysisStatus).toBe('fallback');
+  });
+
+  it('includes vlm summary when VLM analysis is enabled', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch failed')));
+    const run = await runScreenUiDiff({
+      screen: 'home',
+      configPath,
+      actualImage: actualShifted,
+      includeVlmAnalysis: true,
+      maxRegions: 1,
+      maxVlmRegions: 1
+    });
+    expect(run.vlm).toBeDefined();
+    expect(run.vlm?.requested).toBe(true);
+    expect(run.vlm?.provider).toBe('ollama');
   });
 
   it('uses screen profile VLM model overrides', async () => {
@@ -284,5 +324,18 @@ describe('runScreenUiDiff', () => {
 
     expect(run.vlm?.selectedModel).toBe('profile-model');
     expect(run.vlm?.healthStatus).not.toBe('error');
+  });
+
+  it('emits explicit autoPull warning when autoPull=true', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch failed')));
+    const run = await runScreenUiDiff({
+      screen: 'autoPullProfile',
+      configPath,
+      actualImage: actualShifted,
+      maxRegions: 1,
+      maxVlmRegions: 1
+    });
+    expect(run.warnings).toContain('autoPull is not implemented. Run `ollama pull <model>` manually.');
+    expect(run.vlm?.warnings).toContain('autoPull is not implemented. Run `ollama pull <model>` manually.');
   });
 });

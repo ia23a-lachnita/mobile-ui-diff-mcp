@@ -26,6 +26,7 @@ describe('vlm health', () => {
     });
     expect(result.reachable).toBe(false);
     expect(result.warnings[0]).toContain('Ollama unreachable');
+    expect(result.loadCheck.imageInputVerified).toBe(false);
   });
 
   it('reports load failure when model is installed but warmup fails', async () => {
@@ -53,5 +54,28 @@ describe('vlm health', () => {
     expect(result.loadCheck.attempted).toBe(true);
     expect(result.loadCheck.ok).toBe(false);
     expect(result.loadCheck.status).toBe('resource_limited');
+    expect(result.loadCheck.imageInputVerified).toBe(false);
+  });
+
+  it('warns explicitly when autoPull=true', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const urlString = String(url);
+      if (urlString.endsWith('/api/tags')) {
+        return mockResponse(200, { models: [] });
+      }
+      if (urlString.endsWith('/api/ps')) {
+        return mockResponse(200, { models: [] });
+      }
+      throw new Error(`Unexpected fetch URL: ${urlString}`);
+    }));
+
+    const result = await checkOllamaHealth({
+      baseUrl: 'http://localhost:11434',
+      model: 'qwen2.5vl:7b',
+      autoPull: true,
+      checkLoad: false,
+      timeoutMs: 50
+    });
+    expect(result.warnings).toContain('autoPull is not implemented. Run `ollama pull <model>` manually.');
   });
 });
