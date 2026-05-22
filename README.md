@@ -68,6 +68,15 @@ Check the latest changes on the Android simulator compared to my design file.
 Use run_mobile_ui_diff with platform "android" to capture a screenshot, expectedImage "design/home.png", and outputDir "artifacts/test". Set maxDiffPercent to 0.05 and pixelmatchThreshold to 0.15. Return a summary of the differences.
 ```
 
+## Which tool should Claude Code use?
+
+| Goal | Recommended tool | Notes |
+| --- | --- | --- |
+| Compare two existing images | `compare_images` | Best when you already have both expected and actual PNG files. |
+| Capture + compare in one step | `run_mobile_ui_diff` | Takes a fresh screenshot unless `actualImage` is supplied. If `actualImage` already exists, prefer `compare_images`. |
+| Compare using a named screen profile | `run_screen_ui_diff` | Uses `ui-diff.config.json` profiles and preserves run history + deltas. |
+| Capture only (no comparison) | `capture_android_screenshot` / `capture_ios_simulator_screenshot` | Use when you only need the raw screenshot artifact. |
+
 ## Mobile Automation Workflow
 
 ### 1. iOS Simulator example
@@ -98,6 +107,47 @@ Claude Code can call:
   }
 }
 ```
+
+## Screen Profiles (ui-diff.config.json)
+
+Create `ui-diff.config.json` in your working directory to define reusable screen profiles:
+
+```json
+{
+  "screens": {
+    "today": {
+      "platform": "android",
+      "expectedImage": "docs/mockups/image/light/single/Today.png",
+      "outputDir": ".ui-diff/today",
+      "pixelmatchThreshold": 0.1,
+      "maxDiffPercent": 0.01,
+      "maxRegions": 20,
+      "maxVlmRegions": 8,
+      "includeVlmAnalysis": true,
+      "ignoreRegions": [
+        { "x": 0, "y": 0, "width": 1080, "height": 80, "reason": "status bar" }
+      ]
+    }
+  }
+}
+```
+
+Then run a profile with optional overrides and run-to-run delta reporting:
+
+```json
+{
+  "name": "run_screen_ui_diff",
+  "arguments": {
+    "screen": "today",
+    "runName": "run-003",
+    "pixelmatchThreshold": 0.12
+  }
+}
+```
+
+### Auto-run folders
+
+If `runName` is omitted, the tool scans `outputDir` for existing `run-###` folders and creates the next one (`run-001`, `run-002`, ...). Profile runs always write to `outputDir/run-###`, and deltas compare against the nearest lower-numbered run.
 
 ## Parameters & Thresholds
 
