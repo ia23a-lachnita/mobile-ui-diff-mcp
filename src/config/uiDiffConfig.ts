@@ -23,7 +23,7 @@ export const uiDiffScreenSchema = z.object({
 });
 
 export const uiDiffConfigSchema = z.object({
-  screens: z.record(uiDiffScreenSchema)
+  screens: z.record(z.string(), uiDiffScreenSchema)
 });
 
 export type UiDiffConfig = z.infer<typeof uiDiffConfigSchema>;
