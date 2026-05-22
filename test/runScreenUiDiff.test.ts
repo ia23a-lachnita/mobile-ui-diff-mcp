@@ -40,7 +40,6 @@ describe('runScreenUiDiff', () => {
   const actualShifted = path.join(testDir, 'actual-shifted.png');
   const configPath = path.join(testDir, 'ui-diff.config.json');
   const outputDir = path.join(testDir, 'runs');
-  const originalFetch = global.fetch;
 
   beforeAll(async () => {
     await fs.mkdir(testDir, { recursive: true });
@@ -83,8 +82,8 @@ describe('runScreenUiDiff', () => {
   });
 
   afterEach(() => {
-    global.fetch = originalFetch;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     delete process.env.OLLAMA_MODEL;
   });
 
@@ -155,7 +154,7 @@ describe('runScreenUiDiff', () => {
   });
 
   it('selects fallback VLM model when primary fails to load', async () => {
-    global.fetch = vi.fn(async (url, options) => {
+    vi.stubGlobal('fetch', vi.fn(async (url, options) => {
       const urlString = String(url);
       if (urlString.endsWith('/api/tags')) {
         return {
@@ -191,7 +190,7 @@ describe('runScreenUiDiff', () => {
         } as Response;
       }
       throw new Error(`Unexpected fetch URL: ${urlString}`);
-    }) as any;
+    }));
 
     const run = await runScreenUiDiff({
       screen: 'home',
@@ -212,7 +211,7 @@ describe('runScreenUiDiff', () => {
   });
 
   it('fails early when VLM is required but unavailable', async () => {
-    global.fetch = vi.fn().mockRejectedValue(new Error('fetch failed')) as any;
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch failed')));
     await expect(runScreenUiDiff({
       screen: 'home',
       configPath,
@@ -223,7 +222,7 @@ describe('runScreenUiDiff', () => {
   });
 
   it('continues with warning when VLM is unavailable but not required', async () => {
-    global.fetch = vi.fn().mockRejectedValue(new Error('fetch failed')) as any;
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch failed')));
     const run = await runScreenUiDiff({
       screen: 'home',
       configPath,
@@ -239,7 +238,7 @@ describe('runScreenUiDiff', () => {
 
   it('uses screen profile VLM model overrides', async () => {
     process.env.OLLAMA_MODEL = 'env-model';
-    global.fetch = vi.fn(async (url, options) => {
+    vi.stubGlobal('fetch', vi.fn(async (url, options) => {
       const urlString = String(url);
       if (urlString.endsWith('/api/tags')) {
         return {
@@ -275,7 +274,7 @@ describe('runScreenUiDiff', () => {
         } as Response;
       }
       throw new Error(`Unexpected fetch URL: ${urlString}`);
-    }) as any;
+    }));
 
     const run = await runScreenUiDiff({
       screen: 'vlmProfile',

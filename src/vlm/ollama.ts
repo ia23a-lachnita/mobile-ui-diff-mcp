@@ -116,9 +116,8 @@ export function classifyOllamaError(error: unknown): OllamaErrorStatus {
   if (err.code === 'ECONNREFUSED' || message.includes('fetch failed') || message.includes('network')) return 'unreachable';
   if (err.status === 404 && message.includes('model')) return 'model_missing';
   if (message.includes('model') && (message.includes('not found') || message.includes('missing'))) return 'model_missing';
-  if (message.includes('out of memory') || message.includes('resource') || message.includes('insufficient') || message.includes('no available memory') || message.includes('gpu')) {
-    return 'resource_limited';
-  }
+  const resourceKeywords = ['out of memory', 'resource', 'insufficient', 'no available memory', 'gpu'];
+  if (resourceKeywords.some((keyword) => message.includes(keyword))) return 'resource_limited';
   if (message.includes('invalid json') || message.includes('unexpected token')) return 'invalid_response';
   return 'unknown';
 }
@@ -161,7 +160,7 @@ async function fetchJson<T>(url: string, options: RequestInit, timeoutMs: number
   }
   try {
     return await response.json();
-  } catch (err: any) {
+  } catch (err: unknown) {
     const error: any = new Error('Invalid JSON response from Ollama.');
     error.cause = err;
     throw error;
@@ -215,7 +214,7 @@ export async function warmModel(baseUrl: string, model: string, keepAlive: strin
   }
   try {
     await response.json();
-  } catch (err: any) {
+  } catch (err: unknown) {
     const error: any = new Error('Invalid JSON response from Ollama.');
     error.cause = err;
     throw error;
@@ -420,7 +419,7 @@ export async function explainDiffUsingOllama(
           ...(options.keepAlive ? { keep_alive: options.keepAlive } : {})
         })
       }, resolved.timeoutMs);
-    } catch (err: any) {
+    } catch (err: unknown) {
       const status = classifyOllamaError(err);
       if (status === 'timeout') return fallbackResponse('VLM timeout exceeded.');
       if (status === 'unreachable') return fallbackResponse('Ollama unreachable. Is it running?');
@@ -459,7 +458,7 @@ export async function explainDiffUsingOllama(
     } catch (e) {
       return fallbackResponse('Invalid JSON response from VLM.');
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Failed to explain diff with Ollama:', error);
     return errorResponse(`VLM error: ${ensureErrorMessage(error)}`);
   }

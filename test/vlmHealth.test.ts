@@ -1,8 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { checkOllamaHealth } from '../src/vlm/ollama';
 
-const originalFetch = global.fetch;
-
 function mockResponse(status: number, body: any): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -13,13 +11,13 @@ function mockResponse(status: number, body: any): Response {
 }
 
 afterEach(() => {
-  global.fetch = originalFetch;
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('vlm health', () => {
   it('marks Ollama as unreachable when fetch fails', async () => {
-    global.fetch = vi.fn().mockRejectedValue(new Error('fetch failed')) as any;
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('fetch failed')));
     const result = await checkOllamaHealth({
       baseUrl: 'http://localhost:59999',
       model: 'qwen2.5vl:7b',
@@ -31,7 +29,7 @@ describe('vlm health', () => {
   });
 
   it('reports load failure when model is installed but warmup fails', async () => {
-    global.fetch = vi.fn(async (url) => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
       const urlString = String(url);
       if (urlString.endsWith('/api/tags')) {
         return mockResponse(200, { models: [{ name: 'qwen2.5vl:7b', size: 6000000000 }] });
@@ -43,7 +41,7 @@ describe('vlm health', () => {
         return mockResponse(500, 'out of memory');
       }
       throw new Error(`Unexpected fetch URL: ${urlString}`);
-    }) as any;
+    }));
 
     const result = await checkOllamaHealth({
       baseUrl: 'http://localhost:11434',
