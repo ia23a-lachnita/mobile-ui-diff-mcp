@@ -150,8 +150,13 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   });
 
   const reportPath = path.join(resolvedRunOutputDir, 'report.json');
-  await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
-
+  const run = {
+    screen: input.screen,
+    name: input.runName ?? null,
+    outputDir: resolvedRunOutputDir,
+    reportPath,
+    configPath
+  };
   let delta: RunScreenUiDiffDelta | undefined;
   if (input.runName) {
     const resolvedBaseOutputDir = resolveAbsolutePath(baseOutputDir);
@@ -185,15 +190,12 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     }
   }
 
-  return {
+  const finalReport: RunScreenUiDiffReport = {
     ...report,
-    run: {
-      screen: input.screen,
-      name: input.runName ?? null,
-      outputDir: resolvedRunOutputDir,
-      reportPath,
-      configPath
-    },
+    run,
     delta
   };
+
+  await fs.writeFile(reportPath, JSON.stringify(finalReport, null, 2));
+  return finalReport;
 }
