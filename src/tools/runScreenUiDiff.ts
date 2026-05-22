@@ -133,7 +133,7 @@ async function findPreviousRunReport(baseOutputDir: string, currentRunName: stri
           mtimeCandidates.push({ name: entry.name, reportPath, mtimeMs: stat.mtimeMs });
         }
       } catch {
-        // Skip subdirectories whose report.json cannot be read or stat'd
+        // Skip subdirectories whose report.json cannot be read or stat'ed
         continue;
       }
     }
