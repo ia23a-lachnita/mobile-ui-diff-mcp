@@ -130,9 +130,7 @@ async function findPreviousRunReport(baseOutputDir: string, currentRunName: stri
         if (runNumber !== null) {
           numberedCandidates.push({ name: entry.name, reportPath, runNumber });
         }
-        if (currentRunNumber === null) {
-          mtimeCandidates.push({ name: entry.name, reportPath, mtimeMs: stat.mtimeMs });
-        }
+        mtimeCandidates.push({ name: entry.name, reportPath, mtimeMs: stat.mtimeMs });
       } catch {
         // Skip subdirectories whose report.json cannot be read or stat'ed
         continue;
