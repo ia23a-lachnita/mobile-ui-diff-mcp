@@ -180,7 +180,7 @@ export function createServer() {
             properties: {
               screen: { type: "string", minLength: 1, description: "Screen name defined in ui-diff.config.json." },
               configPath: { type: "string", minLength: 1, description: "Optional path to ui-diff.config.json. Defaults to ./ui-diff.config.json." },
-              runName: { type: "string", minLength: 1, description: "Optional run folder name. If set, output goes to outputDir/runName and delta compares to the previous run." },
+              runName: { type: "string", minLength: 1, description: "Optional run folder name. If omitted, an auto-incremented folder (run-001, run-002, …) is created. Output always goes to outputDir/runName and delta is computed when a previous run exists." },
               actualImage: { type: "string", minLength: 1, description: "Optional path to an existing actual screenshot PNG. When set, no capture is performed." },
               platform: { type: "string", enum: ["android", "ios", "none"], description: "Optional override for the screen profile platform." },
               expectedImage: { type: "string", minLength: 1, description: "Optional override for the expected design/mockup PNG." },

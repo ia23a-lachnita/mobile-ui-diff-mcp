@@ -47,7 +47,7 @@ export interface RunScreenUiDiffDelta {
 export interface RunScreenUiDiffReport extends DiffReport {
   run: {
     screen: string;
-    name: string | null;
+    name: string;
     outputDir: string;
     reportPath: string;
     configPath: string;
@@ -115,7 +115,8 @@ async function findPreviousRunReport(baseOutputDir: string, currentRunName: stri
       try {
         const stat = await fs.stat(reportPath);
         candidates.push({ name: entry.name, reportPath, mtimeMs: stat.mtimeMs });
-      } catch (err) {
+      } catch {
+        // Skip subdirectories whose report.json cannot be read or stat'd
         continue;
       }
     }
