@@ -62,14 +62,21 @@ interface ReportMetrics {
   regionCount: number;
 }
 
-function toReportMetrics(report: any): ReportMetrics | null {
-  if (!report || (report.status !== 'pass' && report.status !== 'fail')) return null;
-  if (typeof report.diffPercent !== 'number' || typeof report.diffPixels !== 'number') return null;
-  const regionCount = Array.isArray(report.regions) ? report.regions.length : 0;
+function toReportMetrics(report: unknown): ReportMetrics | null {
+  if (!report || typeof report !== 'object') return null;
+  const typed = report as {
+    status?: unknown;
+    diffPercent?: unknown;
+    diffPixels?: unknown;
+    regions?: unknown;
+  };
+  if (typed.status !== 'pass' && typed.status !== 'fail') return null;
+  if (typeof typed.diffPercent !== 'number' || typeof typed.diffPixels !== 'number') return null;
+  const regionCount = Array.isArray(typed.regions) ? typed.regions.length : 0;
   return {
-    status: report.status,
-    diffPercent: report.diffPercent,
-    diffPixels: report.diffPixels,
+    status: typed.status,
+    diffPercent: typed.diffPercent,
+    diffPixels: typed.diffPixels,
     regionCount
   };
 }

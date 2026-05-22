@@ -218,7 +218,7 @@ export function createServer() {
       switch (request.params.name) {
         case "compare_images": {
           const args = compareImagesSchema.parse(request.params.arguments);
-          const result = await compareImages(args as any);
+          const result = await compareImages(args);
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
         case "capture_android_screenshot": {
@@ -233,12 +233,12 @@ export function createServer() {
         }
         case "run_mobile_ui_diff": {
           const args = runMobileUiDiffSchema.parse(request.params.arguments);
-          const result = await runMobileUiDiff(args as any);
+          const result = await runMobileUiDiff(args);
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
         case "run_screen_ui_diff": {
           const args = runScreenUiDiffSchema.parse(request.params.arguments);
-          const result = await runScreenUiDiff(args as any);
+          const result = await runScreenUiDiff(args);
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
         default:
