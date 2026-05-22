@@ -81,6 +81,28 @@ function toReportMetrics(report: unknown): ReportMetrics | null {
   };
 }
 
+async function nextRunName(baseOutputDir: string): Promise<string> {
+  let entries: { isDirectory(): boolean; name: string }[];
+  try {
+    entries = await fs.readdir(baseOutputDir, { withFileTypes: true });
+  } catch {
+    return 'run-001';
+  }
+
+  const runPattern = /^run-(\d+)$/;
+  let max = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const match = runPattern.exec(entry.name);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (n > max) max = n;
+    }
+  }
+
+  return `run-${String(max + 1).padStart(3, '0')}`;
+}
+
 async function findPreviousRunReport(baseOutputDir: string, currentRunName: string) {
   try {
     const entries = await fs.readdir(baseOutputDir, { withFileTypes: true });
@@ -133,7 +155,9 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   };
 
   const baseOutputDir = merged.outputDir;
-  const runOutputDir = input.runName ? path.join(baseOutputDir, input.runName) : baseOutputDir;
+  const resolvedBaseOutputDir = resolveAbsolutePath(baseOutputDir);
+  const effectiveRunName = input.runName ?? await nextRunName(resolvedBaseOutputDir);
+  const runOutputDir = path.join(baseOutputDir, effectiveRunName);
   const resolvedRunOutputDir = resolveAbsolutePath(runOutputDir);
 
   const report = await runMobileUiDiff({
@@ -152,15 +176,14 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   const reportPath = path.join(resolvedRunOutputDir, 'report.json');
   const run = {
     screen: input.screen,
-    name: input.runName ?? null,
+    name: effectiveRunName,
     outputDir: resolvedRunOutputDir,
     reportPath,
     configPath
   };
   let delta: RunScreenUiDiffDelta | undefined;
-  if (input.runName) {
-    const resolvedBaseOutputDir = resolveAbsolutePath(baseOutputDir);
-    const previous = await findPreviousRunReport(resolvedBaseOutputDir, input.runName);
+  {
+    const previous = await findPreviousRunReport(resolvedBaseOutputDir, effectiveRunName);
     const previousMetrics = previous ? toReportMetrics(previous.report) : null;
     const currentMetrics = toReportMetrics(report);
 
@@ -175,7 +198,7 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
           regionCount: previousMetrics.regionCount
         },
         currentRun: {
-          name: input.runName,
+          name: effectiveRunName,
           reportPath,
           status: currentMetrics.status,
           diffPercent: currentMetrics.diffPercent,
