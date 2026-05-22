@@ -42,6 +42,7 @@ export interface RunScreenUiDiffDelta {
   diffPixelsDelta: number;
   regionCountDelta: number;
   statusChanged: boolean;
+  trend: 'improved' | 'worsened' | 'unchanged';
 }
 
 export interface RunScreenUiDiffReport extends DiffReport {
@@ -81,6 +82,19 @@ function toReportMetrics(report: unknown): ReportMetrics | null {
   };
 }
 
+function parseRunNumber(name: string): number | null {
+  const match = /^run-(\d+)$/.exec(name);
+  if (!match) return null;
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function getTrend(previous: ReportMetrics, current: ReportMetrics): 'improved' | 'worsened' | 'unchanged' {
+  if (current.diffPercent < previous.diffPercent) return 'improved';
+  if (current.diffPercent > previous.diffPercent) return 'worsened';
+  return 'unchanged';
+}
+
 async function nextRunName(baseOutputDir: string): Promise<string> {
   let entries: { isDirectory(): boolean; name: string }[];
   try {
@@ -89,15 +103,11 @@ async function nextRunName(baseOutputDir: string): Promise<string> {
     return 'run-001';
   }
 
-  const runPattern = /^run-(\d+)$/;
   let max = 0;
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const match = runPattern.exec(entry.name);
-    if (match) {
-      const n = parseInt(match[1], 10);
-      if (n > max) max = n;
-    }
+    const n = parseRunNumber(entry.name);
+    if (n !== null && n > max) max = n;
   }
 
   return `run-${String(max + 1).padStart(3, '0')}`;
@@ -106,7 +116,9 @@ async function nextRunName(baseOutputDir: string): Promise<string> {
 async function findPreviousRunReport(baseOutputDir: string, currentRunName: string) {
   try {
     const entries = await fs.readdir(baseOutputDir, { withFileTypes: true });
-    const candidates: Array<{ name: string; reportPath: string; mtimeMs: number }> = [];
+    const currentRunNumber = parseRunNumber(currentRunName);
+    const numberedCandidates: Array<{ name: string; reportPath: string; runNumber: number }> = [];
+    const mtimeCandidates: Array<{ name: string; reportPath: string; mtimeMs: number }> = [];
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
@@ -114,17 +126,36 @@ async function findPreviousRunReport(baseOutputDir: string, currentRunName: stri
       const reportPath = path.join(baseOutputDir, entry.name, 'report.json');
       try {
         const stat = await fs.stat(reportPath);
-        candidates.push({ name: entry.name, reportPath, mtimeMs: stat.mtimeMs });
+        const runNumber = parseRunNumber(entry.name);
+        if (runNumber !== null) {
+          numberedCandidates.push({ name: entry.name, reportPath, runNumber });
+        } else if (currentRunNumber === null) {
+          mtimeCandidates.push({ name: entry.name, reportPath, mtimeMs: stat.mtimeMs });
+        }
       } catch {
         // Skip subdirectories whose report.json cannot be read or stat'd
         continue;
       }
     }
 
-    if (candidates.length === 0) return null;
+    let selected: { name: string; reportPath: string } | null = null;
+    if (currentRunNumber !== null) {
+      let best = -1;
+      for (const candidate of numberedCandidates) {
+        if (candidate.runNumber >= currentRunNumber) continue;
+        if (candidate.runNumber > best) {
+          best = candidate.runNumber;
+          selected = { name: candidate.name, reportPath: candidate.reportPath };
+        }
+      }
+    } else if (mtimeCandidates.length > 0) {
+      mtimeCandidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+      const chosen = mtimeCandidates[0];
+      selected = { name: chosen.name, reportPath: chosen.reportPath };
+    }
 
-    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    const selected = candidates[0];
+    if (!selected) return null;
+
     const raw = await fs.readFile(selected.reportPath, 'utf-8');
     const parsed = JSON.parse(raw);
     return { ...selected, report: parsed };
@@ -189,6 +220,7 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     const currentMetrics = toReportMetrics(report);
 
     if (previous && previousMetrics && currentMetrics) {
+      const trend = getTrend(previousMetrics, currentMetrics);
       delta = {
         previousRun: {
           name: previous.name,
@@ -209,7 +241,8 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
         diffPercentDelta: currentMetrics.diffPercent - previousMetrics.diffPercent,
         diffPixelsDelta: currentMetrics.diffPixels - previousMetrics.diffPixels,
         regionCountDelta: currentMetrics.regionCount - previousMetrics.regionCount,
-        statusChanged: previousMetrics.status !== currentMetrics.status
+        statusChanged: previousMetrics.status !== currentMetrics.status,
+        trend
       };
     }
   }
