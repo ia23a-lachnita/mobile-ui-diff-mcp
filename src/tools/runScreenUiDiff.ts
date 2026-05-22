@@ -129,7 +129,8 @@ async function findPreviousRunReport(baseOutputDir: string, currentRunName: stri
         const runNumber = parseRunNumber(entry.name);
         if (runNumber !== null) {
           numberedCandidates.push({ name: entry.name, reportPath, runNumber });
-        } else if (currentRunNumber === null) {
+        }
+        if (currentRunNumber === null) {
           mtimeCandidates.push({ name: entry.name, reportPath, mtimeMs: stat.mtimeMs });
         }
       } catch {
