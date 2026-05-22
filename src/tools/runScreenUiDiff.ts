@@ -192,7 +192,6 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   const resolvedVlmOverrides = input.vlm ?? {};
   const screenVlm = screenConfig.vlm ?? {};
   const autoPullEnabled = (resolvedVlmOverrides.autoPull ?? screenVlm.autoPull) === true;
-  const autoPullWarning = 'autoPull is not implemented. Run `ollama pull <model>` manually.';
   const requireVlmAnalysis = includeVlmAnalysis
     ? (input.requireVlmAnalysis ?? screenConfig.requireVlmAnalysis ?? resolvedVlmOverrides.require ?? screenVlm.require ?? false)
     : false;
@@ -204,6 +203,7 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     timeoutMs: resolvedVlmOverrides.timeoutMs ?? screenVlm.timeoutMs,
     autoPull: autoPullEnabled
   });
+  const autoPullWarning = `autoPull is not implemented. Run \`ollama pull ${resolvedVlmConfig.model}\` manually.`;
   const preflightEnabled = (resolvedVlmOverrides.preflight ?? screenVlm.preflight) !== false;
   let vlmPreflight: VlmPreflightResult | undefined;
 

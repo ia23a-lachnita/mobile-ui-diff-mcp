@@ -335,7 +335,7 @@ describe('runScreenUiDiff', () => {
       maxRegions: 1,
       maxVlmRegions: 1
     });
-    expect(run.warnings).toContain('autoPull is not implemented. Run `ollama pull <model>` manually.');
-    expect(run.vlm?.warnings).toContain('autoPull is not implemented. Run `ollama pull <model>` manually.');
+    expect(run.warnings).toContain('autoPull is not implemented. Run `ollama pull qwen2.5vl:7b` manually.');
+    expect(run.vlm?.warnings).toContain('autoPull is not implemented. Run `ollama pull qwen2.5vl:7b` manually.');
   });
 });

@@ -240,7 +240,7 @@ export async function checkOllamaHealth(input: OllamaHealthCheckInput): Promise<
     warnings.push('Only provider=ollama is supported.');
   }
   if (input.autoPull === true) {
-    warnings.push('autoPull is not implemented. Run `ollama pull <model>` manually.');
+    warnings.push(`autoPull is not implemented. Run \`ollama pull ${selectedModel}\` manually.`);
   }
 
   let installedModels: OllamaModelInfo[] = [];

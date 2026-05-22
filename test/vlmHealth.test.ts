@@ -169,7 +169,7 @@ describe('vlm health', () => {
       checkLoad: false,
       timeoutMs: 50
     });
-    expect(result.warnings).toContain('autoPull is not implemented. Run `ollama pull <model>` manually.');
+    expect(result.warnings).toContain('autoPull is not implemented. Run `ollama pull qwen2.5vl:7b` manually.');
   });
 });
 
@@ -336,7 +336,7 @@ describe('runScreenUiDiff VLM preflight', () => {
       maxVlmRegions: 1
     });
 
-    expect(run.warnings).toContain('autoPull is not implemented. Run `ollama pull <model>` manually.');
-    expect(run.vlm?.warnings).toContain('autoPull is not implemented. Run `ollama pull <model>` manually.');
+    expect(run.warnings).toContain('autoPull is not implemented. Run `ollama pull qwen2.5vl:7b` manually.');
+    expect(run.vlm?.warnings).toContain('autoPull is not implemented. Run `ollama pull qwen2.5vl:7b` manually.');
   });
 });
