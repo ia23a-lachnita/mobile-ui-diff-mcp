@@ -99,6 +99,43 @@ Claude Code can call:
 }
 ```
 
+## Screen Profiles (ui-diff.config.json)
+
+Create `ui-diff.config.json` in your working directory to define reusable screen profiles:
+
+```json
+{
+  "screens": {
+    "today": {
+      "platform": "android",
+      "expectedImage": "docs/mockups/image/light/single/Today.png",
+      "outputDir": ".ui-diff/today",
+      "pixelmatchThreshold": 0.1,
+      "maxDiffPercent": 0.01,
+      "maxRegions": 20,
+      "maxVlmRegions": 8,
+      "includeVlmAnalysis": true,
+      "ignoreRegions": [
+        { "x": 0, "y": 0, "width": 1080, "height": 80, "reason": "status bar" }
+      ]
+    }
+  }
+}
+```
+
+Then run a profile with optional overrides and run-to-run delta reporting:
+
+```json
+{
+  "name": "run_screen_ui_diff",
+  "arguments": {
+    "screen": "today",
+    "runName": "run-003",
+    "pixelmatchThreshold": 0.12
+  }
+}
+```
+
 ## Parameters & Thresholds
 
 - **pixelmatchThreshold** (formerly `threshold`): Sensitivity of the pixel comparison (`0` to `1`). Lower means more sensitive to color shifts. Default: `0.1`.

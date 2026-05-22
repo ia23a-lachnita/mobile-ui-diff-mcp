@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { compareImages } from "../tools/compareImages";
 import { runMobileUiDiff } from "../tools/runMobileUiDiff";
+import { runScreenUiDiff } from "../tools/runScreenUiDiff";
 import { captureAndroidScreenshot } from "../tools/captureAndroid";
 import { captureIosSimulatorScreenshot } from "../tools/captureIosSimulator";
 
@@ -53,6 +54,22 @@ export const runMobileUiDiffSchema = z.object({
   ignoreRegions: z.array(ignoreRegionSchema).optional()
 });
 
+export const runScreenUiDiffSchema = z.object({
+  screen: z.string().min(1),
+  configPath: z.string().min(1).optional(),
+  runName: z.string().min(1).optional(),
+  actualImage: z.string().min(1).optional(),
+  platform: z.enum(['android', 'ios', 'none']).optional(),
+  expectedImage: z.string().min(1).optional(),
+  outputDir: z.string().min(1).optional(),
+  pixelmatchThreshold: z.number().min(0).max(1).optional(),
+  maxDiffPercent: z.number().min(0).max(1).optional(),
+  maxRegions: z.number().int().positive().max(500).optional(),
+  maxVlmRegions: z.number().int().nonnegative().max(50).optional(),
+  includeVlmAnalysis: z.boolean().optional(),
+  ignoreRegions: z.array(ignoreRegionSchema).optional()
+});
+
 export function createServer() {
   const server = new Server(
     { name: "mobile-ui-diff-mcp", version: "1.0.0" },
@@ -64,7 +81,7 @@ export function createServer() {
       tools: [
         {
           name: "compare_images",
-          description: "Compare a mobile app screenshot against a design mockup, returning diff metrics and detected regions optionally analyzed by a local VLM.",
+          description: "Compare two existing images (expected + actual). Use this when both screenshot files already exist and no capture is needed.",
           inputSchema: {
             type: "object",
             properties: {
@@ -76,7 +93,7 @@ export function createServer() {
               maxDiffPercent: { type: "number", minimum: 0, maximum: 1, default: 0.001, description: "Maximum differing-pixel ratio allowed before failing the report. Default: 0.001." },
               maxRegions: { type: "integer", minimum: 1, maximum: 500, default: 50, description: "Maximum number of diff regions to return, keeping the largest regions first. Default: 50." },
               maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, default: 10, description: "Maximum number of returned regions to analyze with VLM. Default: 10." },
-              includeVlmAnalysis: { type: "boolean", default: false, description: "Whether to run Ollama on diff regions. Default: false." },
+              includeVlmAnalysis: { type: "boolean", default: false, description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
               ignoreRegions: {
                 type: "array",
                 description: "Pixel regions to mask before comparison.",
@@ -98,7 +115,7 @@ export function createServer() {
         },
         {
           name: "capture_android_screenshot",
-          description: "Capture an Android screenshot via ADB",
+          description: "Capture an Android screenshot via ADB. Use only when you need a screenshot artifact without comparison.",
           inputSchema: {
             type: "object",
             properties: {
@@ -110,7 +127,7 @@ export function createServer() {
         },
         {
           name: "capture_ios_simulator_screenshot",
-          description: "Capture an iOS Simulator screenshot via simctl",
+          description: "Capture an iOS Simulator screenshot via simctl. Use only when you need a screenshot artifact without comparison.",
           inputSchema: {
             type: "object",
             properties: {
@@ -122,7 +139,7 @@ export function createServer() {
         },
         {
           name: "run_mobile_ui_diff",
-          description: "High level tool to optionally capture a screenshot and then compare it to the mockup in one step.",
+          description: "Capture a fresh Android/iOS screenshot (or use an existing actualImage) and compare it to a mockup. For named screen profiles, prefer run_screen_ui_diff.",
           inputSchema: {
             type: "object",
             properties: {
@@ -135,7 +152,7 @@ export function createServer() {
               maxDiffPercent: { type: "number", minimum: 0, maximum: 1, default: 0.001, description: "Maximum differing-pixel ratio allowed before failing the report. Default: 0.001." },
               maxRegions: { type: "integer", minimum: 1, maximum: 500, default: 50, description: "Maximum number of diff regions to return, keeping the largest regions first. Default: 50." },
               maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, default: 10, description: "Maximum number of returned regions to analyze with VLM. Default: 10." },
-              includeVlmAnalysis: { type: "boolean", default: false, description: "Whether to run Ollama on diff regions. Default: false." },
+              includeVlmAnalysis: { type: "boolean", default: false, description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
               ignoreRegions: {
                 type: "array",
                 description: "Pixel regions to mask before comparison.",
@@ -153,6 +170,43 @@ export function createServer() {
               }
             },
             required: ["platform", "expectedImage", "outputDir"]
+          }
+        },
+        {
+          name: "run_screen_ui_diff",
+          description: "Run a comparison using a named screen profile from ui-diff.config.json, with optional overrides and run-to-run delta reporting.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              screen: { type: "string", minLength: 1, description: "Screen name defined in ui-diff.config.json." },
+              configPath: { type: "string", minLength: 1, description: "Optional path to ui-diff.config.json. Defaults to ./ui-diff.config.json." },
+              runName: { type: "string", minLength: 1, description: "Optional run folder name. If set, output goes to outputDir/runName and delta compares to the previous run." },
+              actualImage: { type: "string", minLength: 1, description: "Optional path to an existing actual screenshot PNG. When set, no capture is performed." },
+              platform: { type: "string", enum: ["android", "ios", "none"], description: "Optional override for the screen profile platform." },
+              expectedImage: { type: "string", minLength: 1, description: "Optional override for the expected design/mockup PNG." },
+              outputDir: { type: "string", minLength: 1, description: "Optional override for the output directory." },
+              pixelmatchThreshold: { type: "number", minimum: 0, maximum: 1, description: "Optional override for pixelmatch threshold." },
+              maxDiffPercent: { type: "number", minimum: 0, maximum: 1, description: "Optional override for maximum diff percent." },
+              maxRegions: { type: "integer", minimum: 1, maximum: 500, description: "Optional override for max diff regions." },
+              maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, description: "Optional override for max VLM regions." },
+              includeVlmAnalysis: { type: "boolean", description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
+              ignoreRegions: {
+                type: "array",
+                description: "Optional override for pixel regions to mask before comparison.",
+                items: {
+                  type: "object",
+                  properties: {
+                    x: { type: "integer", minimum: 0 },
+                    y: { type: "integer", minimum: 0 },
+                    width: { type: "integer", minimum: 1 },
+                    height: { type: "integer", minimum: 1 },
+                    reason: { type: "string", description: "Optional human-readable reason for masking this region." }
+                  },
+                  required: ["x", "y", "width", "height"]
+                }
+              }
+            },
+            required: ["screen"]
           }
         }
       ]
@@ -180,6 +234,11 @@ export function createServer() {
         case "run_mobile_ui_diff": {
           const args = runMobileUiDiffSchema.parse(request.params.arguments);
           const result = await runMobileUiDiff(args as any);
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+        case "run_screen_ui_diff": {
+          const args = runScreenUiDiffSchema.parse(request.params.arguments);
+          const result = await runScreenUiDiff(args as any);
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
         default:
