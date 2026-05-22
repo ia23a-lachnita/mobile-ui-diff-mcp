@@ -91,6 +91,18 @@ describe('runScreenUiDiff', () => {
           vlm: {
             autoPull: true
           }
+        },
+        preCaptureProfile: {
+          platform: 'none',
+          expectedImage: expectedPath,
+          outputDir,
+          preCapture: [
+            {
+              type: 'adbShell',
+              command: 'input tap 108 2280',
+              description: 'Switch to Today tab'
+            }
+          ]
         }
       }
     };
@@ -337,5 +349,15 @@ describe('runScreenUiDiff', () => {
     });
     expect(run.warnings).toContain('autoPull is not implemented. Run `ollama pull qwen2.5vl:7b` manually.');
     expect(run.vlm?.warnings).toContain('autoPull is not implemented. Run `ollama pull qwen2.5vl:7b` manually.');
+  });
+
+  it('accepts preCapture config entries', async () => {
+    const run = await runScreenUiDiff({
+      screen: 'preCaptureProfile',
+      configPath,
+      actualImage: actualIdentical
+    });
+
+    expect(run.status).toBe('pass');
   });
 });

@@ -3,8 +3,9 @@ import { ensureDir, resolveAbsolutePath } from '../utils/fs';
 import { compareImages } from './compareImages';
 import { captureAndroidScreenshot } from './captureAndroid';
 import { captureIosSimulatorScreenshot } from './captureIosSimulator';
-import { DiffReport, IgnoreRegion } from '../types';
+import { DiffReport, IgnoreRegion, PreCaptureResult, PreCaptureStep, FloorDetectionConfig, RunDelta, RegionOfInterestConfig, VisualAssertionConfig } from '../types';
 import { ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
+import { runPreCaptureSteps } from './preCapture';
 
 export interface RunMobileUiDiffInput {
   platform: 'android' | 'ios' | 'none';
@@ -19,6 +20,12 @@ export interface RunMobileUiDiffInput {
   includeVlmAnalysis?: boolean;
   requireVlmAnalysis?: boolean;
   ignoreRegions?: IgnoreRegion[];
+  preCapture?: PreCaptureStep[];
+  previousReport?: DiffReport;
+  runDelta?: RunDelta;
+  floorDetection?: FloorDetectionConfig;
+  regionsOfInterest?: RegionOfInterestConfig[];
+  visualAssertions?: VisualAssertionConfig[];
   vlmConfig?: ResolvedOllamaConfig;
   vlmPreflight?: VlmPreflightResult;
 }
@@ -26,6 +33,11 @@ export interface RunMobileUiDiffInput {
 export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<DiffReport> {
   const outputDir = resolveAbsolutePath(input.outputDir);
   await ensureDir(outputDir);
+
+  let preCaptureResults: PreCaptureResult[] | undefined;
+  if (input.preCapture?.length) {
+    preCaptureResults = await runPreCaptureSteps(input.preCapture);
+  }
 
   let actualImagePath = input.actualImage;
 
@@ -41,7 +53,7 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     }
   }
 
-  return await compareImages({
+  const report = await compareImages({
     expectedImage: input.expectedImage,
     actualImage: actualImagePath,
     outputDir: input.outputDir,
@@ -54,6 +66,17 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     requireVlmAnalysis: input.requireVlmAnalysis,
     vlmConfig: input.vlmConfig,
     vlmPreflight: input.vlmPreflight,
-    ignoreRegions: input.ignoreRegions
+    ignoreRegions: input.ignoreRegions,
+    previousReport: input.previousReport,
+    runDelta: input.runDelta,
+    floorDetection: input.floorDetection,
+    regionsOfInterest: input.regionsOfInterest,
+    visualAssertions: input.visualAssertions
   });
+
+  if (preCaptureResults?.length) {
+    report.preCapture = preCaptureResults;
+  }
+
+  return report;
 }

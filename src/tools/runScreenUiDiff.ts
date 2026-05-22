@@ -185,7 +185,11 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     maxRegions: input.maxRegions ?? screenConfig.maxRegions,
     maxVlmRegions: input.maxVlmRegions ?? screenConfig.maxVlmRegions,
     includeVlmAnalysis: input.includeVlmAnalysis ?? screenConfig.includeVlmAnalysis,
-    ignoreRegions: input.ignoreRegions ?? screenConfig.ignoreRegions
+    ignoreRegions: input.ignoreRegions ?? screenConfig.ignoreRegions,
+    preCapture: screenConfig.preCapture,
+    regionsOfInterest: screenConfig.regionsOfInterest,
+    visualAssertions: screenConfig.visualAssertions,
+    floorDetection: screenConfig.floorDetection
   };
 
   const includeVlmAnalysis = merged.includeVlmAnalysis ?? false;
@@ -239,6 +243,8 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   const runOutputDir = path.join(baseOutputDir, effectiveRunName);
   const resolvedRunOutputDir = resolveAbsolutePath(runOutputDir);
 
+  const previous = await findPreviousRunReport(resolvedBaseOutputDir, effectiveRunName);
+
   const report = await runMobileUiDiff({
     platform: merged.platform,
     expectedImage: merged.expectedImage,
@@ -252,7 +258,12 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     requireVlmAnalysis,
     vlmConfig: resolvedVlmConfig,
     vlmPreflight,
-    ignoreRegions: merged.ignoreRegions
+    ignoreRegions: merged.ignoreRegions,
+    preCapture: merged.preCapture,
+    previousReport: previous?.report,
+    floorDetection: merged.floorDetection,
+    regionsOfInterest: merged.regionsOfInterest,
+    visualAssertions: merged.visualAssertions
   });
 
   const reportPath = path.join(resolvedRunOutputDir, 'report.json');
@@ -265,7 +276,6 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   };
   let delta: RunScreenUiDiffDelta | undefined;
   {
-    const previous = await findPreviousRunReport(resolvedBaseOutputDir, effectiveRunName);
     const previousMetrics = previous ? toReportMetrics(previous.report) : null;
     const currentMetrics = toReportMetrics(report);
 

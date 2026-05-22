@@ -17,6 +17,7 @@ An MCP server that helps AI agents compare mobile app screenshots against design
 - **Image Comparison:** Uses pixelmatch for generating precise layout differences.
 - **Region Detection:** Groups mismatches into logical UI regions using connected component analysis. Keeps the largest `maxRegions`.
 - **VLM Explanation:** Identifies root causes (e.g., layout, spacing, missing icons) by streaming bounding box crops to a local VLM.
+- **Local Quality Gates:** Adds region/component scoring, critical ROI checks, visual assertions, floor detection, and agent-friendly summaries.
 
 ## Configuration (Environment Variables)
 
@@ -143,6 +144,40 @@ Create `ui-diff.config.json` in your working directory to define reusable screen
       "maxRegions": 20,
       "maxVlmRegions": 8,
       "includeVlmAnalysis": true,
+      "preCapture": [
+        {
+          "type": "adbShell",
+          "command": "input tap 108 2280",
+          "description": "Switch to Today tab"
+        }
+      ],
+      "regionsOfInterest": [
+        {
+          "id": "macro-ring",
+          "label": "Macro ring chart",
+          "type": "component",
+          "critical": true,
+          "weight": 10,
+          "coordinateSpace": "normalized",
+          "box": { "x": 0.20, "y": 0.17, "width": 0.60, "height": 0.29 },
+          "maxDiffPercent": 0.06
+        }
+      ],
+      "visualAssertions": [
+        {
+          "id": "macro-ring-local-diff",
+          "type": "roiMaxDiffPercent",
+          "roiId": "macro-ring",
+          "maxDiffPercent": 0.06,
+          "severity": "critical",
+          "message": "Macro ring chart is visually too different from mockup."
+        }
+      ],
+      "floorDetection": {
+        "enabled": true,
+        "deltaThreshold": 0.0001,
+        "consecutiveRuns": 2
+      },
       "vlm": {
         "provider": "ollama",
         "model": "qwen2.5vl:7b",
@@ -174,6 +209,8 @@ Then run a profile with optional overrides and run-to-run delta reporting:
 }
 ```
 
+`preCapture` v1 is intentionally narrow: only `adbShell` is supported, and commands are split into argv tokens before execution. Shell metacharacters such as `&`, `|`, `;`, `>`, `<`, `` ` ``, `$`, `(`, and `)` are rejected.
+
 ### Auto-run folders
 
 If `runName` is omitted, the tool scans `outputDir` for existing `run-###` folders and creates the next one (`run-001`, `run-002`, ...). Profile runs always write to `outputDir/run-###`, and deltas compare against the nearest lower-numbered run.
@@ -185,6 +222,46 @@ If `runName` is omitted, the tool scans `outputDir` for existing `run-###` folde
 - **maxRegions**: Maximum number of diff regions to return. Filters by keeping the regions with the largest area first. Default: `50` (Max: `500`).
 - **maxVlmRegions**: Maximum number of regions to send to Ollama for feedback. Default: `10` (Max: `50`).
 - **requireVlmAnalysis**: When true, fail early if VLM analysis is requested but no model can be loaded.
+
+### Quality Gates
+
+- `status` is still the global pixel-diff result.
+- `qualityStatus` is the local visual-quality gate. It fails if any critical ROI or critical visual assertion fails, even when global diff is at floor.
+- `priorityFindings` ranks the most important problems first so agents do not have to infer importance from a long region list.
+- `agentSummary` gives a natural-language verdict and a `canStopIterating` flag.
+- `suggestedMaxDiffPercent` is only emitted when global diff is failing, the report is at floor, and no critical ROI or critical assertion failed. If a critical local gate fails, the suggestion is blocked.
+- `atFloor` only becomes true when floor detection has enough history and no critical local gate is failing.
+
+### Coordinate Spaces
+
+- `normalized`: `x`/`y`/`width`/`height` are `0..1` relative to the normalized comparison canvas.
+- `expected`: coordinates are in expected/mockup image pixels.
+- `actual`: coordinates are in actual screenshot pixels before normalization.
+
+### ROI and Assertions
+
+- `regionsOfInterest` defines component zones that get their own diff metrics and crops under `regions-of-interest/`.
+- Critical ROIs can fail the report even when the global diff looks stable.
+- `visualAssertions` currently supports `roiMaxDiffPercent` and can be extended later.
+
+### Floor Detection
+
+- Default config: `{ "enabled": true, "deltaThreshold": 0.0001, "consecutiveRuns": 2 }`
+- Floor detection is blocked when a critical ROI or critical visual assertion fails.
+- When floor detection is blocked, the report includes `floorBlockedBy` and a `floorReason`.
+
+### Masks
+
+- `ignoreRegions` still masks pixels before diffing.
+- `type: "system"` is for OS chrome, `type: "data"` is for live fixture mismatches, and `type: "dynamic"` is for loading/timestamps/ads/etc.
+- Data masks behave like ignore regions for diffing, but they are also listed in `maskedRegions`.
+- If a data mask overlaps a critical ROI, the report emits a warning so it cannot hide a broken component silently.
+
+### Fallback Labels
+
+- When VLM is disabled or unavailable, each changed region still gets a `fallbackLabel` and `fallbackDescription`.
+- If a changed region intersects a configured ROI, the ROI label is used.
+- Otherwise geometry heuristics label the region as top/status/header, bottom navigation/chrome, side/edge, main content, or generic content.
 
 ## Ignore Regions
 You can send `ignoreRegions` to mask system UI elements that change frequently, like the status bar or notch:

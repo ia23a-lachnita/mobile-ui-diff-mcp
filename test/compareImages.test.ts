@@ -275,4 +275,142 @@ describe('compareImages and Schemas', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('l. fails quality when critical ROI diff exceeds local threshold even if global diff is stable', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-critical-roi'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: true,
+          weight: 10,
+          coordinateSpace: 'normalized',
+          box: { x: 0.08, y: 0.08, width: 0.42, height: 0.42 },
+          maxDiffPercent: 0.01
+        }
+      ]
+    } as any);
+
+    expect(result.status).toBe('pass');
+    expect(result.qualityStatus).toBe('fail');
+    expect(result.qualityFailures?.[0]?.type).toBe('critical_roi_failed');
+    expect(result.regionsOfInterest?.[0].label).toBe('Macro ring chart');
+  });
+
+  it('m. uses ROI fallback labels and descriptions when VLM is disabled', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-fallback-labels'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: true,
+          weight: 10,
+          coordinateSpace: 'normalized',
+          box: { x: 0.08, y: 0.08, width: 0.42, height: 0.42 },
+          maxDiffPercent: 0.01
+        }
+      ]
+    } as any);
+
+    expect(result.regions[0].fallbackLabel).toBe('Macro ring chart');
+    expect(result.regions[0].fallbackDescription).toContain("intersects the configured ROI 'Macro ring chart'");
+    expect(result.regions[0].intersectingRois).toContain('macro-ring');
+  });
+
+  it('n. blocks floor detection and maxDiffPercent suggestion when critical ROI or visual assertion fails', async () => {
+    const previousReport = {
+      status: 'fail',
+      diffPixels: 123,
+      totalPixels: 10000,
+      diffPercent: 0.1366,
+      pixelmatchThreshold: 0.1,
+      maxDiffPercent: 0.001,
+      regions: [],
+      artifacts: {
+        expected: 'expected.png',
+        actual: 'actual.png',
+        diff: 'diff.png',
+        regionsDir: 'regions'
+      },
+      atFloor: true
+    } as any;
+
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-floor-blocked'),
+      maxDiffPercent: 0.5,
+      previousReport,
+      floorDetection: {
+        enabled: true,
+        deltaThreshold: 0.0001,
+        consecutiveRuns: 2
+      },
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: true,
+          weight: 10,
+          coordinateSpace: 'normalized',
+          box: { x: 0.08, y: 0.08, width: 0.42, height: 0.42 },
+          maxDiffPercent: 0.01
+        }
+      ],
+      visualAssertions: [
+        {
+          id: 'macro-ring-local-diff',
+          type: 'roiMaxDiffPercent',
+          roiId: 'macro-ring',
+          maxDiffPercent: 0.01,
+          severity: 'critical',
+          message: 'Macro ring chart is visually too different from mockup.'
+        }
+      ]
+    } as any);
+
+    expect(result.atFloor).toBe(false);
+    expect(result.floorBlockedBy?.[0].type).toBe('critical_roi_failed');
+    expect(result.visualAssertions?.[0].status).toBe('fail');
+    expect(result.suggestedMaxDiffPercent).toBeNull();
+    expect(result.maxDiffPercentSuggestionBlockedBy?.[0]).toContain("Critical ROI 'Macro ring chart' failed.");
+    expect(result.agentSummary?.canStopIterating).toBe(false);
+  });
+
+  it('o. warns when data mask overlaps critical ROI', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-data-mask-warning'),
+      maxDiffPercent: 1.0,
+      ignoreRegions: [
+        { x: 0, y: 0, width: 40, height: 40, reason: 'fixture diff', type: 'data' }
+      ],
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: true,
+          weight: 10,
+          coordinateSpace: 'expected',
+          box: { x: 5, y: 5, width: 30, height: 30 },
+          maxDiffPercent: 0.01
+        }
+      ]
+    } as any);
+
+    expect(result.warnings).toContain("Data mask overlaps critical ROI 'Macro ring chart'. Verify this is intentional.");
+  });
 });
