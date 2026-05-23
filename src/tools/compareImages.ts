@@ -6,7 +6,7 @@ import { createDiffErrorMask } from '../image/diff';
 import { detectRegions } from '../image/regions';
 import { cropAndSave } from '../image/crops';
 import { explainDiffUsingOllama, preflightOllama, resolveOllamaConfig, ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
-import { IgnoreRegion, RegionReport, DiffReport, VlmSummary, VlmAnalysis, RegionOfInterestConfig, RegionOfInterestReport, QualityFailure, PriorityFinding, VisualAssertionConfig, VisualAssertionResult, FloorDetectionConfig, RunDelta, FloorBlocker, AgentSummary } from '../types';
+import { IgnoreRegion, RegionReport, DiffReport, VlmSummary, VlmAnalysis, RegionOfInterestConfig, RegionOfInterestReport, QualityFailure, PriorityFinding, VisualAssertionConfig, VisualAssertionResult, FloorDetectionConfig, RunDelta, FloorBlocker, AgentSummary, HotspotDetectionConfig, LocalHotspot, VlmPolicy, VlmAvailability, ActionRequired } from '../types';
 import fs from 'fs/promises';
 
 export interface CompareImagesInput {
@@ -20,12 +20,14 @@ export interface CompareImagesInput {
   maxVlmRegions?: number;
   includeVlmAnalysis?: boolean;
   requireVlmAnalysis?: boolean;
+  vlmPolicy?: VlmPolicy;
   ignoreRegions?: IgnoreRegion[];
   regionsOfInterest?: RegionOfInterestConfig[];
   visualAssertions?: VisualAssertionConfig[];
   previousReport?: DiffReport;
   runDelta?: RunDelta;
   floorDetection?: FloorDetectionConfig;
+  hotspotDetection?: HotspotDetectionConfig;
   vlmConfig?: ResolvedOllamaConfig;
   vlmPreflight?: VlmPreflightResult;
 }
@@ -112,11 +114,35 @@ function geometryFallbackDescription(label: string): string {
   return `This changed region looks like ${label}. Review local component geometry even without VLM.`;
 }
 
+function resolveVlmPolicy(input: { includeVlmAnalysis: boolean; requireVlmAnalysis?: boolean; vlmPolicy?: VlmPolicy }): VlmPolicy {
+  if (input.vlmPolicy) return input.vlmPolicy;
+  if (!input.includeVlmAnalysis) return 'disabled';
+  if (input.requireVlmAnalysis === true) return 'required';
+  return 'ask_user';
+}
+
+function buildVlmUnavailableActionRequired(): ActionRequired {
+  return {
+    type: 'vlm_unavailable',
+    severity: 'blocking',
+    message: 'VLM analysis was requested but no usable local model is available.',
+    recommendedUserPrompt: 'VLM analysis is unavailable. Do you want me to continue with pixel/ROI-only analysis, or stop and help set up a working VLM model?',
+    suggestedFixes: [
+      'Start Ollama with `ollama serve`',
+      'Run the `vlm_health` MCP tool',
+      'Pull or configure a smaller vision model',
+      "Set includeVlmAnalysis:false or vlmPolicy:'disabled' to proceed without VLM",
+      "Set vlmPolicy:'optional' to allow non-semantic fallback"
+    ]
+  };
+}
+
 function evaluateFloorState(input: {
   floorDetection?: FloorDetectionConfig;
   runDelta?: RunDelta;
   previousReport?: DiffReport;
   currentDiffPercent: number;
+  qualityStatus: 'pass' | 'fail' | 'not_evaluated';
   criticalFailures: QualityFailure[];
   criticalAssertionFailures: QualityFailure[];
 }): { atFloor: boolean | null; floorBlockedBy: FloorBlocker[]; floorReason?: string } {
@@ -125,8 +151,12 @@ function evaluateFloorState(input: {
     return { atFloor: null, floorBlockedBy: [], floorReason: 'Floor detection disabled.' };
   }
 
-  if (!input.previousReport) {
-    return { atFloor: null, floorBlockedBy: [], floorReason: 'No floor history available.' };
+  if (input.qualityStatus === 'not_evaluated') {
+    return {
+      atFloor: false,
+      floorBlockedBy: [{ type: 'quality_not_evaluated', message: 'Critical UI quality was not evaluated.' }],
+      floorReason: 'Critical UI quality was not evaluated.'
+    };
   }
 
   const blockers: FloorBlocker[] = [
@@ -140,6 +170,10 @@ function evaluateFloorState(input: {
       floorBlockedBy: blockers,
       floorReason: 'Global diff is stable, but critical visual regions are still failing.'
     };
+  }
+
+  if (!input.previousReport) {
+    return { atFloor: null, floorBlockedBy: [], floorReason: 'No floor history available.' };
   }
 
   const threshold = floorDetection.deltaThreshold ?? 0.0001;
@@ -166,12 +200,24 @@ function evaluateFloorState(input: {
 
 function buildAgentSummary(input: {
   status: DiffReport['status'];
-  qualityStatus: 'pass' | 'fail';
+  qualityStatus: 'pass' | 'fail' | 'not_evaluated';
   diffPercent: number;
   criticalFailures: QualityFailure[];
   criticalAssertionFailures: QualityFailure[];
   priorityFindings: PriorityFinding[];
+  localHotspots: LocalHotspot[];
+  actionRequired: ActionRequired | null;
 }): AgentSummary {
+  if (input.actionRequired) {
+    return {
+      verdict: input.actionRequired.message,
+      globalDiffPercent: input.diffPercent,
+      qualityStatus: input.qualityStatus,
+      topAction: input.actionRequired.recommendedUserPrompt,
+      canStopIterating: false
+    };
+  }
+
   if (input.criticalFailures.length > 0) {
     const label = input.criticalFailures[0].label ?? 'critical region';
     return {
@@ -205,6 +251,20 @@ function buildAgentSummary(input: {
     };
   }
 
+  if (input.qualityStatus === 'not_evaluated') {
+    const largestHotspot = input.localHotspots[0];
+    const hotspotWarning = largestHotspot
+      ? ` Global pass may be misleading: largest changed region covers ${largestHotspot.area} pixels in ${largestHotspot.fallbackLabel}.`
+      : '';
+    return {
+      verdict: `Global pixel gate passed, but critical UI quality was not evaluated.${hotspotWarning}`,
+      globalDiffPercent: input.diffPercent,
+      qualityStatus: input.qualityStatus,
+      topAction: 'Configure regionsOfInterest / visualAssertions for important components before accepting the screen.',
+      canStopIterating: false
+    };
+  }
+
   return {
     verdict: 'Screen acceptable by global and local gates.',
     globalDiffPercent: input.diffPercent,
@@ -221,12 +281,20 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
   const maxVlmRegions = input.maxVlmRegions ?? 10;
   const includeVlmAnalysis = input.includeVlmAnalysis ?? false;
   const requireVlmAnalysis = input.requireVlmAnalysis ?? false;
+  const vlmPolicy = resolveVlmPolicy({ includeVlmAnalysis, requireVlmAnalysis, vlmPolicy: input.vlmPolicy });
+  const shouldUseVlm = includeVlmAnalysis && vlmPolicy !== 'disabled';
   const ignoreRegions = input.ignoreRegions ?? [];
   const regionsOfInterestInput = input.regionsOfInterest ?? [];
   const visualAssertionsInput = input.visualAssertions ?? [];
   const previousReport = input.previousReport;
   const runDelta = input.runDelta;
   const floorDetection = input.floorDetection;
+  const hotspotDetection = {
+    enabled: input.hotspotDetection?.enabled ?? true,
+    maxHotspots: input.hotspotDetection?.maxHotspots ?? 3,
+    minAreaPercent: input.hotspotDetection?.minAreaPercent ?? 0.02,
+    minDiffDensity: input.hotspotDetection?.minDiffDensity ?? 0.10
+  };
   const outputDir = resolveAbsolutePath(input.outputDir);
   const regionsDir = path.join(outputDir, 'regions');
   const roiDir = path.join(outputDir, 'regions-of-interest');
@@ -235,17 +303,27 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
   let vlmPreflight = input.vlmPreflight;
   const vlmConfig = input.vlmConfig ?? resolveOllamaConfig();
   const vlmUnavailableWarning = 'VLM analysis was requested but unavailable. Region analysis fell back to error/fallback statuses. Run vlm_health or start Ollama.';
-  const vlmDisabledWarning = 'VLM analysis disabled. Enable includeVlmAnalysis for semantic region explanations.';
+  let actionRequired: ActionRequired | null = null;
+  let vlmAvailability: VlmAvailability = {
+    requested: shouldUseVlm,
+    usable: false,
+    selectedModel: shouldUseVlm ? vlmConfig.model : null
+  };
 
-  if (!includeVlmAnalysis) {
-    warnings.push(vlmDisabledWarning);
-  } else {
+  if (shouldUseVlm) {
     if (!vlmPreflight) {
       vlmPreflight = await preflightOllama(vlmConfig, true);
     }
+    vlmAvailability = {
+      requested: true,
+      usable: vlmPreflight.available,
+      selectedModel: vlmPreflight.selectedModel ?? vlmConfig.model,
+      reason: vlmPreflight.available ? undefined : (vlmPreflight.failureReason ?? 'unknown'),
+      message: vlmPreflight.available ? undefined : (vlmPreflight.failureMessage ?? 'VLM analysis was requested but no usable local model is available.')
+    };
     vlmSummary = {
       requested: true,
-      required: requireVlmAnalysis,
+      required: vlmPolicy === 'required',
       provider: 'ollama',
       baseUrl: vlmPreflight.baseUrl,
       selectedModel: vlmPreflight.selectedModel,
@@ -255,10 +333,14 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     };
     warnings.push(...vlmPreflight.warnings);
     if (!vlmPreflight.available) {
-      if (requireVlmAnalysis) {
+      if (vlmPolicy === 'required') {
         throw new Error('VLM analysis is required but no configured Ollama model could be loaded. Run vlm_health for details.');
       }
-      warnings.push(vlmUnavailableWarning);
+      if (vlmPolicy === 'ask_user') {
+        actionRequired = buildVlmUnavailableActionRequired();
+      } else {
+        warnings.push(vlmUnavailableWarning);
+      }
       vlmSummary.warnings.push(vlmUnavailableWarning);
     }
   }
@@ -354,6 +436,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
   const regions: RegionReport[] = [];
 
   const roiCropArtifacts: RegionOfInterestReport[] = [];
+  const localHotspotCandidates: LocalHotspot[] = [];
 
   for (let i = 0; i < rawRegions.length; i++) {
     const box = rawRegions[i];
@@ -375,7 +458,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     let analysis: VlmAnalysis | null = null;
     let analysisStatus: "skipped" | "ok" | "fallback" | "error" = "skipped";
     
-    if (includeVlmAnalysis && vlmCandidates.has(box)) {
+    if (shouldUseVlm && vlmCandidates.has(box)) {
      if (vlmPreflight?.available && vlmPreflight.selectedModel) {
        const ollamaResult = await explainDiffUsingOllama(expCrop, actCrop, diffCrop, {
          baseUrl: vlmConfig.baseUrl,
@@ -411,7 +494,29 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       fallbackDescription,
       intersectingRois: intersectingRois.map((roi) => roi.id)
     });
+
+    const area = box.width * box.height;
+    const diffDensity = countMaskPixels(mismatchMask, box) / Math.max(1, area);
+    const areaPercent = area / Math.max(1, totalPixels);
+    if (hotspotDetection.enabled && areaPercent >= hotspotDetection.minAreaPercent && diffDensity >= hotspotDetection.minDiffDensity) {
+      localHotspotCandidates.push({
+        regionId,
+        area,
+        box,
+        diffDensity,
+        fallbackLabel,
+        message: 'Large local mismatch remains despite global status.'
+      });
+    }
   }
+
+  const localHotspots = localHotspotCandidates
+    .sort((a, b) => {
+      const areaDelta = b.area - a.area;
+      if (areaDelta !== 0) return areaDelta;
+      return b.diffDensity - a.diffDensity;
+    })
+    .slice(0, hotspotDetection.maxHotspots);
 
   for (const roi of normalizedRois) {
     const roiRegionId = `roi-${roi.id}`;
@@ -460,7 +565,14 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
   }
 
   const criticalRoiFailures: QualityFailure[] = roiCropArtifacts
-    .filter((roi) => roi.critical && roi.status === 'fail')
+    .map((roi, index) => ({ roi, index }))
+    .filter(({ roi }) => roi.critical && roi.status === 'fail')
+    .sort((a, b) => {
+      const weightDelta = b.roi.weight - a.roi.weight;
+      if (weightDelta !== 0) return weightDelta;
+      return a.index - b.index;
+    })
+    .map(({ roi }) => roi)
     .map((roi) => ({
       type: 'critical_roi_failed',
       roiId: roi.id,
@@ -481,7 +593,18 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     }
 
     const roi = roiCropArtifacts.find((candidate) => candidate.id === assertion.roiId);
-    const actualDiffPercent = roi?.diffPercent ?? 0;
+    if (!roi) {
+      warnings.push(`Visual assertion '${assertion.id}' references unknown ROI '${assertion.roiId}'.`);
+      return {
+        id: assertion.id,
+        status: 'fail',
+        severity: assertion.severity,
+        message: assertion.message,
+        maxDiffPercent: assertion.maxDiffPercent
+      };
+    }
+
+    const actualDiffPercent = roi.diffPercent;
     const status: 'pass' | 'fail' = actualDiffPercent <= assertion.maxDiffPercent ? 'pass' : 'fail';
     return {
       id: assertion.id,
@@ -508,9 +631,16 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     ...criticalAssertionFailures
   ];
 
-  const qualityStatus: 'pass' | 'fail' = regionsOfInterestInput.length === 0
-    ? (diffPercent <= maxDiffPercent ? 'pass' : 'fail')
-    : (qualityFailures.length > 0 || diffPercent > maxDiffPercent ? 'fail' : 'pass');
+  const hasQualityEvaluationConfig = regionsOfInterestInput.length > 0 || visualAssertionsInput.length > 0;
+  const qualityWarnings = hasQualityEvaluationConfig
+    ? []
+    : ['No regionsOfInterest or visualAssertions configured. Global pixel status does not prove visual parity.'];
+  if (actionRequired?.type === 'vlm_unavailable') {
+    qualityWarnings.push('VLM analysis was requested but unavailable. Ask the user whether to continue without semantic analysis.');
+  }
+  const qualityStatus: 'pass' | 'fail' | 'not_evaluated' = !hasQualityEvaluationConfig
+    ? 'not_evaluated'
+    : (qualityFailures.length > 0 ? 'fail' : 'pass');
 
   const priorityFindings: PriorityFinding[] = [];
   for (const failure of criticalRoiFailures) {
@@ -570,21 +700,40 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     runDelta,
     previousReport,
     currentDiffPercent: diffPercent,
+    qualityStatus,
     criticalFailures: criticalRoiFailures,
     criticalAssertionFailures
   });
 
   const hasCriticalFailure = qualityFailures.length > 0;
-  const canSuggestMaxDiffPercent = diffPercent > maxDiffPercent && floorState.atFloor === true && !hasCriticalFailure;
+  const canSuggestMaxDiffPercent = diffPercent > maxDiffPercent && qualityStatus === 'pass' && floorState.atFloor === true && !hasCriticalFailure;
   const suggestedMaxDiffPercent = canSuggestMaxDiffPercent ? Math.round(diffPercent * 1.1 * 10000) / 10000 : null;
-  const maxDiffPercentSuggestionBlockedBy = !canSuggestMaxDiffPercent && hasCriticalFailure
-    ? qualityFailures.map((failure) => {
+  const suggestionBlockers = !canSuggestMaxDiffPercent
+    ? [
+      ...(qualityStatus === 'not_evaluated'
+        ? ['Critical UI quality was not evaluated. Configure ROIs or visualAssertions first.']
+        : []),
+      ...qualityFailures.map((failure) => {
         if (failure.type === 'critical_roi_failed') {
           return `Critical ROI '${failure.label ?? failure.roiId}' failed.`;
         }
         return `Critical visual assertion '${failure.assertionId}' failed.`;
       })
-    : undefined;
+    ]
+    : [];
+
+  if (qualityWarnings.length > 0) {
+    warnings.push(...qualityWarnings);
+  }
+
+  if (diffPercent <= maxDiffPercent && localHotspots.length > 0) {
+    warnings.push('Global pass does not mean local visual parity; large local hotspots remain.');
+  }
+
+  if (qualityStatus === 'not_evaluated' && diffPercent <= maxDiffPercent && localHotspots.length > 0) {
+    const largestHotspot = localHotspots[0];
+    warnings.push(`Global pass may be misleading: largest changed region covers ${largestHotspot.area} pixels in ${largestHotspot.fallbackLabel}.`);
+  }
 
   if (criticalRoiFailures.length > 0) {
     warnings.push(`Critical region '${criticalRoiFailures[0].label}' failed local diff threshold. Do not treat global diff floor as acceptable.`);
@@ -596,7 +745,9 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     diffPercent,
     criticalFailures: criticalRoiFailures,
     criticalAssertionFailures,
-    priorityFindings
+    priorityFindings,
+    localHotspots,
+    actionRequired
   });
 
   return {
@@ -610,7 +761,9 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     regionsOfInterest: roiCropArtifacts,
     qualityStatus,
     qualityFailures,
+    qualityWarnings,
     priorityFindings,
+    localHotspots,
     visualAssertions,
     atFloor: floorState.atFloor,
     floorBlockedBy: floorState.floorBlockedBy.length ? floorState.floorBlockedBy : undefined,
@@ -618,7 +771,10 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     maskedRegions: ignoreRegions,
     agentSummary,
     suggestedMaxDiffPercent,
-    maxDiffPercentSuggestionBlockedBy,
+    maxDiffPercentSuggestionBlockedBy: suggestionBlockers.length ? suggestionBlockers : undefined,
+    vlmPolicy,
+    vlmAvailability,
+    actionRequired,
     artifacts: {
       expected: processedExpectedPath,
       actual: processedActualPath,

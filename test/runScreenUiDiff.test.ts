@@ -189,6 +189,12 @@ describe('runScreenUiDiff', () => {
     expect(JSON.stringify(compareTool)).not.toContain('preCapture');
     expect(JSON.stringify(mobileTool)).toContain('preCapture');
     expect(JSON.stringify(screenTool)).toContain('preCapture');
+    const screenIgnoreRegionProps = (screenTool as any).inputSchema.properties.ignoreRegions.items.properties;
+    expect(screenIgnoreRegionProps.type.enum).toEqual(['system', 'data', 'dynamic']);
+    expect(screenIgnoreRegionProps.coordinateSpace.enum).toEqual(['expected', 'actual', 'normalized']);
+    expect(screenIgnoreRegionProps.coordinateSpace.description).toContain('Use coordinateSpace:"actual" for device screenshot coordinates.');
+    expect(screenIgnoreRegionProps.coordinateSpace.description).toContain('Use coordinateSpace:"normalized" for proportional masks.');
+    expect(screenIgnoreRegionProps.coordinateSpace.description).toContain('Default is "expected".');
   });
 
   it('selects fallback VLM model when primary fails to load', async () => {
@@ -276,6 +282,7 @@ describe('runScreenUiDiff', () => {
       actualImage: actualShifted,
       includeVlmAnalysis: true,
       requireVlmAnalysis: false,
+      vlmPolicy: 'optional',
       maxRegions: 1,
       maxVlmRegions: 1
     });

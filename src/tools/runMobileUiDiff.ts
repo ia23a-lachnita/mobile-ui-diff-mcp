@@ -3,7 +3,7 @@ import { ensureDir, resolveAbsolutePath } from '../utils/fs';
 import { compareImages } from './compareImages';
 import { captureAndroidScreenshot } from './captureAndroid';
 import { captureIosSimulatorScreenshot } from './captureIosSimulator';
-import { DiffReport, IgnoreRegion, PreCaptureResult, PreCaptureStep, FloorDetectionConfig, RunDelta, RegionOfInterestConfig, VisualAssertionConfig } from '../types';
+import { DiffReport, IgnoreRegion, PreCaptureResult, PreCaptureStep, FloorDetectionConfig, RunDelta, RegionOfInterestConfig, VisualAssertionConfig, HotspotDetectionConfig, VlmPolicy } from '../types';
 import { ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 import { runPreCaptureSteps } from './preCapture';
 
@@ -19,11 +19,13 @@ export interface RunMobileUiDiffInput {
   maxVlmRegions?: number;
   includeVlmAnalysis?: boolean;
   requireVlmAnalysis?: boolean;
+  vlmPolicy?: VlmPolicy;
   ignoreRegions?: IgnoreRegion[];
   preCapture?: PreCaptureStep[];
   previousReport?: DiffReport;
   runDelta?: RunDelta;
   floorDetection?: FloorDetectionConfig;
+  hotspotDetection?: HotspotDetectionConfig;
   regionsOfInterest?: RegionOfInterestConfig[];
   visualAssertions?: VisualAssertionConfig[];
   vlmConfig?: ResolvedOllamaConfig;
@@ -66,12 +68,14 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     maxVlmRegions: input.maxVlmRegions,
     includeVlmAnalysis: input.includeVlmAnalysis,
     requireVlmAnalysis: input.requireVlmAnalysis,
+    vlmPolicy: input.vlmPolicy,
     vlmConfig: input.vlmConfig,
     vlmPreflight: input.vlmPreflight,
     ignoreRegions: input.ignoreRegions,
     previousReport: input.previousReport,
     runDelta: input.runDelta,
     floorDetection: input.floorDetection,
+    hotspotDetection: input.hotspotDetection,
     regionsOfInterest: input.regionsOfInterest,
     visualAssertions: input.visualAssertions
   });

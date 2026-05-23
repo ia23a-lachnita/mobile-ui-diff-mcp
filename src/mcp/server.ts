@@ -57,6 +57,15 @@ export const floorDetectionSchema = z.object({
   consecutiveRuns: z.number().int().positive().optional()
 });
 
+export const hotspotDetectionSchema = z.object({
+  enabled: z.boolean().optional(),
+  maxHotspots: z.number().int().positive().max(50).optional(),
+  minAreaPercent: z.number().min(0).max(1).optional(),
+  minDiffDensity: z.number().min(0).max(1).optional()
+});
+
+export const vlmPolicySchema = z.enum(['disabled', 'optional', 'required', 'ask_user']);
+
 export const vlmConfigSchema = z.object({
   provider: z.enum(['ollama']).optional(),
   baseUrl: z.string().min(1).optional(),
@@ -80,10 +89,12 @@ export const compareImagesSchema = z.object({
   maxVlmRegions: z.number().int().nonnegative().max(50).default(10),
   includeVlmAnalysis: z.boolean().optional(),
   requireVlmAnalysis: z.boolean().optional(),
+  vlmPolicy: vlmPolicySchema.optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
+  hotspotDetection: hotspotDetectionSchema.optional(),
   previousReport: z.any().optional(),
   runDelta: z.any().optional()
 }).strict();
@@ -110,11 +121,13 @@ export const runMobileUiDiffSchema = z.object({
   maxVlmRegions: z.number().int().nonnegative().max(50).default(10),
   includeVlmAnalysis: z.boolean().optional(),
   requireVlmAnalysis: z.boolean().optional(),
+  vlmPolicy: vlmPolicySchema.optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
   preCapture: z.array(preCaptureSchema).optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
+  hotspotDetection: hotspotDetectionSchema.optional(),
   previousReport: z.any().optional(),
   runDelta: z.any().optional()
 });
@@ -133,12 +146,14 @@ export const runScreenUiDiffSchema = z.object({
   maxVlmRegions: z.number().int().nonnegative().max(50).optional(),
   includeVlmAnalysis: z.boolean().optional(),
   requireVlmAnalysis: z.boolean().optional(),
+  vlmPolicy: vlmPolicySchema.optional(),
   vlm: vlmConfigSchema,
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
   preCapture: z.array(preCaptureSchema).optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
-  floorDetection: floorDetectionSchema.optional()
+  floorDetection: floorDetectionSchema.optional(),
+  hotspotDetection: hotspotDetectionSchema.optional()
 });
 
 export const vlmHealthSchema = z.object({
@@ -169,6 +184,7 @@ export function getToolList() {
           maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, default: 10, description: "Maximum number of returned regions to analyze with VLM. Default: 10." },
           includeVlmAnalysis: { type: "boolean", default: false, description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
           requireVlmAnalysis: { type: "boolean", default: false, description: "When true, fail early if VLM analysis is requested but no model can be loaded." },
+          vlmPolicy: { type: "string", enum: ["disabled", "optional", "required", "ask_user"], description: "Controls VLM availability behavior. Defaults to disabled when includeVlmAnalysis is false, required when requireVlmAnalysis is true, otherwise ask_user when VLM is requested." },
           ignoreRegions: {
             type: "array",
             description: "Pixel regions to mask before comparison.",
@@ -237,6 +253,16 @@ export function getToolList() {
               deltaThreshold: { type: "number", minimum: 0, default: 0.0001 },
               consecutiveRuns: { type: "integer", minimum: 1, default: 2 }
             }
+          },
+          hotspotDetection: {
+            type: "object",
+            description: "Local hotspot reporting for large changed regions even when no ROI is configured.",
+            properties: {
+              enabled: { type: "boolean", default: true },
+              maxHotspots: { type: "integer", minimum: 1, maximum: 50, default: 3 },
+              minAreaPercent: { type: "number", minimum: 0, maximum: 1, default: 0.02 },
+              minDiffDensity: { type: "number", minimum: 0, maximum: 1, default: 0.10 }
+            }
           }
         },
         required: ["expectedImage", "actualImage", "outputDir"]
@@ -283,6 +309,7 @@ export function getToolList() {
           maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, default: 10, description: "Maximum number of returned regions to analyze with VLM. Default: 10." },
           includeVlmAnalysis: { type: "boolean", default: false, description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
           requireVlmAnalysis: { type: "boolean", default: false, description: "When true, fail early if VLM analysis is requested but no model can be loaded." },
+          vlmPolicy: { type: "string", enum: ["disabled", "optional", "required", "ask_user"], description: "Controls VLM availability behavior. Defaults to disabled when includeVlmAnalysis is false, required when requireVlmAnalysis is true, otherwise ask_user when VLM is requested." },
           ignoreRegions: {
             type: "array",
             description: "Pixel regions to mask before comparison.",
@@ -364,6 +391,16 @@ export function getToolList() {
               deltaThreshold: { type: "number", minimum: 0, default: 0.0001 },
               consecutiveRuns: { type: "integer", minimum: 1, default: 2 }
             }
+          },
+          hotspotDetection: {
+            type: "object",
+            description: "Local hotspot reporting for large changed regions even when no ROI is configured.",
+            properties: {
+              enabled: { type: "boolean", default: true },
+              maxHotspots: { type: "integer", minimum: 1, maximum: 50, default: 3 },
+              minAreaPercent: { type: "number", minimum: 0, maximum: 1, default: 0.02 },
+              minDiffDensity: { type: "number", minimum: 0, maximum: 1, default: 0.10 }
+            }
           }
         },
         required: ["platform", "expectedImage", "outputDir"]
@@ -388,6 +425,7 @@ export function getToolList() {
           maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, description: "Optional override for max VLM regions." },
           includeVlmAnalysis: { type: "boolean", description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
           requireVlmAnalysis: { type: "boolean", description: "When true, fail early if VLM analysis is requested but no model can be loaded." },
+          vlmPolicy: { type: "string", enum: ["disabled", "optional", "required", "ask_user"], description: "Optional VLM availability policy override. Defaults to disabled when includeVlmAnalysis is false, required when requireVlmAnalysis is true, otherwise ask_user when VLM is requested." },
           preCapture: {
             type: "array",
             description: "Optional preCapture override. Safe navigation steps run before capture when actualImage is omitted.",
@@ -453,6 +491,16 @@ export function getToolList() {
               consecutiveRuns: { type: "integer", minimum: 1, default: 2 }
             }
           },
+          hotspotDetection: {
+            type: "object",
+            description: "Optional local hotspot reporting override.",
+            properties: {
+              enabled: { type: "boolean", default: true },
+              maxHotspots: { type: "integer", minimum: 1, maximum: 50, default: 3 },
+              minAreaPercent: { type: "number", minimum: 0, maximum: 1, default: 0.02 },
+              minDiffDensity: { type: "number", minimum: 0, maximum: 1, default: 0.10 }
+            }
+          },
           vlm: {
             type: "object",
             description: "Optional VLM overrides for this run.",
@@ -478,7 +526,9 @@ export function getToolList() {
                 y: { type: "integer", minimum: 0 },
                 width: { type: "integer", minimum: 1 },
                 height: { type: "integer", minimum: 1 },
-                reason: { type: "string", description: "Optional human-readable reason for masking this region." }
+                reason: { type: "string", description: "Optional human-readable reason for masking this region." },
+                type: { type: "string", enum: ["system", "data", "dynamic"], description: "Mask category. system for OS chrome, data for live fixture mismatches, dynamic for loading/timestamps/ads." },
+                coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"], description: "Coordinate space used for x/y/width/height. Use coordinateSpace:\"actual\" for device screenshot coordinates. Use coordinateSpace:\"normalized\" for proportional masks. Default is \"expected\"." }
               },
               required: ["x", "y", "width", "height"]
             }

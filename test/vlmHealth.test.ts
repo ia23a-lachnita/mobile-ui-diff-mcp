@@ -277,6 +277,7 @@ describe('runScreenUiDiff VLM preflight', () => {
       actualImage: shiftedPath,
       includeVlmAnalysis: true,
       requireVlmAnalysis: false,
+      vlmPolicy: 'optional',
       maxRegions: 1,
       maxVlmRegions: 1
     });
