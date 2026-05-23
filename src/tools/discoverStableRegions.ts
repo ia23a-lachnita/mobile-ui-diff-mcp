@@ -212,19 +212,24 @@ export async function discoverStableRegions(input: DiscoverStableRegionsInput): 
   suggestions.push(...findStableChromeBands(screenshots));
 
   for (const suggestion of suggestions) {
-    configSuggestions.push({
-      kind: 'ignoreRegion',
-      confidence: suggestion.confidence,
-      reason: suggestion.reason,
-      risk: suggestion.risk,
-      suggestedPatch: {
-        screens: {
-          [suggestion.screenName ?? '<screen>']: {
-            ignoreRegions: [suggestion.suggestedRegion]
+    const targetScreenNames = suggestion.screenName ? [suggestion.screenName] : input.screenNames;
+    for (const screenName of targetScreenNames) {
+      configSuggestions.push({
+        kind: 'ignoreRegion',
+        confidence: suggestion.confidence,
+        reason: suggestion.screenName
+          ? suggestion.reason
+          : `${suggestion.reason} Suggested for '${screenName}' because the band was stable across all discovered screens.`,
+        risk: suggestion.risk,
+        suggestedPatch: {
+          screens: {
+            [screenName]: {
+              ignoreRegions: [suggestion.suggestedRegion]
+            }
           }
         }
-      }
-    });
+      });
+    }
   }
 
   return {

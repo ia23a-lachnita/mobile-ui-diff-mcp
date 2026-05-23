@@ -373,7 +373,7 @@ Use `discover_stable_regions` to run multiple named screens, load their actual s
 }
 ```
 
-Each suggestion includes confidence, risk, reason, a `suggestedRegion`, and whether selected tab indicators or FABs may be affected. Suggestions are never applied automatically.
+Each suggestion includes confidence, risk, reason, a `suggestedRegion`, and whether selected tab indicators or FABs may be affected. Suggestions are never applied automatically. Cross-screen stable regions are emitted as one pasteable config suggestion per input screen until shared/global ignore regions are supported.
 
 ### Auto-run folders
 

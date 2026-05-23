@@ -90,6 +90,30 @@ describe('discoverStableRegions', () => {
     const bottomSuggestion = result.suggestions.find((suggestion) => suggestion.suggestedRegion.y >= 170);
     expect(bottomSuggestion?.mayAffectSelectedTabIndicatorsOrFabs).toBe(true);
     expect(bottomSuggestion?.risk).toContain('selected tab indicators');
+
+    const suggestedScreenKeys = result.configSuggestions.flatMap((suggestion) => {
+      const screensPatch = (suggestion.suggestedPatch as any).screens ?? {};
+      return Object.keys(screensPatch);
+    });
+    expect(suggestedScreenKeys).not.toContain('');
+
+    for (const screen of screens) {
+      const screenRegions = result.configSuggestions.flatMap((suggestion) => {
+        const screensPatch = (suggestion.suggestedPatch as any).screens ?? {};
+        return screensPatch[screen.name]?.ignoreRegions ?? [];
+      });
+      expect(screenRegions.some((region: any) => region.y === 0 && region.height >= 20)).toBe(true);
+      expect(screenRegions.some((region: any) => region.y >= 170 && region.y + region.height === 200)).toBe(true);
+      expect(screenRegions.some((region: any) => region.y > 30 && region.y < 140)).toBe(false);
+    }
+
+    const bottomConfigSuggestions = result.configSuggestions.filter((suggestion) => {
+      const screensPatch = (suggestion.suggestedPatch as any).screens ?? {};
+      return Object.values<any>(screensPatch).some((screenPatch) => {
+        return (screenPatch.ignoreRegions ?? []).some((region: any) => region.y >= 170);
+      });
+    });
+    expect(bottomConfigSuggestions.length).toBeGreaterThanOrEqual(3);
+    expect(bottomConfigSuggestions.every((suggestion) => suggestion.risk.includes('selected tab indicators'))).toBe(true);
   });
 });
-
