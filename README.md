@@ -279,8 +279,8 @@ When mockup and device screenshots differ in dimensions, use `coordinateSpace:'a
 ```json
 {
   "ignoreRegions": [
-    { "x": 0, "y": 0, "width": 390, "height": 48, "reason": "status bar" },
-    { "x": 130, "y": 830, "width": 130, "height": 14, "reason": "home indicator" }
+    { "x": 0, "y": 0, "width": 390, "height": 48, "reason": "status bar", "type": "system", "coordinateSpace": "actual" },
+    { "x": 130, "y": 830, "width": 130, "height": 14, "reason": "home indicator", "type": "system", "coordinateSpace": "actual" }
   ]
 }
 ```
