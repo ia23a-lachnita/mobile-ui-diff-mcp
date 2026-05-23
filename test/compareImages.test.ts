@@ -415,6 +415,35 @@ describe('compareImages and Schemas', () => {
     expect(result.agentSummary?.canStopIterating).toBe(false);
   });
 
+  it('l3. fails quality when a critical visual assertion references a missing ROI', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-missing-roi-assertion'),
+      maxDiffPercent: 1.0,
+      visualAssertions: [
+        {
+          id: 'missing-macro-ring-local-diff',
+          type: 'roiMaxDiffPercent',
+          roiId: 'missing-macro-ring',
+          maxDiffPercent: 0.01,
+          severity: 'critical',
+          message: 'Macro ring ROI must exist before accepting quality.'
+        }
+      ]
+    } as any);
+
+    expect(result.status).toBe('pass');
+    expect(result.visualAssertions?.[0].status).toBe('fail');
+    expect(result.qualityStatus).toBe('fail');
+    expect(result.qualityFailures?.[0]).toMatchObject({
+      type: 'critical_visual_assertion_failed',
+      assertionId: 'missing-macro-ring-local-diff',
+      label: 'missing-macro-ring'
+    });
+    expect(result.warnings).toContain("Visual assertion 'missing-macro-ring-local-diff' references unknown ROI 'missing-macro-ring'.");
+  });
+
   it('m. maps actual-space roi boxes from original actual dimensions', async () => {
     const result = await compareImages({
       expectedImage: path.join(testDir, 'expected-big.png'),

@@ -542,7 +542,18 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     }
 
     const roi = roiCropArtifacts.find((candidate) => candidate.id === assertion.roiId);
-    const actualDiffPercent = roi?.diffPercent ?? 0;
+    if (!roi) {
+      warnings.push(`Visual assertion '${assertion.id}' references unknown ROI '${assertion.roiId}'.`);
+      return {
+        id: assertion.id,
+        status: 'fail',
+        severity: assertion.severity,
+        message: assertion.message,
+        maxDiffPercent: assertion.maxDiffPercent
+      };
+    }
+
+    const actualDiffPercent = roi.diffPercent;
     const status: 'pass' | 'fail' = actualDiffPercent <= assertion.maxDiffPercent ? 'pass' : 'fail';
     return {
       id: assertion.id,

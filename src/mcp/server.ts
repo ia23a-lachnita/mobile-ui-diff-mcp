@@ -518,7 +518,9 @@ export function getToolList() {
                 y: { type: "integer", minimum: 0 },
                 width: { type: "integer", minimum: 1 },
                 height: { type: "integer", minimum: 1 },
-                reason: { type: "string", description: "Optional human-readable reason for masking this region." }
+                reason: { type: "string", description: "Optional human-readable reason for masking this region." },
+                type: { type: "string", enum: ["system", "data", "dynamic"], description: "Mask category. system for OS chrome, data for live fixture mismatches, dynamic for loading/timestamps/ads." },
+                coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"], description: "Coordinate space used for x/y/width/height. Use coordinateSpace:\"actual\" for device screenshot coordinates. Use coordinateSpace:\"normalized\" for proportional masks. Default is \"expected\"." }
               },
               required: ["x", "y", "width", "height"]
             }
