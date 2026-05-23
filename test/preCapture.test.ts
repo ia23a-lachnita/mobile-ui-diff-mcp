@@ -82,7 +82,7 @@ describe('preCapture orchestration', () => {
     vi.clearAllMocks();
   });
 
-  it('runs safe preCapture steps before capture', async () => {
+  it('runs android preCapture before screenshot capture when actualImage is absent', async () => {
     const result = await runMobileUiDiff({
       platform: 'android',
       expectedImage,
@@ -102,7 +102,7 @@ describe('preCapture orchestration', () => {
     expect(callOrder[2]).toBe('compareImages');
   });
 
-  it('skips preCapture when actualImage is already provided', async () => {
+  it('skips preCapture when actualImage is already provided to mobile diff', async () => {
     const result = await runMobileUiDiff({
       platform: 'android',
       expectedImage,
@@ -123,19 +123,41 @@ describe('preCapture orchestration', () => {
     expect(callOrder).toContain('compareImages');
   });
 
-  it('rejects unsafe preCapture commands', async () => {
-    await expect(runMobileUiDiff({
+  it.each([
+    'input tap 108 2280; rm -rf .',
+    'input tap 108 2280 | sh'
+  ])('rejects unsafe preCapture command: %s', async (command) => {
+    await expect(
+      runMobileUiDiff({
+        platform: 'android',
+        expectedImage,
+        outputDir,
+        preCapture: [
+          {
+            type: 'adbShell',
+            command,
+            description: 'Unsafe'
+          }
+        ]
+      } as any)
+    ).rejects.toThrow(/Unsafe preCapture command/);
+
+    expect(callOrder).not.toContain('captureAndroidScreenshot');
+    expect(callOrder).not.toContain('compareImages');
+  });
+
+  it('does not run or report preCapture when actualImage is provided to run_screen_ui_diff', async () => {
+    const result = await runScreenUiDiff({
+      screen: 'today',
+      configPath,
       platform: 'android',
-      expectedImage,
-      outputDir,
-      preCapture: [
-        {
-          type: 'adbShell',
-          command: 'input tap 108 2280 && reboot',
-          description: 'Unsafe'
-        }
-      ]
-    } as any)).rejects.toThrow(/Unsafe preCapture command/);
+      actualImage: expectedImage
+    } as any);
+
+    expect(result.preCapture).toBeUndefined();
+    expect(callOrder).not.toContain('execFileAsync:adb shell input tap 108 2280');
+    expect(callOrder).not.toContain('captureAndroidScreenshot');
+    expect(callOrder).toEqual(['compareImages']);
   });
 
   it('threads screen-profile preCapture into final report', async () => {
@@ -153,5 +175,7 @@ describe('preCapture orchestration', () => {
       }
     ]);
     expect(callOrder[0]).toContain('execFileAsync:adb shell input tap 108 2280');
+    expect(callOrder[1]).toBe('captureAndroidScreenshot');
+    expect(callOrder[2]).toBe('compareImages');
   });
 });

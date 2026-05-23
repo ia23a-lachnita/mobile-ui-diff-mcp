@@ -189,7 +189,15 @@ Create `ui-diff.config.json` in your working directory to define reusable screen
         "timeoutMs": 30000
       },
       "ignoreRegions": [
-        { "x": 0, "y": 0, "width": 1080, "height": 80, "reason": "status bar" }
+        {
+          "x": 0,
+          "y": 0,
+          "width": 1080,
+          "height": 80,
+          "reason": "status bar",
+          "type": "system",
+          "coordinateSpace": "actual"
+        }
       ]
     }
   }
@@ -265,6 +273,9 @@ If `runName` is omitted, the tool scans `outputDir` for existing `run-###` folde
 
 ## Ignore Regions
 You can send `ignoreRegions` to mask system UI elements that change frequently, like the status bar or notch:
+
+If the mockup and device screenshot have different dimensions, use `coordinateSpace: "actual"` for device coordinates or `coordinateSpace: "normalized"` for proportional regions.
+
 ```json
 {
   "ignoreRegions": [
