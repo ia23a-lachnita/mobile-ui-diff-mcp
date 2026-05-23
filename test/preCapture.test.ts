@@ -102,6 +102,27 @@ describe('preCapture orchestration', () => {
     expect(callOrder[2]).toBe('compareImages');
   });
 
+  it('skips preCapture when actualImage is already provided', async () => {
+    const result = await runMobileUiDiff({
+      platform: 'android',
+      expectedImage,
+      actualImage: expectedImage,
+      outputDir,
+      preCapture: [
+        {
+          type: 'adbShell',
+          command: 'input tap 108 2280',
+          description: 'Switch to Today tab'
+        }
+      ]
+    } as any);
+
+    expect(result.status).toBe('pass');
+    expect(callOrder).not.toContain('execFileAsync:adb shell input tap 108 2280');
+    expect(callOrder).not.toContain('captureAndroidScreenshot');
+    expect(callOrder).toContain('compareImages');
+  });
+
   it('rejects unsafe preCapture commands', async () => {
     await expect(runMobileUiDiff({
       platform: 'android',
@@ -121,7 +142,7 @@ describe('preCapture orchestration', () => {
     const result = await runScreenUiDiff({
       screen: 'today',
       configPath,
-      actualImage: expectedImage
+      platform: 'android'
     } as any);
 
     expect(result.preCapture).toEqual([

@@ -34,18 +34,20 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
   const outputDir = resolveAbsolutePath(input.outputDir);
   await ensureDir(outputDir);
 
-  let preCaptureResults: PreCaptureResult[] | undefined;
-  if (input.preCapture?.length) {
-    preCaptureResults = await runPreCaptureSteps(input.preCapture);
-  }
-
   let actualImagePath = input.actualImage;
+  let preCaptureResults: PreCaptureResult[] | undefined;
 
   if (!actualImagePath) {
     if (input.platform === 'android') {
+      if (input.preCapture?.length) {
+        preCaptureResults = await runPreCaptureSteps(input.preCapture);
+      }
       const { outputPath } = await captureAndroidScreenshot(path.join(outputDir, 'android-current.png'));
       actualImagePath = outputPath;
     } else if (input.platform === 'ios') {
+      if (input.preCapture?.length) {
+        preCaptureResults = await runPreCaptureSteps(input.preCapture);
+      }
       const { outputPath } = await captureIosSimulatorScreenshot(path.join(outputDir, 'ios-current.png'));
       actualImagePath = outputPath;
     } else {

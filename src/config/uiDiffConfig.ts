@@ -8,7 +8,8 @@ export const ignoreRegionSchema = z.object({
   width: z.number().int().positive(),
   height: z.number().int().positive(),
   reason: z.string().optional(),
-  type: z.enum(['system', 'data', 'dynamic']).optional()
+  type: z.enum(['system', 'data', 'dynamic']).optional(),
+  coordinateSpace: z.enum(['expected', 'actual', 'normalized']).optional()
 });
 
 export const preCaptureSchema = z.object({

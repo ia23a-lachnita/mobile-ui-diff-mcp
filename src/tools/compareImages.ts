@@ -6,7 +6,7 @@ import { createDiffErrorMask } from '../image/diff';
 import { detectRegions } from '../image/regions';
 import { cropAndSave } from '../image/crops';
 import { explainDiffUsingOllama, preflightOllama, resolveOllamaConfig, ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
-import { IgnoreRegion, RegionReport, DiffReport, VlmSummary, VlmAnalysis, RegionOfInterestConfig, RegionOfInterestReport, QualityFailure, PriorityFinding, VisualAssertionConfig, VisualAssertionResult, FloorDetectionConfig, RunDelta, PreCaptureResult, FloorBlocker, AgentSummary } from '../types';
+import { IgnoreRegion, RegionReport, DiffReport, VlmSummary, VlmAnalysis, RegionOfInterestConfig, RegionOfInterestReport, QualityFailure, PriorityFinding, VisualAssertionConfig, VisualAssertionResult, FloorDetectionConfig, RunDelta, FloorBlocker, AgentSummary } from '../types';
 import fs from 'fs/promises';
 
 export interface CompareImagesInput {
@@ -34,31 +34,39 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function normalizeBox(box: { x: number; y: number; width: number; height: number }, width: number, height: number, coordinateSpace: 'normalized' | 'expected' | 'actual' = 'expected') {
+function normalizeBox(
+  box: { x: number; y: number; width: number; height: number },
+  targetWidth: number,
+  targetHeight: number,
+  coordinateSpace: 'normalized' | 'expected' | 'actual' = 'expected',
+  sourceWidth: number = targetWidth,
+  sourceHeight: number = targetHeight
+) {
   if (coordinateSpace === 'normalized') {
-    const left = Math.floor(clamp(box.x, 0, 1) * width);
-    const top = Math.floor(clamp(box.y, 0, 1) * height);
-    const right = Math.ceil(clamp(box.x + box.width, 0, 1) * width);
-    const bottom = Math.ceil(clamp(box.y + box.height, 0, 1) * height);
-    const normalizedWidth = Math.max(1, right - left);
-    const normalizedHeight = Math.max(1, bottom - top);
+    const left = Math.floor(clamp(box.x, 0, 1) * targetWidth);
+    const top = Math.floor(clamp(box.y, 0, 1) * targetHeight);
+    const right = Math.ceil(clamp(box.x + box.width, 0, 1) * targetWidth);
+    const bottom = Math.ceil(clamp(box.y + box.height, 0, 1) * targetHeight);
     return {
-      x: clamp(left, 0, Math.max(0, width - 1)),
-      y: clamp(top, 0, Math.max(0, height - 1)),
-      width: clamp(normalizedWidth, 1, width - clamp(left, 0, Math.max(0, width - 1))),
-      height: clamp(normalizedHeight, 1, height - clamp(top, 0, Math.max(0, height - 1)))
+      x: clamp(left, 0, Math.max(0, targetWidth - 1)),
+      y: clamp(top, 0, Math.max(0, targetHeight - 1)),
+      width: Math.max(1, Math.min(targetWidth - left, right - left)),
+      height: Math.max(1, Math.min(targetHeight - top, bottom - top))
     };
   }
 
-  const left = clamp(Math.floor(box.x), 0, Math.max(0, width - 1));
-  const top = clamp(Math.floor(box.y), 0, Math.max(0, height - 1));
-  const right = clamp(Math.ceil(box.x + box.width), left + 1, width);
-  const bottom = clamp(Math.ceil(box.y + box.height), top + 1, height);
+  const scaleX = targetWidth / Math.max(1, sourceWidth);
+  const scaleY = targetHeight / Math.max(1, sourceHeight);
+  const left = Math.floor(box.x * scaleX);
+  const top = Math.floor(box.y * scaleY);
+  const right = Math.ceil((box.x + box.width) * scaleX);
+  const bottom = Math.ceil((box.y + box.height) * scaleY);
+
   return {
-    x: left,
-    y: top,
-    width: Math.max(1, right - left),
-    height: Math.max(1, bottom - top)
+    x: clamp(left, 0, Math.max(0, targetWidth - 1)),
+    y: clamp(top, 0, Math.max(0, targetHeight - 1)),
+    width: Math.max(1, Math.min(targetWidth - left, right - left)),
+    height: Math.max(1, Math.min(targetHeight - top, bottom - top))
   };
 }
 
@@ -135,24 +143,25 @@ function evaluateFloorState(input: {
   }
 
   const threshold = floorDetection.deltaThreshold ?? 0.0001;
-  const deltaValue = input.runDelta?.diffPercentDelta ?? (input.currentDiffPercent - (input.previousReport.diffPercent ?? input.currentDiffPercent));
-  const deltaOk = Math.abs(deltaValue) < threshold;
-  const needed = floorDetection.consecutiveRuns ?? 2;
-  const previousAtFloor = input.previousReport.atFloor;
+  const consecutiveRuns = Math.min(Math.max(floorDetection.consecutiveRuns ?? 2, 1), 2);
+  const currentDelta = input.currentDiffPercent - input.previousReport.diffPercent;
+  const currentDeltaOk = Math.abs(currentDelta) < threshold;
+  const previousDelta = input.runDelta?.diffPercentDelta ?? input.previousReport.delta?.diffPercentDelta;
+  const previousDeltaOk = typeof previousDelta === 'number' ? Math.abs(previousDelta) < threshold : null;
 
-  if (!deltaOk) {
+  if (!currentDeltaOk) {
     return { atFloor: false, floorBlockedBy: [], floorReason: 'Global diff still moving.' };
   }
 
-  if (needed <= 1) {
+  if (consecutiveRuns <= 1) {
     return { atFloor: true, floorBlockedBy: [], floorReason: 'Global diff stable across current run.' };
   }
 
-  if (previousAtFloor === true) {
+  if (previousDeltaOk === true) {
     return { atFloor: true, floorBlockedBy: [], floorReason: 'Global diff stable across consecutive runs.' };
   }
 
-  return { atFloor: null, floorBlockedBy: [], floorReason: 'No floor history available.' };
+  return { atFloor: false, floorBlockedBy: [], floorReason: 'waiting for consecutive stable run' };
 }
 
 function buildAgentSummary(input: {
@@ -263,6 +272,8 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
 
   const expectedPng = await loadImageAsPng(expectedAbsPath);
   let actualPng = await loadImageAsPng(actualAbsPath);
+  const actualSourceWidth = actualPng.width;
+  const actualSourceHeight = actualPng.height;
 
   if (expectedPng.width !== actualPng.width || expectedPng.height !== actualPng.height) {
     // Resize actual image
@@ -274,9 +285,19 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     actualPng = PNG.sync.read(pngBuffer);
   }
 
-  // Mask ignore regions
-  applyIgnoreRegions(expectedPng, ignoreRegions);
-  applyIgnoreRegions(actualPng, ignoreRegions);
+  const normalizedIgnoreRegions = ignoreRegions.map((region) => {
+    const coordinateSpace = region.coordinateSpace ?? 'expected';
+    const sourceWidth = coordinateSpace === 'actual' ? actualSourceWidth : expectedPng.width;
+    const sourceHeight = coordinateSpace === 'actual' ? actualSourceHeight : expectedPng.height;
+    return {
+      ...region,
+      ...normalizeBox(region, expectedPng.width, expectedPng.height, coordinateSpace, sourceWidth, sourceHeight),
+      coordinateSpace: 'expected' as const
+    };
+  });
+
+  applyIgnoreRegions(expectedPng, normalizedIgnoreRegions);
+  applyIgnoreRegions(actualPng, normalizedIgnoreRegions);
 
   const { diffImage, diffPixels, mismatchMask } = createDiffErrorMask(expectedPng, actualPng, pixelmatchThreshold);
 
@@ -311,11 +332,18 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
 
   const normalizedRois = regionsOfInterestInput.map((roi) => ({
     ...roi,
-    box: normalizeBox(roi.box, expectedPng.width, expectedPng.height, roi.coordinateSpace ?? 'expected')
+    box: normalizeBox(
+      roi.box,
+      expectedPng.width,
+      expectedPng.height,
+      roi.coordinateSpace ?? 'expected',
+      roi.coordinateSpace === 'actual' ? actualSourceWidth : expectedPng.width,
+      roi.coordinateSpace === 'actual' ? actualSourceHeight : expectedPng.height
+    )
   }));
 
-  for (const dataMask of ignoreRegions.filter((region) => region.type === 'data')) {
-    const dataMaskBox = normalizeBox(dataMask, expectedPng.width, expectedPng.height, 'expected');
+  for (const dataMask of normalizedIgnoreRegions.filter((region) => region.type === 'data')) {
+    const dataMaskBox = dataMask;
     for (const roi of normalizedRois.filter((roi) => roi.critical)) {
       if (boxesIntersect(dataMaskBox, roi.box)) {
         warnings.push(`Data mask overlaps critical ROI '${roi.label}'. Verify this is intentional.`);
@@ -413,6 +441,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       type: roi.type,
       critical: roi.critical ?? false,
       weight: roi.weight ?? 1,
+      box: roi.box,
       status,
       diffPixels: diffPixelsInRoi,
       totalPixels: totalPixelsInRoi,
@@ -530,7 +559,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
 
   const hasCriticalFailure = qualityFailures.length > 0;
   const canSuggestMaxDiffPercent = diffPercent > maxDiffPercent && floorState.atFloor === true && !hasCriticalFailure;
-  const suggestedMaxDiffPercent = canSuggestMaxDiffPercent ? diffPercent * 1.1 : null;
+  const suggestedMaxDiffPercent = canSuggestMaxDiffPercent ? Math.round(diffPercent * 1.1 * 10000) / 10000 : null;
   const maxDiffPercentSuggestionBlockedBy = !canSuggestMaxDiffPercent && hasCriticalFailure
     ? qualityFailures.map((failure) => {
         if (failure.type === 'critical_roi_failed') {

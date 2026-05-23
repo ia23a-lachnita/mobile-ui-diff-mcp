@@ -5,6 +5,7 @@ export interface IgnoreRegion {
   height: number;
   reason?: string;
   type?: 'system' | 'data' | 'dynamic';
+  coordinateSpace?: 'expected' | 'actual' | 'normalized';
 }
 
 export interface PreCaptureStep {
@@ -117,6 +118,7 @@ export interface RegionOfInterestReport {
   type: 'component' | 'zone';
   critical: boolean;
   weight: number;
+  box: BoxLike;
   status: 'pass' | 'fail';
   diffPixels: number;
   totalPixels: number;
@@ -195,6 +197,7 @@ export interface DiffReport {
   pixelmatchThreshold: number;
   maxDiffPercent: number;
   regions: RegionReport[];
+  delta?: RunDelta;
   artifacts: {
     expected: string;
     actual: string;

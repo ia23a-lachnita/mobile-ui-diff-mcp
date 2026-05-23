@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { loadUiDiffConfig } from '../config/uiDiffConfig';
-import { DiffReport, IgnoreRegion, VlmConfig } from '../types';
+import { DiffReport, IgnoreRegion, VlmConfig, PreCaptureStep, RegionOfInterestConfig, VisualAssertionConfig, FloorDetectionConfig } from '../types';
 import { resolveAbsolutePath } from '../utils/fs';
 import { runMobileUiDiff } from './runMobileUiDiff';
 import { preflightOllama, resolveOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
@@ -22,6 +22,10 @@ export interface RunScreenUiDiffInput {
   requireVlmAnalysis?: boolean;
   vlm?: VlmConfig;
   ignoreRegions?: IgnoreRegion[];
+  preCapture?: PreCaptureStep[];
+  regionsOfInterest?: RegionOfInterestConfig[];
+  visualAssertions?: VisualAssertionConfig[];
+  floorDetection?: FloorDetectionConfig;
 }
 
 export interface RunScreenUiDiffDelta {
@@ -186,10 +190,10 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     maxVlmRegions: input.maxVlmRegions ?? screenConfig.maxVlmRegions,
     includeVlmAnalysis: input.includeVlmAnalysis ?? screenConfig.includeVlmAnalysis,
     ignoreRegions: input.ignoreRegions ?? screenConfig.ignoreRegions,
-    preCapture: screenConfig.preCapture,
-    regionsOfInterest: screenConfig.regionsOfInterest,
-    visualAssertions: screenConfig.visualAssertions,
-    floorDetection: screenConfig.floorDetection
+    preCapture: input.preCapture ?? screenConfig.preCapture,
+    regionsOfInterest: input.regionsOfInterest ?? screenConfig.regionsOfInterest,
+    visualAssertions: input.visualAssertions ?? screenConfig.visualAssertions,
+    floorDetection: input.floorDetection ?? screenConfig.floorDetection
   };
 
   const includeVlmAnalysis = merged.includeVlmAnalysis ?? false;
@@ -261,6 +265,7 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     ignoreRegions: merged.ignoreRegions,
     preCapture: merged.preCapture,
     previousReport: previous?.report,
+    runDelta: previous?.report?.delta,
     floorDetection: merged.floorDetection,
     regionsOfInterest: merged.regionsOfInterest,
     visualAssertions: merged.visualAssertions
