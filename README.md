@@ -45,6 +45,35 @@ When starting the MCP server or running queries, you can configure the VLM conne
 - `fallbackModels` lets a screen profile try smaller models if the primary fails.
 - Large VLMs may fail to load on limited VRAM/RAM; try smaller models or free resources.
 
+### VLM policy
+
+`vlmPolicy` controls what happens when `includeVlmAnalysis` is true but Ollama or model loading is unavailable.
+
+Values:
+- `"disabled"`: do not use VLM and do not warn.
+- `"optional"`: try VLM, continue with warnings if unavailable.
+- `"required"`: fail early if no usable VLM model can be loaded.
+- `"ask_user"`: return `actionRequired` telling Claude Code to ask the user whether to continue without semantic analysis.
+
+Defaults:
+- `includeVlmAnalysis:false` -> `vlmPolicy:"disabled"`
+- `includeVlmAnalysis:true` + `requireVlmAnalysis:true` -> `vlmPolicy:"required"`
+- `includeVlmAnalysis:true` without explicit policy -> `vlmPolicy:"ask_user"`
+
+When `vlmPolicy` is `"ask_user"` and VLM is unavailable, reports include:
+
+```json
+{
+  "actionRequired": {
+    "type": "vlm_unavailable",
+    "severity": "blocking",
+    "recommendedUserPrompt": "VLM analysis is unavailable. Do you want me to continue with pixel/ROI-only analysis, or stop and help set up a working VLM model?"
+  }
+}
+```
+
+Claude Code instruction: If `actionRequired.type === "vlm_unavailable"`, stop and ask the user. Do not treat the report as final visual parity.
+
 ## Installation & Build
 
 ```sh
@@ -144,6 +173,7 @@ Create `ui-diff.config.json` in your working directory to define reusable screen
       "maxRegions": 20,
       "maxVlmRegions": 8,
       "includeVlmAnalysis": true,
+      "vlmPolicy": "ask_user",
       "preCapture": [
         {
           "type": "adbShell",
