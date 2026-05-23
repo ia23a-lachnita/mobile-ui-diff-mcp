@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { loadUiDiffConfig } from '../config/uiDiffConfig';
-import { DiffReport, IgnoreRegion, VlmConfig, PreCaptureStep, RegionOfInterestConfig, VisualAssertionConfig, FloorDetectionConfig } from '../types';
+import { DiffReport, IgnoreRegion, VlmConfig, PreCaptureStep, RegionOfInterestConfig, VisualAssertionConfig, FloorDetectionConfig, HotspotDetectionConfig } from '../types';
 import { resolveAbsolutePath } from '../utils/fs';
 import { runMobileUiDiff } from './runMobileUiDiff';
 import { preflightOllama, resolveOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
@@ -26,6 +26,7 @@ export interface RunScreenUiDiffInput {
   regionsOfInterest?: RegionOfInterestConfig[];
   visualAssertions?: VisualAssertionConfig[];
   floorDetection?: FloorDetectionConfig;
+  hotspotDetection?: HotspotDetectionConfig;
 }
 
 export interface RunScreenUiDiffDelta {
@@ -193,7 +194,8 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     preCapture: input.preCapture ?? screenConfig.preCapture,
     regionsOfInterest: input.regionsOfInterest ?? screenConfig.regionsOfInterest,
     visualAssertions: input.visualAssertions ?? screenConfig.visualAssertions,
-    floorDetection: input.floorDetection ?? screenConfig.floorDetection
+    floorDetection: input.floorDetection ?? screenConfig.floorDetection,
+    hotspotDetection: input.hotspotDetection ?? screenConfig.hotspotDetection
   };
 
   const includeVlmAnalysis = merged.includeVlmAnalysis ?? false;
@@ -267,6 +269,7 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     previousReport: previous?.report,
     runDelta: previous?.report?.delta,
     floorDetection: merged.floorDetection,
+    hotspotDetection: merged.hotspotDetection,
     regionsOfInterest: merged.regionsOfInterest,
     visualAssertions: merged.visualAssertions
   });

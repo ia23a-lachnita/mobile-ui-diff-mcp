@@ -153,14 +153,34 @@ Create `ui-diff.config.json` in your working directory to define reusable screen
       ],
       "regionsOfInterest": [
         {
+          "id": "hero-card",
+          "label": "Hero macro summary card",
+          "type": "component",
+          "critical": true,
+          "weight": 5,
+          "coordinateSpace": "normalized",
+          "box": { "x": 0.04, "y": 0.12, "width": 0.92, "height": 0.42 },
+          "maxDiffPercent": 0.10
+        },
+        {
           "id": "macro-ring",
           "label": "Macro ring chart",
           "type": "component",
           "critical": true,
           "weight": 10,
           "coordinateSpace": "normalized",
-          "box": { "x": 0.20, "y": 0.17, "width": 0.60, "height": 0.29 },
+          "box": { "x": 0.18, "y": 0.16, "width": 0.64, "height": 0.28 },
           "maxDiffPercent": 0.06
+        },
+        {
+          "id": "macro-ring-center-text",
+          "label": "Macro ring center text",
+          "type": "component",
+          "critical": true,
+          "weight": 10,
+          "coordinateSpace": "normalized",
+          "box": { "x": 0.31, "y": 0.23, "width": 0.38, "height": 0.13 },
+          "maxDiffPercent": 0.04
         }
       ],
       "visualAssertions": [
@@ -170,13 +190,27 @@ Create `ui-diff.config.json` in your working directory to define reusable screen
           "roiId": "macro-ring",
           "maxDiffPercent": 0.06,
           "severity": "critical",
-          "message": "Macro ring chart is visually too different from mockup."
+          "message": "Macro ring chart differs too much from the mockup. Check stroke width, ring radius, spacing, and arc rendering."
+        },
+        {
+          "id": "center-text-local-diff",
+          "type": "roiMaxDiffPercent",
+          "roiId": "macro-ring-center-text",
+          "maxDiffPercent": 0.04,
+          "severity": "critical",
+          "message": "Center text differs too much. Check clipping, text scale, vertical position, and overlap with rings."
         }
       ],
       "floorDetection": {
         "enabled": true,
         "deltaThreshold": 0.0001,
         "consecutiveRuns": 2
+      },
+      "hotspotDetection": {
+        "enabled": true,
+        "maxHotspots": 3,
+        "minAreaPercent": 0.02,
+        "minDiffDensity": 0.10
       },
       "vlm": {
         "provider": "ollama",
@@ -230,15 +264,18 @@ If `runName` is omitted, the tool scans `outputDir` for existing `run-###` folde
 - **maxRegions**: Maximum number of diff regions to return. Filters by keeping the regions with the largest area first. Default: `50` (Max: `500`).
 - **maxVlmRegions**: Maximum number of regions to send to Ollama for feedback. Default: `10` (Max: `50`).
 - **requireVlmAnalysis**: When true, fail early if VLM analysis is requested but no model can be loaded.
+- **hotspotDetection**: Reports local hotspots even without ROIs. Default: `{ "enabled": true, "maxHotspots": 3, "minAreaPercent": 0.02, "minDiffDensity": 0.10 }`.
 
 ### Quality Gates
 
 - `status` is still the global pixel-diff result.
-- `qualityStatus` is the local visual-quality gate. It fails if any critical ROI or critical visual assertion fails, even when global diff is at floor.
+- `qualityStatus` is the local visual-quality gate: `"pass"`, `"fail"`, or `"not_evaluated"`. It fails if any critical ROI or critical visual assertion fails, even when global diff passes.
+- If no `regionsOfInterest` or `visualAssertions` are configured, `qualityStatus` is `"not_evaluated"` and `agentSummary.canStopIterating` is `false`; a global pixel pass does not prove design parity.
 - `priorityFindings` ranks the most important problems first so agents do not have to infer importance from a long region list.
+- `localHotspots` reports the largest local changed regions even without ROIs, using `hotspotDetection` defaults of `{ "enabled": true, "maxHotspots": 3, "minAreaPercent": 0.02, "minDiffDensity": 0.10 }`.
 - `agentSummary` gives a natural-language verdict and a `canStopIterating` flag.
-- `suggestedMaxDiffPercent` is only emitted when global diff is failing, the report is at floor, and no critical ROI or critical assertion failed. If a critical local gate fails, the suggestion is blocked.
-- `atFloor` only becomes true when floor detection has enough history and no critical local gate is failing.
+- `suggestedMaxDiffPercent` is only emitted when global diff is failing, `qualityStatus` is `"pass"`, the report is at floor, and no critical ROI or critical assertion failed. If quality is not evaluated, the suggestion is blocked.
+- `atFloor` only becomes true when floor detection has enough history and `qualityStatus` is `"pass"`.
 
 ### Coordinate Spaces
 

@@ -49,6 +49,13 @@ export const floorDetectionSchema = z.object({
   consecutiveRuns: z.number().int().positive().optional()
 });
 
+export const hotspotDetectionSchema = z.object({
+  enabled: z.boolean().optional(),
+  maxHotspots: z.number().int().positive().max(50).optional(),
+  minAreaPercent: z.number().min(0).max(1).optional(),
+  minDiffDensity: z.number().min(0).max(1).optional()
+});
+
 export const vlmConfigSchema = z.object({
   provider: z.enum(['ollama']).optional(),
   baseUrl: z.string().min(1).optional(),
@@ -76,6 +83,7 @@ export const uiDiffScreenSchema = z.object({
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
+  hotspotDetection: hotspotDetectionSchema.optional(),
   vlm: vlmConfigSchema
 });
 

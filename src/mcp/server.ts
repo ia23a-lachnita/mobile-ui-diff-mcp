@@ -57,6 +57,13 @@ export const floorDetectionSchema = z.object({
   consecutiveRuns: z.number().int().positive().optional()
 });
 
+export const hotspotDetectionSchema = z.object({
+  enabled: z.boolean().optional(),
+  maxHotspots: z.number().int().positive().max(50).optional(),
+  minAreaPercent: z.number().min(0).max(1).optional(),
+  minDiffDensity: z.number().min(0).max(1).optional()
+});
+
 export const vlmConfigSchema = z.object({
   provider: z.enum(['ollama']).optional(),
   baseUrl: z.string().min(1).optional(),
@@ -84,6 +91,7 @@ export const compareImagesSchema = z.object({
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
+  hotspotDetection: hotspotDetectionSchema.optional(),
   previousReport: z.any().optional(),
   runDelta: z.any().optional()
 }).strict();
@@ -115,6 +123,7 @@ export const runMobileUiDiffSchema = z.object({
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
+  hotspotDetection: hotspotDetectionSchema.optional(),
   previousReport: z.any().optional(),
   runDelta: z.any().optional()
 });
@@ -138,7 +147,8 @@ export const runScreenUiDiffSchema = z.object({
   preCapture: z.array(preCaptureSchema).optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
-  floorDetection: floorDetectionSchema.optional()
+  floorDetection: floorDetectionSchema.optional(),
+  hotspotDetection: hotspotDetectionSchema.optional()
 });
 
 export const vlmHealthSchema = z.object({
@@ -236,6 +246,16 @@ export function getToolList() {
               enabled: { type: "boolean", default: true },
               deltaThreshold: { type: "number", minimum: 0, default: 0.0001 },
               consecutiveRuns: { type: "integer", minimum: 1, default: 2 }
+            }
+          },
+          hotspotDetection: {
+            type: "object",
+            description: "Local hotspot reporting for large changed regions even when no ROI is configured.",
+            properties: {
+              enabled: { type: "boolean", default: true },
+              maxHotspots: { type: "integer", minimum: 1, maximum: 50, default: 3 },
+              minAreaPercent: { type: "number", minimum: 0, maximum: 1, default: 0.02 },
+              minDiffDensity: { type: "number", minimum: 0, maximum: 1, default: 0.10 }
             }
           }
         },
@@ -364,6 +384,16 @@ export function getToolList() {
               deltaThreshold: { type: "number", minimum: 0, default: 0.0001 },
               consecutiveRuns: { type: "integer", minimum: 1, default: 2 }
             }
+          },
+          hotspotDetection: {
+            type: "object",
+            description: "Local hotspot reporting for large changed regions even when no ROI is configured.",
+            properties: {
+              enabled: { type: "boolean", default: true },
+              maxHotspots: { type: "integer", minimum: 1, maximum: 50, default: 3 },
+              minAreaPercent: { type: "number", minimum: 0, maximum: 1, default: 0.02 },
+              minDiffDensity: { type: "number", minimum: 0, maximum: 1, default: 0.10 }
+            }
           }
         },
         required: ["platform", "expectedImage", "outputDir"]
@@ -451,6 +481,16 @@ export function getToolList() {
               enabled: { type: "boolean", default: true },
               deltaThreshold: { type: "number", minimum: 0, default: 0.0001 },
               consecutiveRuns: { type: "integer", minimum: 1, default: 2 }
+            }
+          },
+          hotspotDetection: {
+            type: "object",
+            description: "Optional local hotspot reporting override.",
+            properties: {
+              enabled: { type: "boolean", default: true },
+              maxHotspots: { type: "integer", minimum: 1, maximum: 50, default: 3 },
+              minAreaPercent: { type: "number", minimum: 0, maximum: 1, default: 0.02 },
+              minDiffDensity: { type: "number", minimum: 0, maximum: 1, default: 0.10 }
             }
           },
           vlm: {

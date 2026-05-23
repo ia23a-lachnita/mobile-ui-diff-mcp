@@ -54,6 +54,13 @@ export interface FloorDetectionConfig {
   consecutiveRuns?: number;
 }
 
+export interface HotspotDetectionConfig {
+  enabled?: boolean;
+  maxHotspots?: number;
+  minAreaPercent?: number;
+  minDiffDensity?: number;
+}
+
 export interface RunDelta {
   previousRun: {
     name: string;
@@ -107,7 +114,7 @@ export interface VisualAssertionResult {
 export interface AgentSummary {
   verdict: string;
   globalDiffPercent: number;
-  qualityStatus: 'pass' | 'fail';
+  qualityStatus: 'pass' | 'fail' | 'not_evaluated';
   topAction: string;
   canStopIterating: boolean;
 }
@@ -136,10 +143,11 @@ export interface RegionOfInterestReport {
 }
 
 export interface FloorBlocker {
-  type: 'critical_roi_failed' | 'critical_visual_assertion_failed';
+  type: 'critical_roi_failed' | 'critical_visual_assertion_failed' | 'quality_not_evaluated';
   roiId?: string;
   assertionId?: string;
   label?: string;
+  message?: string;
 }
 
 export interface VlmAnalysis {
@@ -189,6 +197,15 @@ export interface RegionReport {
   intersectingRois?: string[];
 }
 
+export interface LocalHotspot {
+  regionId: string;
+  area: number;
+  box: BoxLike;
+  diffDensity: number;
+  fallbackLabel: string;
+  message: string;
+}
+
 export interface DiffReport {
   status: "pass" | "fail";
   diffPixels: number;
@@ -206,9 +223,11 @@ export interface DiffReport {
   };
   preCapture?: PreCaptureResult[];
   regionsOfInterest?: RegionOfInterestReport[];
-  qualityStatus?: "pass" | "fail";
+  qualityStatus?: "pass" | "fail" | "not_evaluated";
   qualityFailures?: QualityFailure[];
+  qualityWarnings?: string[];
   priorityFindings?: PriorityFinding[];
+  localHotspots?: LocalHotspot[];
   visualAssertions?: VisualAssertionResult[];
   atFloor?: boolean | null;
   floorBlockedBy?: FloorBlocker[];

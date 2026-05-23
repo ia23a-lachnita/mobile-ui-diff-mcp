@@ -3,7 +3,7 @@ import { ensureDir, resolveAbsolutePath } from '../utils/fs';
 import { compareImages } from './compareImages';
 import { captureAndroidScreenshot } from './captureAndroid';
 import { captureIosSimulatorScreenshot } from './captureIosSimulator';
-import { DiffReport, IgnoreRegion, PreCaptureResult, PreCaptureStep, FloorDetectionConfig, RunDelta, RegionOfInterestConfig, VisualAssertionConfig } from '../types';
+import { DiffReport, IgnoreRegion, PreCaptureResult, PreCaptureStep, FloorDetectionConfig, RunDelta, RegionOfInterestConfig, VisualAssertionConfig, HotspotDetectionConfig } from '../types';
 import { ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 import { runPreCaptureSteps } from './preCapture';
 
@@ -24,6 +24,7 @@ export interface RunMobileUiDiffInput {
   previousReport?: DiffReport;
   runDelta?: RunDelta;
   floorDetection?: FloorDetectionConfig;
+  hotspotDetection?: HotspotDetectionConfig;
   regionsOfInterest?: RegionOfInterestConfig[];
   visualAssertions?: VisualAssertionConfig[];
   vlmConfig?: ResolvedOllamaConfig;
@@ -72,6 +73,7 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     previousReport: input.previousReport,
     runDelta: input.runDelta,
     floorDetection: input.floorDetection,
+    hotspotDetection: input.hotspotDetection,
     regionsOfInterest: input.regionsOfInterest,
     visualAssertions: input.visualAssertions
   });

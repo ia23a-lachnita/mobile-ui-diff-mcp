@@ -53,6 +53,48 @@ function drawRect(png: PNG, rx: number, ry: number, rw: number, rh: number, colo
   }
 }
 
+function setPixel(png: PNG, x: number, y: number, color: [number, number, number]) {
+  if (x < 0 || x >= png.width || y < 0 || y >= png.height) return;
+  const idx = (png.width * y + x) << 2;
+  png.data[idx] = color[0];
+  png.data[idx+1] = color[1];
+  png.data[idx+2] = color[2];
+  png.data[idx+3] = 255;
+}
+
+function drawRing(png: PNG, cx: number, cy: number, radius: number, strokeWidth: number, color: [number, number, number]) {
+  const outer = radius + strokeWidth / 2;
+  const inner = radius - strokeWidth / 2;
+  for (let y = Math.floor(cy - outer); y <= Math.ceil(cy + outer); y++) {
+    for (let x = Math.floor(cx - outer); x <= Math.ceil(cx + outer); x++) {
+      const distance = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+      if (distance >= inner && distance <= outer) {
+        setPixel(png, x, y, color);
+      }
+    }
+  }
+}
+
+function drawTodayMacroFixture(png: PNG, variant: 'expected' | 'actual') {
+  drawRect(png, 0, 0, png.width, png.height, [248, 249, 246]);
+  drawRect(png, 10, 52, 220, 170, [255, 255, 255]);
+  if (variant === 'expected') {
+    drawRing(png, 120, 130, 56, 4, [48, 140, 118]);
+    drawRing(png, 120, 130, 44, 4, [230, 162, 78]);
+    drawRing(png, 120, 130, 32, 4, [96, 126, 210]);
+    drawRect(png, 98, 120, 44, 6, [20, 24, 31]);
+    drawRect(png, 103, 133, 34, 5, [88, 96, 104]);
+  } else {
+    drawRing(png, 120, 130, 62, 11, [48, 140, 118]);
+    drawRing(png, 120, 130, 46, 10, [230, 162, 78]);
+    drawRing(png, 120, 130, 30, 9, [96, 126, 210]);
+    drawRect(png, 88, 116, 64, 12, [20, 24, 31]);
+    drawRect(png, 90, 128, 60, 12, [88, 96, 104]);
+  }
+  drawRect(png, 24, 250, 192, 18, [232, 236, 240]);
+  drawRect(png, 24, 284, 172, 18, [232, 236, 240]);
+}
+
 describe('compareImages and Schemas', () => {
   const testDir = path.join(__dirname, 'fixtures');
   
@@ -496,6 +538,17 @@ describe('compareImages and Schemas', () => {
       actualImage: path.join(testDir, 'shifted.png'),
       outputDir: path.join(testDir, 'out-floor-baseline'),
       maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'whole-screen',
+          label: 'Whole screen',
+          type: 'zone',
+          critical: true,
+          coordinateSpace: 'normalized',
+          box: { x: 0, y: 0, width: 1, height: 1 },
+          maxDiffPercent: 1.0
+        }
+      ],
       floorDetection: { enabled: true, deltaThreshold: 0.0001, consecutiveRuns: 2 }
     } as any);
 
@@ -505,6 +558,17 @@ describe('compareImages and Schemas', () => {
       outputDir: path.join(testDir, 'out-floor-waiting'),
       maxDiffPercent: 0.0001,
       floorDetection: { enabled: true, deltaThreshold: 0.0001, consecutiveRuns: 2 },
+      regionsOfInterest: [
+        {
+          id: 'whole-screen',
+          label: 'Whole screen',
+          type: 'zone',
+          critical: true,
+          coordinateSpace: 'normalized',
+          box: { x: 0, y: 0, width: 1, height: 1 },
+          maxDiffPercent: 1.0
+        }
+      ],
       previousReport: {
         ...baseline,
         delta: undefined
@@ -520,6 +584,17 @@ describe('compareImages and Schemas', () => {
       outputDir: path.join(testDir, 'out-floor-stable'),
       maxDiffPercent: 0.0001,
       floorDetection: { enabled: true, deltaThreshold: 0.0001, consecutiveRuns: 2 },
+      regionsOfInterest: [
+        {
+          id: 'whole-screen',
+          label: 'Whole screen',
+          type: 'zone',
+          critical: true,
+          coordinateSpace: 'normalized',
+          box: { x: 0, y: 0, width: 1, height: 1 },
+          maxDiffPercent: 1.0
+        }
+      ],
       previousReport: {
         ...baseline,
         delta: { diffPercentDelta: 0.00001 }
@@ -554,5 +629,252 @@ describe('compareImages and Schemas', () => {
     } as any);
 
     expect(result.warnings).toContain("Data mask overlaps critical ROI 'Macro ring chart'. Verify this is intentional.");
+  });
+
+  it('r. marks global pass without ROIs as quality not_evaluated and keeps iterating', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-no-quality-gates'),
+      maxDiffPercent: 1.0
+    });
+
+    expect(result.status).toBe('pass');
+    expect(result.qualityStatus).toBe('not_evaluated');
+    expect(result.qualityFailures).toEqual([]);
+    expect(result.qualityWarnings).toContain('No regionsOfInterest or visualAssertions configured. Global pixel status does not prove visual parity.');
+    expect(result.agentSummary?.canStopIterating).toBe(false);
+    expect(result.agentSummary?.verdict).toContain('Global pixel gate passed, but critical UI quality was not evaluated.');
+  });
+
+  it('s. reports local hotspots and warning when global pass leaves large local mismatch', async () => {
+    const expectedHotspot = path.join(testDir, 'hotspot-expected.png');
+    const actualHotspot = path.join(testDir, 'hotspot-actual.png');
+    await createTestImage(expectedHotspot, () => {});
+    await createTestImage(actualHotspot, (png) => {
+      drawRect(png, 20, 20, 60, 60, [0, 0, 0]);
+    });
+
+    const result = await compareImages({
+      expectedImage: expectedHotspot,
+      actualImage: actualHotspot,
+      outputDir: path.join(testDir, 'out-hotspots'),
+      maxDiffPercent: 1.0
+    });
+
+    expect(result.status).toBe('pass');
+    expect(result.localHotspots?.length).toBeGreaterThan(0);
+    expect(result.localHotspots?.[0].message).toBe('Large local mismatch remains despite global status.');
+    expect(result.warnings).toContain('Global pass does not mean local visual parity; large local hotspots remain.');
+    expect(result.agentSummary?.verdict).toContain('Global pass may be misleading: largest changed region covers');
+  });
+
+  it('t. blocks maxDiffPercent suggestion and floor detection when quality is not evaluated', async () => {
+    const previousReport = {
+      status: 'fail',
+      diffPixels: 800,
+      totalPixels: 10000,
+      diffPercent: 0.08,
+      pixelmatchThreshold: 0.1,
+      maxDiffPercent: 0.0001,
+      regions: [],
+      artifacts: {
+        expected: 'expected.png',
+        actual: 'actual.png',
+        diff: 'diff.png',
+        regionsDir: 'regions'
+      },
+      delta: { diffPercentDelta: 0.00001 }
+    } as any;
+
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-floor-not-evaluated'),
+      maxDiffPercent: 0.0001,
+      previousReport,
+      floorDetection: {
+        enabled: true,
+        deltaThreshold: 0.1,
+        consecutiveRuns: 2
+      }
+    });
+
+    expect(result.qualityStatus).toBe('not_evaluated');
+    expect(result.atFloor).toBe(false);
+    expect(result.floorBlockedBy?.[0]).toMatchObject({
+      type: 'quality_not_evaluated',
+      message: 'Critical UI quality was not evaluated.'
+    });
+    expect(result.suggestedMaxDiffPercent).toBeNull();
+    expect(result.maxDiffPercentSuggestionBlockedBy).toContain('Critical UI quality was not evaluated. Configure ROIs or visualAssertions first.');
+  });
+
+  it('u. passes quality only when configured critical ROIs and assertions pass', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-quality-pass'),
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: true,
+          coordinateSpace: 'normalized',
+          box: { x: 0.08, y: 0.08, width: 0.42, height: 0.42 },
+          maxDiffPercent: 0.01
+        }
+      ],
+      visualAssertions: [
+        {
+          id: 'macro-ring-local-diff',
+          type: 'roiMaxDiffPercent',
+          roiId: 'macro-ring',
+          maxDiffPercent: 0.01,
+          severity: 'critical',
+          message: 'Macro ring chart is visually too different from mockup.'
+        }
+      ]
+    } as any);
+
+    expect(result.status).toBe('pass');
+    expect(result.qualityStatus).toBe('pass');
+    expect(result.qualityFailures).toEqual([]);
+    expect(result.agentSummary?.canStopIterating).toBe(true);
+  });
+
+  it('v. preserves global status behavior independently from qualityStatus', async () => {
+    const failing = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-global-fail-compat'),
+      maxDiffPercent: 0.0001
+    });
+    const passing = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-global-pass-compat'),
+      maxDiffPercent: 1.0
+    });
+
+    expect(failing.status).toBe('fail');
+    expect(passing.status).toBe('pass');
+    expect(passing.qualityStatus).toBe('not_evaluated');
+  });
+
+  it('w. Today Run-010 false positive: global pass but macro-ring quality fail', async () => {
+    const expectedToday = path.join(testDir, 'today-expected.png');
+    const actualToday = path.join(testDir, 'today-actual-run-010.png');
+    await createSizedTestImage(expectedToday, 240, 480, (png) => drawTodayMacroFixture(png, 'expected'));
+    await createSizedTestImage(actualToday, 240, 480, (png) => drawTodayMacroFixture(png, 'actual'));
+
+    const result = await compareImages({
+      expectedImage: expectedToday,
+      actualImage: actualToday,
+      outputDir: path.join(testDir, 'out-today-run-010'),
+      pixelmatchThreshold: 0.1,
+      maxDiffPercent: 0.14,
+      regionsOfInterest: [
+        {
+          id: 'hero-card',
+          label: 'Hero macro summary card',
+          type: 'component',
+          critical: true,
+          weight: 5,
+          coordinateSpace: 'normalized',
+          box: { x: 0.04, y: 0.12, width: 0.92, height: 0.42 },
+          maxDiffPercent: 0.10
+        },
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: true,
+          weight: 10,
+          coordinateSpace: 'normalized',
+          box: { x: 0.18, y: 0.16, width: 0.64, height: 0.28 },
+          maxDiffPercent: 0.06
+        },
+        {
+          id: 'macro-ring-center-text',
+          label: 'Macro ring center text',
+          type: 'component',
+          critical: true,
+          weight: 10,
+          coordinateSpace: 'normalized',
+          box: { x: 0.31, y: 0.23, width: 0.38, height: 0.13 },
+          maxDiffPercent: 0.04
+        }
+      ],
+      visualAssertions: [
+        {
+          id: 'macro-ring-local-diff',
+          type: 'roiMaxDiffPercent',
+          roiId: 'macro-ring',
+          maxDiffPercent: 0.06,
+          severity: 'critical',
+          message: 'Macro ring chart differs too much from the mockup. Check stroke width, ring radius, spacing, and arc rendering.'
+        },
+        {
+          id: 'center-text-local-diff',
+          type: 'roiMaxDiffPercent',
+          roiId: 'macro-ring-center-text',
+          maxDiffPercent: 0.04,
+          severity: 'critical',
+          message: 'Center text differs too much. Check clipping, text scale, vertical position, and overlap with rings.'
+        }
+      ]
+    } as any);
+
+    expect(result.status).toBe('pass');
+    expect(result.diffPercent).toBeLessThan(0.14);
+    expect(result.qualityStatus).toBe('fail');
+    expect(result.qualityFailures?.some((failure) => failure.roiId === 'macro-ring' || failure.roiId === 'macro-ring-center-text' || failure.label === 'macro-ring-center-text')).toBe(true);
+    expect(result.priorityFindings?.[0].label).toBe('Macro ring chart');
+    expect(result.agentSummary?.canStopIterating).toBe(false);
+    expect(result.agentSummary?.verdict).toContain('Do not accept');
+    expect(result.suggestedMaxDiffPercent).toBeNull();
+    expect(result.maxDiffPercentSuggestionBlockedBy?.length).toBeGreaterThan(0);
+  });
+
+  it('x. critical center-text visual assertion failure produces quality fail', async () => {
+    const expectedToday = path.join(testDir, 'today-center-expected.png');
+    const actualToday = path.join(testDir, 'today-center-actual.png');
+    await createSizedTestImage(expectedToday, 240, 480, (png) => drawTodayMacroFixture(png, 'expected'));
+    await createSizedTestImage(actualToday, 240, 480, (png) => drawTodayMacroFixture(png, 'actual'));
+
+    const result = await compareImages({
+      expectedImage: expectedToday,
+      actualImage: actualToday,
+      outputDir: path.join(testDir, 'out-center-assertion'),
+      maxDiffPercent: 0.14,
+      regionsOfInterest: [
+        {
+          id: 'macro-ring-center-text',
+          label: 'Macro ring center text',
+          type: 'component',
+          critical: false,
+          coordinateSpace: 'normalized',
+          box: { x: 0.31, y: 0.23, width: 0.38, height: 0.13 },
+          maxDiffPercent: 1.0
+        }
+      ],
+      visualAssertions: [
+        {
+          id: 'center-text-local-diff',
+          type: 'roiMaxDiffPercent',
+          roiId: 'macro-ring-center-text',
+          maxDiffPercent: 0.04,
+          severity: 'critical',
+          message: 'Center text differs too much. Check clipping, text scale, vertical position, and overlap with rings.'
+        }
+      ]
+    } as any);
+
+    expect(result.status).toBe('pass');
+    expect(result.qualityStatus).toBe('fail');
+    expect(result.qualityFailures?.[0]?.type).toBe('critical_visual_assertion_failed');
+    expect(result.qualityFailures?.[0]?.assertionId).toBe('center-text-local-diff');
   });
 });
