@@ -25,6 +25,21 @@ async function createTestImage(p: string, draw: (png: PNG) => void) {
   await fs.writeFile(p, PNG.sync.write(png));
 }
 
+async function createSizedTestImage(p: string, width: number, height: number, draw: (png: PNG) => void) {
+  const png = new PNG({ width, height });
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      const idx = (png.width * y + x) << 2;
+      png.data[idx] = 255;
+      png.data[idx+1] = 255;
+      png.data[idx+2] = 255;
+      png.data[idx+3] = 255;
+    }
+  }
+  draw(png);
+  await fs.writeFile(p, PNG.sync.write(png));
+}
+
 function drawRect(png: PNG, rx: number, ry: number, rw: number, rh: number, color: [number, number, number]) {
   for (let y = ry; y < ry + rh; y++) {
     for (let x = rx; x < rx + rw; x++) {
@@ -59,6 +74,13 @@ describe('compareImages and Schemas', () => {
       drawRect(png, 10, 10, 20, 20, [0, 0, 0]);
       drawRect(png, 50, 50, 10, 10, [255, 0, 0]);
       drawRect(png, 80, 80, 5, 5, [0, 255, 0]);
+    });
+
+    await createSizedTestImage(path.join(testDir, 'expected-big.png'), 100, 100, (png) => {
+      drawRect(png, 10, 10, 20, 20, [0, 0, 0]);
+    });
+    await createSizedTestImage(path.join(testDir, 'actual-big.png'), 200, 200, (png) => {
+      drawRect(png, 20, 20, 40, 40, [0, 0, 0]);
     });
   });
 
@@ -134,6 +156,14 @@ describe('compareImages and Schemas', () => {
     };
     const parsed = compareImagesSchema.safeParse(invalidInputs);
     expect(parsed.success).toBe(false);
+
+    const preCaptureParsed = compareImagesSchema.safeParse({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-identical'),
+      preCapture: [{ type: 'adbShell', command: 'input tap 1 1', description: 'nope' }]
+    } as any);
+    expect(preCaptureParsed.success).toBe(false);
   });
 
   it('g. Ollama fallback returns structured fallback status', async () => {
@@ -274,5 +304,255 @@ describe('compareImages and Schemas', () => {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
     }
+  });
+
+  it('l. fails quality when critical ROI diff exceeds local threshold even if global diff is stable', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-critical-roi'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: true,
+          weight: 10,
+          coordinateSpace: 'normalized',
+          box: { x: 0.08, y: 0.08, width: 0.42, height: 0.42 },
+          maxDiffPercent: 0.01
+        }
+      ]
+    } as any);
+
+    expect(result.status).toBe('pass');
+    expect(result.qualityStatus).toBe('fail');
+    expect(result.qualityFailures?.[0]?.type).toBe('critical_roi_failed');
+    expect(result.priorityFindings?.[0]?.kind).toBe('critical_roi_failed');
+    expect(result.agentSummary?.canStopIterating).toBe(false);
+    expect(result.regionsOfInterest?.[0].label).toBe('Macro ring chart');
+  });
+
+  it('l2. promotes critical visual assertion failures when no critical ROI failed', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-critical-visual-assertion'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: false,
+          weight: 10,
+          coordinateSpace: 'normalized',
+          box: { x: 0.08, y: 0.08, width: 0.42, height: 0.42 },
+          maxDiffPercent: 1.0
+        }
+      ],
+      visualAssertions: [
+        {
+          id: 'macro-ring-local-diff',
+          type: 'roiMaxDiffPercent',
+          roiId: 'macro-ring',
+          maxDiffPercent: 0.01,
+          severity: 'critical',
+          message: 'Macro ring chart is visually too different from mockup.'
+        }
+      ]
+    } as any);
+
+    expect(result.status).toBe('pass');
+    expect(result.qualityStatus).toBe('fail');
+    expect(result.qualityFailures?.[0]?.type).toBe('critical_visual_assertion_failed');
+    expect(result.priorityFindings?.[0]?.kind).toBe('critical_visual_assertion_failed');
+    expect(result.priorityFindings?.[0]?.label).toBe('macro-ring-local-diff');
+    expect(result.priorityFindings?.[0]?.message).toBe('Macro ring chart is visually too different from mockup.');
+    expect(result.agentSummary?.canStopIterating).toBe(false);
+  });
+
+  it('m. maps actual-space roi boxes from original actual dimensions', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'expected-big.png'),
+      actualImage: path.join(testDir, 'actual-big.png'),
+      outputDir: path.join(testDir, 'out-actual-roi'),
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: true,
+          weight: 10,
+          coordinateSpace: 'actual',
+          box: { x: 20, y: 20, width: 40, height: 40 },
+          maxDiffPercent: 0.01
+        }
+      ]
+    } as any);
+
+    expect(result.regionsOfInterest?.[0].box).toEqual({ x: 10, y: 10, width: 20, height: 20 });
+    expect(result.regionsOfInterest?.[0].status).toBe('pass');
+  });
+
+  it('n. uses roi and normalized masks in comparison canvas space', async () => {
+    const expectedMaskBig = path.join(testDir, 'expected-mask-big.png');
+    const actualMaskBig = path.join(testDir, 'actual-mask-big.png');
+    await createTestImage(expectedMaskBig, () => {});
+    await createSizedTestImage(actualMaskBig, 200, 200, (png) => {
+      drawRect(png, 0, 180, 200, 20, [0, 0, 0]);
+    });
+
+    const result = await compareImages({
+      expectedImage: expectedMaskBig,
+      actualImage: actualMaskBig,
+      outputDir: path.join(testDir, 'out-mask-space'),
+      ignoreRegions: [
+        { x: 0, y: 180, width: 200, height: 20, type: 'system', coordinateSpace: 'actual', reason: 'nav bar' }
+      ]
+    } as any);
+
+    expect(result.status).toBe('pass');
+    expect(result.diffPixels).toBe(0);
+
+    const normalizedMaskResult = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-normalized-mask'),
+      ignoreRegions: [
+        { x: 0.1, y: 0.1, width: 0.3, height: 0.2, type: 'system', coordinateSpace: 'normalized', reason: 'shift area' }
+      ]
+    } as any);
+
+    expect(normalizedMaskResult.status).toBe('pass');
+    expect(normalizedMaskResult.diffPixels).toBe(0);
+  });
+
+  it('o. blocks floor detection and maxDiffPercent suggestion when critical ROI or visual assertion fails', async () => {
+    const previousReport = {
+      status: 'fail',
+      diffPixels: 123,
+      totalPixels: 10000,
+      diffPercent: 0.1366,
+      pixelmatchThreshold: 0.1,
+      maxDiffPercent: 0.001,
+      regions: [],
+      artifacts: {
+        expected: 'expected.png',
+        actual: 'actual.png',
+        diff: 'diff.png',
+        regionsDir: 'regions'
+      },
+      atFloor: true
+    } as any;
+
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-floor-blocked'),
+      maxDiffPercent: 0.5,
+      previousReport,
+      floorDetection: {
+        enabled: true,
+        deltaThreshold: 0.0001,
+        consecutiveRuns: 2
+      },
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: true,
+          weight: 10,
+          coordinateSpace: 'normalized',
+          box: { x: 0.08, y: 0.08, width: 0.42, height: 0.42 },
+          maxDiffPercent: 0.01
+        }
+      ],
+      visualAssertions: [
+        {
+          id: 'macro-ring-local-diff',
+          type: 'roiMaxDiffPercent',
+          roiId: 'macro-ring',
+          maxDiffPercent: 0.01,
+          severity: 'critical',
+          message: 'Macro ring chart is visually too different from mockup.'
+        }
+      ]
+    } as any);
+
+    expect(result.atFloor).toBe(false);
+    expect(result.floorBlockedBy?.[0].type).toBe('critical_roi_failed');
+    expect(result.visualAssertions?.[0].status).toBe('fail');
+    expect(result.suggestedMaxDiffPercent).toBeNull();
+    expect(result.maxDiffPercentSuggestionBlockedBy?.[0]).toContain("Critical ROI 'Macro ring chart' failed.");
+    expect(result.agentSummary?.canStopIterating).toBe(false);
+  });
+
+  it('p. detects floor after two stable deltas and rounds suggestion', async () => {
+    const baseline = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-floor-baseline'),
+      maxDiffPercent: 1.0,
+      floorDetection: { enabled: true, deltaThreshold: 0.0001, consecutiveRuns: 2 }
+    } as any);
+
+    const waiting = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-floor-waiting'),
+      maxDiffPercent: 0.0001,
+      floorDetection: { enabled: true, deltaThreshold: 0.0001, consecutiveRuns: 2 },
+      previousReport: {
+        ...baseline,
+        delta: undefined
+      } as any
+    } as any);
+
+    expect(waiting.atFloor).toBe(false);
+    expect(waiting.floorReason).toBe('waiting for consecutive stable run');
+
+    const stable = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-floor-stable'),
+      maxDiffPercent: 0.0001,
+      floorDetection: { enabled: true, deltaThreshold: 0.0001, consecutiveRuns: 2 },
+      previousReport: {
+        ...baseline,
+        delta: { diffPercentDelta: 0.00001 }
+      } as any
+    } as any);
+
+    expect(stable.atFloor).toBe(true);
+    expect(stable.suggestedMaxDiffPercent).toBe(Math.round(stable.diffPercent * 1.1 * 10000) / 10000);
+  });
+
+  it('q. warns when data mask overlaps critical ROI', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-data-mask-warning'),
+      maxDiffPercent: 1.0,
+      ignoreRegions: [
+        { x: 0.0, y: 0.0, width: 0.4, height: 0.4, reason: 'fixture diff', type: 'data', coordinateSpace: 'normalized' }
+      ],
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: true,
+          weight: 10,
+          coordinateSpace: 'expected',
+          box: { x: 5, y: 5, width: 30, height: 30 },
+          maxDiffPercent: 0.01
+        }
+      ]
+    } as any);
+
+    expect(result.warnings).toContain("Data mask overlaps critical ROI 'Macro ring chart'. Verify this is intentional.");
   });
 });

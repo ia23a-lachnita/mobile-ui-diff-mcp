@@ -15,7 +15,46 @@ export const ignoreRegionSchema = z.object({
   y: z.number().int().nonnegative(),
   width: z.number().int().positive(),
   height: z.number().int().positive(),
-  reason: z.string().optional()
+  reason: z.string().optional(),
+  type: z.enum(['system', 'data', 'dynamic']).optional(),
+  coordinateSpace: z.enum(['expected', 'actual', 'normalized']).optional()
+});
+
+export const preCaptureSchema = z.object({
+  type: z.literal('adbShell'),
+  command: z.string().min(1),
+  description: z.string().min(1)
+});
+
+export const regionOfInterestSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  type: z.enum(['component', 'zone']),
+  critical: z.boolean().optional(),
+  weight: z.number().positive().optional(),
+  coordinateSpace: z.enum(['normalized', 'expected', 'actual']).optional(),
+  box: z.object({
+    x: z.number(),
+    y: z.number(),
+    width: z.number().positive(),
+    height: z.number().positive()
+  }),
+  maxDiffPercent: z.number().min(0).max(1).optional()
+});
+
+export const visualAssertionSchema = z.object({
+  id: z.string().min(1),
+  type: z.literal('roiMaxDiffPercent'),
+  roiId: z.string().min(1),
+  maxDiffPercent: z.number().min(0).max(1),
+  severity: z.enum(['critical', 'high', 'medium', 'low']),
+  message: z.string().min(1)
+});
+
+export const floorDetectionSchema = z.object({
+  enabled: z.boolean().optional(),
+  deltaThreshold: z.number().min(0).optional(),
+  consecutiveRuns: z.number().int().positive().optional()
 });
 
 export const vlmConfigSchema = z.object({
@@ -41,8 +80,13 @@ export const compareImagesSchema = z.object({
   maxVlmRegions: z.number().int().nonnegative().max(50).default(10),
   includeVlmAnalysis: z.boolean().optional(),
   requireVlmAnalysis: z.boolean().optional(),
-  ignoreRegions: z.array(ignoreRegionSchema).optional()
-});
+  ignoreRegions: z.array(ignoreRegionSchema).optional(),
+  regionsOfInterest: z.array(regionOfInterestSchema).optional(),
+  visualAssertions: z.array(visualAssertionSchema).optional(),
+  floorDetection: floorDetectionSchema.optional(),
+  previousReport: z.any().optional(),
+  runDelta: z.any().optional()
+}).strict();
 
 export const captureAndroidSchema = z.object({
   outputPath: z.string().min(1),
@@ -66,7 +110,13 @@ export const runMobileUiDiffSchema = z.object({
   maxVlmRegions: z.number().int().nonnegative().max(50).default(10),
   includeVlmAnalysis: z.boolean().optional(),
   requireVlmAnalysis: z.boolean().optional(),
-  ignoreRegions: z.array(ignoreRegionSchema).optional()
+  ignoreRegions: z.array(ignoreRegionSchema).optional(),
+  preCapture: z.array(preCaptureSchema).optional(),
+  regionsOfInterest: z.array(regionOfInterestSchema).optional(),
+  visualAssertions: z.array(visualAssertionSchema).optional(),
+  floorDetection: floorDetectionSchema.optional(),
+  previousReport: z.any().optional(),
+  runDelta: z.any().optional()
 });
 
 export const runScreenUiDiffSchema = z.object({
@@ -84,7 +134,11 @@ export const runScreenUiDiffSchema = z.object({
   includeVlmAnalysis: z.boolean().optional(),
   requireVlmAnalysis: z.boolean().optional(),
   vlm: vlmConfigSchema,
-  ignoreRegions: z.array(ignoreRegionSchema).optional()
+  ignoreRegions: z.array(ignoreRegionSchema).optional(),
+  preCapture: z.array(preCaptureSchema).optional(),
+  regionsOfInterest: z.array(regionOfInterestSchema).optional(),
+  visualAssertions: z.array(visualAssertionSchema).optional(),
+  floorDetection: floorDetectionSchema.optional()
 });
 
 export const vlmHealthSchema = z.object({
@@ -125,9 +179,63 @@ export function getToolList() {
                 y: { type: "integer", minimum: 0 },
                 width: { type: "integer", minimum: 1 },
                 height: { type: "integer", minimum: 1 },
-                reason: { type: "string", description: "Optional human-readable reason for masking this region." }
+                reason: { type: "string", description: "Optional human-readable reason for masking this region." },
+                type: { type: "string", enum: ["system", "data", "dynamic"], description: "Mask category. system for OS chrome, data for live fixture mismatches, dynamic for loading/timestamps/ads." },
+                coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"], description: "Coordinate space used for x/y/width/height. Default: expected." }
               },
               required: ["x", "y", "width", "height"]
+            }
+          },
+          regionsOfInterest: {
+            type: "array",
+            description: "Component or zone regions scored separately from global diff.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string", minLength: 1 },
+                label: { type: "string", minLength: 1 },
+                type: { type: "string", enum: ["component", "zone"] },
+                critical: { type: "boolean" },
+                weight: { type: "number", minimum: 0 },
+                coordinateSpace: { type: "string", enum: ["normalized", "expected", "actual"] },
+                box: {
+                  type: "object",
+                  properties: {
+                    x: { type: "number" },
+                    y: { type: "number" },
+                    width: { type: "number", exclusiveMinimum: 0 },
+                    height: { type: "number", exclusiveMinimum: 0 }
+                  },
+                  required: ["x", "y", "width", "height"]
+                },
+                maxDiffPercent: { type: "number", minimum: 0, maximum: 1 }
+              },
+              required: ["id", "label", "type", "box"]
+            }
+          },
+          visualAssertions: {
+            type: "array",
+            description: "Configurable visual assertions applied to ROI metrics.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string", minLength: 1 },
+                type: { type: "string", enum: ["roiMaxDiffPercent"] },
+                roiId: { type: "string", minLength: 1 },
+                maxDiffPercent: { type: "number", minimum: 0, maximum: 1 },
+                severity: { type: "string", enum: ["critical", "high", "medium", "low"] },
+                message: { type: "string", minLength: 1 }
+              },
+              required: ["id", "type", "roiId", "maxDiffPercent", "severity", "message"]
+            }
+          },
+          floorDetection: {
+            type: "object",
+            description: "Floor detection based on consecutive stable deltas.",
+            properties: {
+              enabled: { type: "boolean", default: true },
+              deltaThreshold: { type: "number", minimum: 0, default: 0.0001 },
+              consecutiveRuns: { type: "integer", minimum: 1, default: 2 }
             }
           }
         },
@@ -185,9 +293,76 @@ export function getToolList() {
                 y: { type: "integer", minimum: 0 },
                 width: { type: "integer", minimum: 1 },
                 height: { type: "integer", minimum: 1 },
-                reason: { type: "string", description: "Optional human-readable reason for masking this region." }
+                reason: { type: "string", description: "Optional human-readable reason for masking this region." },
+                type: { type: "string", enum: ["system", "data", "dynamic"], description: "Mask category. system for OS chrome, data for live fixture mismatches, dynamic for loading/timestamps/ads." },
+                coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"], description: "Coordinate space used for x/y/width/height. Default: expected." }
               },
               required: ["x", "y", "width", "height"]
+            }
+          },
+          preCapture: {
+            type: "array",
+            description: "Safe device navigation steps to run before capture when actualImage is omitted.",
+            items: {
+              type: "object",
+              properties: {
+                type: { type: "string", enum: ["adbShell"] },
+                command: { type: "string", minLength: 1 },
+                description: { type: "string", minLength: 1 }
+              },
+              required: ["type", "command", "description"]
+            }
+          },
+          regionsOfInterest: {
+            type: "array",
+            description: "Component or zone regions scored separately from global diff.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string", minLength: 1 },
+                label: { type: "string", minLength: 1 },
+                type: { type: "string", enum: ["component", "zone"] },
+                critical: { type: "boolean" },
+                weight: { type: "number", minimum: 0 },
+                coordinateSpace: { type: "string", enum: ["normalized", "expected", "actual"] },
+                box: {
+                  type: "object",
+                  properties: {
+                    x: { type: "number" },
+                    y: { type: "number" },
+                    width: { type: "number", exclusiveMinimum: 0 },
+                    height: { type: "number", exclusiveMinimum: 0 }
+                  },
+                  required: ["x", "y", "width", "height"]
+                },
+                maxDiffPercent: { type: "number", minimum: 0, maximum: 1 }
+              },
+              required: ["id", "label", "type", "box"]
+            }
+          },
+          visualAssertions: {
+            type: "array",
+            description: "Configurable visual assertions applied to ROI metrics.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string", minLength: 1 },
+                type: { type: "string", enum: ["roiMaxDiffPercent"] },
+                roiId: { type: "string", minLength: 1 },
+                maxDiffPercent: { type: "number", minimum: 0, maximum: 1 },
+                severity: { type: "string", enum: ["critical", "high", "medium", "low"] },
+                message: { type: "string", minLength: 1 }
+              },
+              required: ["id", "type", "roiId", "maxDiffPercent", "severity", "message"]
+            }
+          },
+          floorDetection: {
+            type: "object",
+            description: "Floor detection based on consecutive stable deltas.",
+            properties: {
+              enabled: { type: "boolean", default: true },
+              deltaThreshold: { type: "number", minimum: 0, default: 0.0001 },
+              consecutiveRuns: { type: "integer", minimum: 1, default: 2 }
             }
           }
         },
@@ -213,6 +388,71 @@ export function getToolList() {
           maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, description: "Optional override for max VLM regions." },
           includeVlmAnalysis: { type: "boolean", description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
           requireVlmAnalysis: { type: "boolean", description: "When true, fail early if VLM analysis is requested but no model can be loaded." },
+          preCapture: {
+            type: "array",
+            description: "Optional preCapture override. Safe navigation steps run before capture when actualImage is omitted.",
+            items: {
+              type: "object",
+              properties: {
+                type: { type: "string", enum: ["adbShell"] },
+                command: { type: "string", minLength: 1 },
+                description: { type: "string", minLength: 1 }
+              },
+              required: ["type", "command", "description"]
+            }
+          },
+          regionsOfInterest: {
+            type: "array",
+            description: "Optional ROI override. Component or zone regions scored separately from global diff.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string", minLength: 1 },
+                label: { type: "string", minLength: 1 },
+                type: { type: "string", enum: ["component", "zone"] },
+                critical: { type: "boolean" },
+                weight: { type: "number", minimum: 0 },
+                coordinateSpace: { type: "string", enum: ["normalized", "expected", "actual"] },
+                box: {
+                  type: "object",
+                  properties: {
+                    x: { type: "number" },
+                    y: { type: "number" },
+                    width: { type: "number", exclusiveMinimum: 0 },
+                    height: { type: "number", exclusiveMinimum: 0 }
+                  },
+                  required: ["x", "y", "width", "height"]
+                },
+                maxDiffPercent: { type: "number", minimum: 0, maximum: 1 }
+              },
+              required: ["id", "label", "type", "box"]
+            }
+          },
+          visualAssertions: {
+            type: "array",
+            description: "Optional visual assertion override.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string", minLength: 1 },
+                type: { type: "string", enum: ["roiMaxDiffPercent"] },
+                roiId: { type: "string", minLength: 1 },
+                maxDiffPercent: { type: "number", minimum: 0, maximum: 1 },
+                severity: { type: "string", enum: ["critical", "high", "medium", "low"] },
+                message: { type: "string", minLength: 1 }
+              },
+              required: ["id", "type", "roiId", "maxDiffPercent", "severity", "message"]
+            }
+          },
+          floorDetection: {
+            type: "object",
+            description: "Optional floor detection override.",
+            properties: {
+              enabled: { type: "boolean", default: true },
+              deltaThreshold: { type: "number", minimum: 0, default: 0.0001 },
+              consecutiveRuns: { type: "integer", minimum: 1, default: 2 }
+            }
+          },
           vlm: {
             type: "object",
             description: "Optional VLM overrides for this run.",

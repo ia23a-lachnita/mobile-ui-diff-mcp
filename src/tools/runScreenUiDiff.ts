@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { loadUiDiffConfig } from '../config/uiDiffConfig';
-import { DiffReport, IgnoreRegion, VlmConfig } from '../types';
+import { DiffReport, IgnoreRegion, VlmConfig, PreCaptureStep, RegionOfInterestConfig, VisualAssertionConfig, FloorDetectionConfig } from '../types';
 import { resolveAbsolutePath } from '../utils/fs';
 import { runMobileUiDiff } from './runMobileUiDiff';
 import { preflightOllama, resolveOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
@@ -22,6 +22,10 @@ export interface RunScreenUiDiffInput {
   requireVlmAnalysis?: boolean;
   vlm?: VlmConfig;
   ignoreRegions?: IgnoreRegion[];
+  preCapture?: PreCaptureStep[];
+  regionsOfInterest?: RegionOfInterestConfig[];
+  visualAssertions?: VisualAssertionConfig[];
+  floorDetection?: FloorDetectionConfig;
 }
 
 export interface RunScreenUiDiffDelta {
@@ -185,7 +189,11 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     maxRegions: input.maxRegions ?? screenConfig.maxRegions,
     maxVlmRegions: input.maxVlmRegions ?? screenConfig.maxVlmRegions,
     includeVlmAnalysis: input.includeVlmAnalysis ?? screenConfig.includeVlmAnalysis,
-    ignoreRegions: input.ignoreRegions ?? screenConfig.ignoreRegions
+    ignoreRegions: input.ignoreRegions ?? screenConfig.ignoreRegions,
+    preCapture: input.preCapture ?? screenConfig.preCapture,
+    regionsOfInterest: input.regionsOfInterest ?? screenConfig.regionsOfInterest,
+    visualAssertions: input.visualAssertions ?? screenConfig.visualAssertions,
+    floorDetection: input.floorDetection ?? screenConfig.floorDetection
   };
 
   const includeVlmAnalysis = merged.includeVlmAnalysis ?? false;
@@ -239,6 +247,8 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   const runOutputDir = path.join(baseOutputDir, effectiveRunName);
   const resolvedRunOutputDir = resolveAbsolutePath(runOutputDir);
 
+  const previous = await findPreviousRunReport(resolvedBaseOutputDir, effectiveRunName);
+
   const report = await runMobileUiDiff({
     platform: merged.platform,
     expectedImage: merged.expectedImage,
@@ -252,7 +262,13 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     requireVlmAnalysis,
     vlmConfig: resolvedVlmConfig,
     vlmPreflight,
-    ignoreRegions: merged.ignoreRegions
+    ignoreRegions: merged.ignoreRegions,
+    preCapture: merged.preCapture,
+    previousReport: previous?.report,
+    runDelta: previous?.report?.delta,
+    floorDetection: merged.floorDetection,
+    regionsOfInterest: merged.regionsOfInterest,
+    visualAssertions: merged.visualAssertions
   });
 
   const reportPath = path.join(resolvedRunOutputDir, 'report.json');
@@ -265,7 +281,6 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   };
   let delta: RunScreenUiDiffDelta | undefined;
   {
-    const previous = await findPreviousRunReport(resolvedBaseOutputDir, effectiveRunName);
     const previousMetrics = previous ? toReportMetrics(previous.report) : null;
     const currentMetrics = toReportMetrics(report);
 

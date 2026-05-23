@@ -91,6 +91,18 @@ describe('runScreenUiDiff', () => {
           vlm: {
             autoPull: true
           }
+        },
+        preCaptureProfile: {
+          platform: 'none',
+          expectedImage: expectedPath,
+          outputDir,
+          preCapture: [
+            {
+              type: 'adbShell',
+              command: 'input tap 108 2280',
+              description: 'Switch to Today tab'
+            }
+          ]
         }
       }
     };
@@ -166,7 +178,17 @@ describe('runScreenUiDiff', () => {
 
   it('lists tool descriptions that prefer compare_images when actualImage is provided', () => {
     const tools = getToolList();
+    const compareTool = tools.find((tool) => tool.name === 'compare_images');
+    const mobileTool = tools.find((tool) => tool.name === 'run_mobile_ui_diff');
+    const screenTool = tools.find((tool) => tool.name === 'run_screen_ui_diff');
+
     expect(JSON.stringify(tools)).toContain('prefer compare_images');
+    expect(JSON.stringify(compareTool)).toContain('regionsOfInterest');
+    expect(JSON.stringify(compareTool)).toContain('visualAssertions');
+    expect(JSON.stringify(compareTool)).toContain('floorDetection');
+    expect(JSON.stringify(compareTool)).not.toContain('preCapture');
+    expect(JSON.stringify(mobileTool)).toContain('preCapture');
+    expect(JSON.stringify(screenTool)).toContain('preCapture');
   });
 
   it('selects fallback VLM model when primary fails to load', async () => {
@@ -337,5 +359,15 @@ describe('runScreenUiDiff', () => {
     });
     expect(run.warnings).toContain('autoPull is not implemented. Run `ollama pull qwen2.5vl:7b` manually.');
     expect(run.vlm?.warnings).toContain('autoPull is not implemented. Run `ollama pull qwen2.5vl:7b` manually.');
+  });
+
+  it('accepts preCapture config entries', async () => {
+    const run = await runScreenUiDiff({
+      screen: 'preCaptureProfile',
+      configPath,
+      actualImage: actualIdentical
+    });
+
+    expect(run.status).toBe('pass');
   });
 });
