@@ -334,6 +334,45 @@ describe('compareImages and Schemas', () => {
     expect(result.regionsOfInterest?.[0].label).toBe('Macro ring chart');
   });
 
+  it('l2. promotes critical visual assertion failures when no critical ROI failed', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'shifted.png'),
+      outputDir: path.join(testDir, 'out-critical-visual-assertion'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: false,
+          weight: 10,
+          coordinateSpace: 'normalized',
+          box: { x: 0.08, y: 0.08, width: 0.42, height: 0.42 },
+          maxDiffPercent: 1.0
+        }
+      ],
+      visualAssertions: [
+        {
+          id: 'macro-ring-local-diff',
+          type: 'roiMaxDiffPercent',
+          roiId: 'macro-ring',
+          maxDiffPercent: 0.01,
+          severity: 'critical',
+          message: 'Macro ring chart is visually too different from mockup.'
+        }
+      ]
+    } as any);
+
+    expect(result.status).toBe('pass');
+    expect(result.qualityStatus).toBe('fail');
+    expect(result.qualityFailures?.[0]?.type).toBe('critical_visual_assertion_failed');
+    expect(result.priorityFindings?.[0]?.kind).toBe('critical_visual_assertion_failed');
+    expect(result.priorityFindings?.[0]?.label).toBe('macro-ring-local-diff');
+    expect(result.priorityFindings?.[0]?.message).toBe('Macro ring chart is visually too different from mockup.');
+    expect(result.agentSummary?.canStopIterating).toBe(false);
+  });
+
   it('m. maps actual-space roi boxes from original actual dimensions', async () => {
     const result = await compareImages({
       expectedImage: path.join(testDir, 'expected-big.png'),

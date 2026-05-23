@@ -526,6 +526,23 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       ] : []
     });
   }
+  if (criticalRoiFailures.length === 0) {
+    for (const failure of criticalAssertionFailures) {
+      const assertion = visualAssertions.find((candidate) => candidate.id === failure.assertionId);
+      const roiId = failure.label;
+      priorityFindings.push({
+        priority: priorityFindings.length + 1,
+        kind: 'critical_visual_assertion_failed',
+        label: failure.assertionId ?? 'critical visual assertion',
+        message: assertion?.message ?? `Critical visual assertion '${failure.assertionId}' failed.`,
+        artifactPaths: roiId ? [
+          path.join(roiDir, `${roiId}-expected.png`),
+          path.join(roiDir, `${roiId}-actual.png`),
+          path.join(roiDir, `${roiId}-diff.png`)
+        ] : []
+      });
+    }
+  }
 
   const rankedRegions = [...regions]
     .map((region) => ({
