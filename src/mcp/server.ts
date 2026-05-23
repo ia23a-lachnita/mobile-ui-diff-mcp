@@ -64,6 +64,8 @@ export const hotspotDetectionSchema = z.object({
   minDiffDensity: z.number().min(0).max(1).optional()
 });
 
+export const vlmPolicySchema = z.enum(['disabled', 'optional', 'required', 'ask_user']);
+
 export const vlmConfigSchema = z.object({
   provider: z.enum(['ollama']).optional(),
   baseUrl: z.string().min(1).optional(),
@@ -87,6 +89,7 @@ export const compareImagesSchema = z.object({
   maxVlmRegions: z.number().int().nonnegative().max(50).default(10),
   includeVlmAnalysis: z.boolean().optional(),
   requireVlmAnalysis: z.boolean().optional(),
+  vlmPolicy: vlmPolicySchema.optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
@@ -118,6 +121,7 @@ export const runMobileUiDiffSchema = z.object({
   maxVlmRegions: z.number().int().nonnegative().max(50).default(10),
   includeVlmAnalysis: z.boolean().optional(),
   requireVlmAnalysis: z.boolean().optional(),
+  vlmPolicy: vlmPolicySchema.optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
   preCapture: z.array(preCaptureSchema).optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
@@ -142,6 +146,7 @@ export const runScreenUiDiffSchema = z.object({
   maxVlmRegions: z.number().int().nonnegative().max(50).optional(),
   includeVlmAnalysis: z.boolean().optional(),
   requireVlmAnalysis: z.boolean().optional(),
+  vlmPolicy: vlmPolicySchema.optional(),
   vlm: vlmConfigSchema,
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
   preCapture: z.array(preCaptureSchema).optional(),
@@ -179,6 +184,7 @@ export function getToolList() {
           maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, default: 10, description: "Maximum number of returned regions to analyze with VLM. Default: 10." },
           includeVlmAnalysis: { type: "boolean", default: false, description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
           requireVlmAnalysis: { type: "boolean", default: false, description: "When true, fail early if VLM analysis is requested but no model can be loaded." },
+          vlmPolicy: { type: "string", enum: ["disabled", "optional", "required", "ask_user"], description: "Controls VLM availability behavior. Defaults to disabled when includeVlmAnalysis is false, required when requireVlmAnalysis is true, otherwise ask_user when VLM is requested." },
           ignoreRegions: {
             type: "array",
             description: "Pixel regions to mask before comparison.",
@@ -303,6 +309,7 @@ export function getToolList() {
           maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, default: 10, description: "Maximum number of returned regions to analyze with VLM. Default: 10." },
           includeVlmAnalysis: { type: "boolean", default: false, description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
           requireVlmAnalysis: { type: "boolean", default: false, description: "When true, fail early if VLM analysis is requested but no model can be loaded." },
+          vlmPolicy: { type: "string", enum: ["disabled", "optional", "required", "ask_user"], description: "Controls VLM availability behavior. Defaults to disabled when includeVlmAnalysis is false, required when requireVlmAnalysis is true, otherwise ask_user when VLM is requested." },
           ignoreRegions: {
             type: "array",
             description: "Pixel regions to mask before comparison.",
@@ -418,6 +425,7 @@ export function getToolList() {
           maxVlmRegions: { type: "integer", minimum: 0, maximum: 50, description: "Optional override for max VLM regions." },
           includeVlmAnalysis: { type: "boolean", description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
           requireVlmAnalysis: { type: "boolean", description: "When true, fail early if VLM analysis is requested but no model can be loaded." },
+          vlmPolicy: { type: "string", enum: ["disabled", "optional", "required", "ask_user"], description: "Optional VLM availability policy override. Defaults to disabled when includeVlmAnalysis is false, required when requireVlmAnalysis is true, otherwise ask_user when VLM is requested." },
           preCapture: {
             type: "array",
             description: "Optional preCapture override. Safe navigation steps run before capture when actualImage is omitted.",

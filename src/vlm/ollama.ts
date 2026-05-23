@@ -1,4 +1,4 @@
-import { VlmAnalysis } from '../types';
+import { VlmAnalysis, VlmUnavailableReason } from '../types';
 import fs from 'fs/promises';
 
 export const DEFAULT_OLLAMA_BASE_URL = 'http://localhost:11434';
@@ -79,6 +79,7 @@ export interface VlmPreflightResult {
   baseUrl: string;
   timeoutMs: number;
   keepAlive?: string;
+  failureReason?: VlmUnavailableReason;
   failureMessage?: string;
 }
 
@@ -123,6 +124,13 @@ export function classifyOllamaError(error: unknown): OllamaErrorStatus {
   const resourceKeywords = ['out of memory', 'resource', 'insufficient', 'no available memory', 'gpu'];
   if (resourceKeywords.some((keyword) => message.includes(keyword))) return 'resource_limited';
   if (message.includes('invalid json') || message.includes('unexpected token')) return 'invalid_response';
+  return 'unknown';
+}
+
+function toVlmUnavailableReason(status: OllamaErrorStatus): VlmUnavailableReason {
+  if (status === 'resource_limited' || status === 'unreachable' || status === 'model_missing' || status === 'timeout') {
+    return status;
+  }
   return 'unknown';
 }
 
@@ -349,10 +357,12 @@ export async function preflightOllama(config: ResolvedOllamaConfig, checkLoad: b
   const fallbackUsed = selectedModel !== null && selectedModel !== config.model;
   const available = selectedModel !== null;
   const warnings = [...health.warnings];
+  let failureReason: VlmUnavailableReason | undefined;
   let failureMessage: string | undefined;
 
   if (!available) {
     const status = health.loadCheck.status ?? (health.reachable ? 'model_missing' : 'unreachable');
+    failureReason = toVlmUnavailableReason(status);
     failureMessage = errorMessageForStatus(status);
   }
 
@@ -369,6 +379,7 @@ export async function preflightOllama(config: ResolvedOllamaConfig, checkLoad: b
     baseUrl: config.baseUrl,
     timeoutMs: config.timeoutMs,
     keepAlive: config.keepAlive,
+    failureReason,
     failureMessage
   };
 }

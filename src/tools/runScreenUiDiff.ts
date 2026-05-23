@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { loadUiDiffConfig } from '../config/uiDiffConfig';
-import { DiffReport, IgnoreRegion, VlmConfig, PreCaptureStep, RegionOfInterestConfig, VisualAssertionConfig, FloorDetectionConfig, HotspotDetectionConfig } from '../types';
+import { DiffReport, IgnoreRegion, VlmConfig, PreCaptureStep, RegionOfInterestConfig, VisualAssertionConfig, FloorDetectionConfig, HotspotDetectionConfig, VlmPolicy } from '../types';
 import { resolveAbsolutePath } from '../utils/fs';
 import { runMobileUiDiff } from './runMobileUiDiff';
 import { preflightOllama, resolveOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
@@ -20,6 +20,7 @@ export interface RunScreenUiDiffInput {
   maxVlmRegions?: number;
   includeVlmAnalysis?: boolean;
   requireVlmAnalysis?: boolean;
+  vlmPolicy?: VlmPolicy;
   vlm?: VlmConfig;
   ignoreRegions?: IgnoreRegion[];
   preCapture?: PreCaptureStep[];
@@ -190,6 +191,8 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     maxRegions: input.maxRegions ?? screenConfig.maxRegions,
     maxVlmRegions: input.maxVlmRegions ?? screenConfig.maxVlmRegions,
     includeVlmAnalysis: input.includeVlmAnalysis ?? screenConfig.includeVlmAnalysis,
+    requireVlmAnalysis: input.requireVlmAnalysis ?? screenConfig.requireVlmAnalysis,
+    vlmPolicy: input.vlmPolicy ?? screenConfig.vlmPolicy,
     ignoreRegions: input.ignoreRegions ?? screenConfig.ignoreRegions,
     preCapture: input.preCapture ?? screenConfig.preCapture,
     regionsOfInterest: input.regionsOfInterest ?? screenConfig.regionsOfInterest,
@@ -202,8 +205,13 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   const resolvedVlmOverrides = input.vlm ?? {};
   const screenVlm = screenConfig.vlm ?? {};
   const autoPullEnabled = (resolvedVlmOverrides.autoPull ?? screenVlm.autoPull) === true;
+  const resolvedVlmPolicy = merged.vlmPolicy ?? (
+    !includeVlmAnalysis
+      ? 'disabled'
+      : ((merged.requireVlmAnalysis ?? resolvedVlmOverrides.require ?? screenVlm.require) === true ? 'required' : 'ask_user')
+  );
   const requireVlmAnalysis = includeVlmAnalysis
-    ? (input.requireVlmAnalysis ?? screenConfig.requireVlmAnalysis ?? resolvedVlmOverrides.require ?? screenVlm.require ?? false)
+    ? resolvedVlmPolicy === 'required'
     : false;
   const resolvedVlmConfig = resolveOllamaConfig({
     baseUrl: resolvedVlmOverrides.baseUrl ?? screenVlm.baseUrl,
@@ -217,7 +225,7 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   const preflightEnabled = (resolvedVlmOverrides.preflight ?? screenVlm.preflight) !== false;
   let vlmPreflight: VlmPreflightResult | undefined;
 
-  if (includeVlmAnalysis) {
+  if (includeVlmAnalysis && resolvedVlmPolicy !== 'disabled') {
     if (preflightEnabled || requireVlmAnalysis) {
       vlmPreflight = await preflightOllama(resolvedVlmConfig, true);
       if (autoPullEnabled) {
@@ -262,6 +270,7 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     maxVlmRegions: merged.maxVlmRegions,
     includeVlmAnalysis: includeVlmAnalysis,
     requireVlmAnalysis,
+    vlmPolicy: resolvedVlmPolicy,
     vlmConfig: resolvedVlmConfig,
     vlmPreflight,
     ignoreRegions: merged.ignoreRegions,

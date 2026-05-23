@@ -56,6 +56,8 @@ export const hotspotDetectionSchema = z.object({
   minDiffDensity: z.number().min(0).max(1).optional()
 });
 
+export const vlmPolicySchema = z.enum(['disabled', 'optional', 'required', 'ask_user']);
+
 export const vlmConfigSchema = z.object({
   provider: z.enum(['ollama']).optional(),
   baseUrl: z.string().min(1).optional(),
@@ -78,6 +80,7 @@ export const uiDiffScreenSchema = z.object({
   maxVlmRegions: z.number().int().nonnegative().max(50).optional(),
   includeVlmAnalysis: z.boolean().optional(),
   requireVlmAnalysis: z.boolean().optional(),
+  vlmPolicy: vlmPolicySchema.optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
   preCapture: z.array(preCaptureSchema).optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),

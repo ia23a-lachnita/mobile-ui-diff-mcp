@@ -61,6 +61,26 @@ export interface HotspotDetectionConfig {
   minDiffDensity?: number;
 }
 
+export type VlmPolicy = 'disabled' | 'optional' | 'required' | 'ask_user';
+
+export type VlmUnavailableReason = 'resource_limited' | 'unreachable' | 'model_missing' | 'timeout' | 'unknown';
+
+export interface VlmAvailability {
+  requested: boolean;
+  usable: boolean;
+  selectedModel: string | null;
+  reason?: VlmUnavailableReason;
+  message?: string;
+}
+
+export interface ActionRequired {
+  type: 'vlm_unavailable';
+  severity: 'blocking';
+  message: string;
+  recommendedUserPrompt: string;
+  suggestedFixes: string[];
+}
+
 export interface RunDelta {
   previousRun: {
     name: string;
@@ -236,6 +256,9 @@ export interface DiffReport {
   agentSummary?: AgentSummary;
   suggestedMaxDiffPercent?: number | null;
   maxDiffPercentSuggestionBlockedBy?: string[];
+  vlmPolicy?: VlmPolicy;
+  vlmAvailability?: VlmAvailability;
+  actionRequired?: ActionRequired | null;
   warnings?: string[];
   vlm?: VlmSummary;
 }

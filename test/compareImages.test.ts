@@ -95,6 +95,12 @@ function drawTodayMacroFixture(png: PNG, variant: 'expected' | 'actual') {
   drawRect(png, 24, 284, 172, 18, [232, 236, 240]);
 }
 
+function stubUnavailableOllama() {
+  vi.stubGlobal('fetch', vi.fn(async () => {
+    throw new Error('fetch failed');
+  }));
+}
+
 describe('compareImages and Schemas', () => {
   const testDir = path.join(__dirname, 'fixtures');
   
@@ -218,7 +224,8 @@ describe('compareImages and Schemas', () => {
         outputDir: path.join(testDir, 'out-ollama'),
         maxRegions: 1,
         maxVlmRegions: 1,
-        includeVlmAnalysis: true
+        includeVlmAnalysis: true,
+        vlmPolicy: 'optional'
       });
       expect(result.regions[0].analysisStatus).toBe('fallback');
       expect(result.warnings).toContain('VLM analysis was requested but unavailable. Region analysis fell back to error/fallback statuses. Run vlm_health or start Ollama.');
@@ -272,13 +279,103 @@ describe('compareImages and Schemas', () => {
     expect(parsedRun.maxVlmRegions).toBe(10);
   });
 
-  it('j. warns when VLM analysis is disabled', async () => {
+  it('j. does not warn about missing VLM when VLM analysis is disabled', async () => {
     const result = await compareImages({
       expectedImage: path.join(testDir, 'base.png'),
       actualImage: path.join(testDir, 'identical.png'),
       outputDir: path.join(testDir, 'out-no-vlm')
     });
-    expect(result.warnings).toContain('VLM analysis disabled. Enable includeVlmAnalysis for semantic region explanations.');
+    expect(result.vlmPolicy).toBe('disabled');
+    expect(result.vlmAvailability?.requested).toBe(false);
+    expect(result.warnings ?? []).not.toContain('VLM analysis disabled. Enable includeVlmAnalysis for semantic region explanations.');
+  });
+
+  it('j2. defaults requested VLM to ask_user and returns actionRequired when unavailable', async () => {
+    stubUnavailableOllama();
+    try {
+      const result = await compareImages({
+        expectedImage: path.join(testDir, 'base.png'),
+        actualImage: path.join(testDir, 'multi.png'),
+        outputDir: path.join(testDir, 'out-vlm-ask-user'),
+        maxRegions: 1,
+        maxVlmRegions: 1,
+        includeVlmAnalysis: true
+      });
+
+      expect(result.vlmPolicy).toBe('ask_user');
+      expect(result.vlmAvailability).toMatchObject({
+        requested: true,
+        usable: false,
+        selectedModel: 'qwen2.5vl:7b',
+        reason: 'unreachable'
+      });
+      expect(result.actionRequired).toMatchObject({
+        type: 'vlm_unavailable',
+        severity: 'blocking',
+        message: 'VLM analysis was requested but no usable local model is available.'
+      });
+      expect(result.actionRequired?.recommendedUserPrompt).toContain('continue with pixel/ROI-only analysis');
+      expect(result.qualityWarnings).toContain('VLM analysis was requested but unavailable. Ask the user whether to continue without semantic analysis.');
+      expect(result.agentSummary?.canStopIterating).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('j3. fails early when vlmPolicy is required and VLM is unavailable', async () => {
+    stubUnavailableOllama();
+    try {
+      await expect(compareImages({
+        expectedImage: path.join(testDir, 'base.png'),
+        actualImage: path.join(testDir, 'multi.png'),
+        outputDir: path.join(testDir, 'out-vlm-required'),
+        includeVlmAnalysis: true,
+        vlmPolicy: 'required'
+      })).rejects.toThrow('VLM analysis is required but no configured Ollama model could be loaded.');
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('j4. continues with warning when vlmPolicy is optional and VLM is unavailable', async () => {
+    stubUnavailableOllama();
+    try {
+      const result = await compareImages({
+        expectedImage: path.join(testDir, 'base.png'),
+        actualImage: path.join(testDir, 'multi.png'),
+        outputDir: path.join(testDir, 'out-vlm-optional'),
+        maxRegions: 1,
+        maxVlmRegions: 1,
+        includeVlmAnalysis: true,
+        vlmPolicy: 'optional'
+      });
+
+      expect(result.vlmPolicy).toBe('optional');
+      expect(result.vlmAvailability?.usable).toBe(false);
+      expect(result.actionRequired).toBeNull();
+      expect(result.warnings).toContain('VLM analysis was requested but unavailable. Region analysis fell back to error/fallback statuses. Run vlm_health or start Ollama.');
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('j5. requireVlmAnalysis true implies required VLM policy', async () => {
+    stubUnavailableOllama();
+    try {
+      await expect(compareImages({
+        expectedImage: path.join(testDir, 'base.png'),
+        actualImage: path.join(testDir, 'multi.png'),
+        outputDir: path.join(testDir, 'out-vlm-require-legacy'),
+        includeVlmAnalysis: true,
+        requireVlmAnalysis: true
+      })).rejects.toThrow('VLM analysis is required but no configured Ollama model could be loaded.');
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('k. parses optional VLM label when returned by Ollama', async () => {
