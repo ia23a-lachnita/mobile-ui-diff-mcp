@@ -373,7 +373,7 @@ Use `discover_stable_regions` to run multiple named screens, load their actual s
 }
 ```
 
-Each suggestion includes confidence, risk, reason, a `suggestedRegion`, and whether selected tab indicators or FABs may be affected. Suggestions are never applied automatically. Cross-screen stable regions are emitted as one pasteable config suggestion per input screen until shared/global ignore regions are supported.
+Each suggestion includes confidence, risk, reason, a `suggestedRegion`, and whether selected tab indicators or FABs may be affected. Suggestions are never applied automatically. Cross-screen stable regions are emitted as normalized regions because they are derived from actual screenshots and should remain portable across devices; convert them to `coordinateSpace:"actual"` only when you intentionally want a device-specific mask. Cross-screen stable regions are emitted as one pasteable config suggestion per input screen until shared/global ignore regions are supported.
 
 ### Auto-run folders
 

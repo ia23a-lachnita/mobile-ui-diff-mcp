@@ -83,11 +83,18 @@ describe('discoverStableRegions', () => {
     });
 
     const stableRegions = result.suggestions.map((suggestion) => suggestion.suggestedRegion);
-    expect(stableRegions.some((region) => region.y === 0 && region.height >= 20)).toBe(true);
-    expect(stableRegions.some((region) => region.y >= 170 && region.y + region.height === 200)).toBe(true);
-    expect(stableRegions.some((region) => region.y > 30 && region.y < 140)).toBe(false);
+    const topRegion = stableRegions.find((region) => region.coordinateSpace === 'normalized' && region.y < 0.02);
+    const bottomRegion = stableRegions.find((region) => region.coordinateSpace === 'normalized' && region.y > 0.8);
+    expect(topRegion).toBeTruthy();
+    expect(topRegion?.x).toBe(0);
+    expect(topRegion?.width).toBe(1);
+    expect(topRegion?.coordinateSpace).toBe('normalized');
+    expect(bottomRegion).toBeTruthy();
+    expect((bottomRegion?.y ?? 0) + (bottomRegion?.height ?? 0)).toBeCloseTo(1, 5);
+    expect(bottomRegion?.coordinateSpace).toBe('normalized');
+    expect(stableRegions.some((region) => region.coordinateSpace === 'normalized' && region.y > 0.15 && region.y < 0.7)).toBe(false);
 
-    const bottomSuggestion = result.suggestions.find((suggestion) => suggestion.suggestedRegion.y >= 170);
+    const bottomSuggestion = result.suggestions.find((suggestion) => suggestion.suggestedRegion.coordinateSpace === 'normalized' && suggestion.suggestedRegion.y > 0.8);
     expect(bottomSuggestion?.mayAffectSelectedTabIndicatorsOrFabs).toBe(true);
     expect(bottomSuggestion?.risk).toContain('selected tab indicators');
 
@@ -102,15 +109,15 @@ describe('discoverStableRegions', () => {
         const screensPatch = (suggestion.suggestedPatch as any).screens ?? {};
         return screensPatch[screen.name]?.ignoreRegions ?? [];
       });
-      expect(screenRegions.some((region: any) => region.y === 0 && region.height >= 20)).toBe(true);
-      expect(screenRegions.some((region: any) => region.y >= 170 && region.y + region.height === 200)).toBe(true);
-      expect(screenRegions.some((region: any) => region.y > 30 && region.y < 140)).toBe(false);
+      expect(screenRegions.some((region: any) => region.coordinateSpace === 'normalized' && region.y < 0.02 && region.width === 1)).toBe(true);
+      expect(screenRegions.some((region: any) => region.coordinateSpace === 'normalized' && region.y > 0.8 && Math.abs((region.y + region.height) - 1) < 0.00001)).toBe(true);
+      expect(screenRegions.some((region: any) => region.coordinateSpace === 'normalized' && region.y > 0.15 && region.y < 0.7)).toBe(false);
     }
 
     const bottomConfigSuggestions = result.configSuggestions.filter((suggestion) => {
       const screensPatch = (suggestion.suggestedPatch as any).screens ?? {};
       return Object.values<any>(screensPatch).some((screenPatch) => {
-        return (screenPatch.ignoreRegions ?? []).some((region: any) => region.y >= 170);
+        return (screenPatch.ignoreRegions ?? []).some((region: any) => region.coordinateSpace === 'normalized' && region.y > 0.8);
       });
     });
     expect(bottomConfigSuggestions.length).toBeGreaterThanOrEqual(3);

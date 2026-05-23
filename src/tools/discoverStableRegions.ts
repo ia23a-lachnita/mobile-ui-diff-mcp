@@ -127,12 +127,12 @@ function findStableChromeBands(images: PNG[]): StableRegionSuggestion[] {
       const confidence = Math.min(0.95, Math.max(0.5, ratioSum / regionHeight));
       const region: IgnoreRegion = {
         x: 0,
-        y: start,
-        width,
-        height: regionHeight,
+        y: start / height,
+        width: 1,
+        height: regionHeight / height,
         reason: `Stable across captured screens: ${band.name}`,
         type: 'system',
-        coordinateSpace: 'expected'
+        coordinateSpace: 'normalized'
       };
       candidates.push(suggestionFromRegion(
         undefined,
