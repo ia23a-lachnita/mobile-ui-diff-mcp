@@ -3,7 +3,7 @@ import { ensureDir, resolveAbsolutePath } from '../utils/fs';
 import { compareImages } from './compareImages';
 import { captureAndroidScreenshot } from './captureAndroid';
 import { captureIosSimulatorScreenshot } from './captureIosSimulator';
-import { DiffReport, IgnoreRegion, PreCaptureResult, PreCaptureStep, FloorDetectionConfig, RunDelta, RegionOfInterestConfig, VisualAssertionConfig, HotspotDetectionConfig, VlmPolicy } from '../types';
+import { ConfigSuggestion, DeviceProfile, DeviceSize, DiffReport, IgnoreRegion, PreCaptureResult, PreCaptureStep, FloorDetectionConfig, RunDelta, RegionOfInterestConfig, VisualAssertionConfig, HotspotDetectionConfig, VlmPolicy } from '../types';
 import { ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 import { runPreCaptureSteps } from './preCapture';
 
@@ -21,7 +21,14 @@ export interface RunMobileUiDiffInput {
   requireVlmAnalysis?: boolean;
   vlmPolicy?: VlmPolicy;
   ignoreRegions?: IgnoreRegion[];
+  dataRegions?: IgnoreRegion[];
+  autoMaskedRegions?: IgnoreRegion[];
   preCapture?: PreCaptureStep[];
+  preCaptureDeviceSize?: DeviceSize;
+  deviceId?: string;
+  appliedDeviceProfile?: DeviceProfile | null;
+  configSuggestions?: ConfigSuggestion[];
+  appContentBounds?: { x: number; y: number; width: number; height: number; coordinateSpace?: 'normalized' | 'expected' | 'actual' };
   previousReport?: DiffReport;
   runDelta?: RunDelta;
   floorDetection?: FloorDetectionConfig;
@@ -42,9 +49,12 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
   if (!actualImagePath) {
     if (input.platform === 'android') {
       if (input.preCapture?.length) {
-        preCaptureResults = await runPreCaptureSteps(input.preCapture);
+        preCaptureResults = await runPreCaptureSteps(input.preCapture, {
+          deviceSize: input.preCaptureDeviceSize,
+          deviceId: input.deviceId
+        });
       }
-      const { outputPath } = await captureAndroidScreenshot(path.join(outputDir, 'android-current.png'));
+      const { outputPath } = await captureAndroidScreenshot(path.join(outputDir, 'android-current.png'), input.deviceId);
       actualImagePath = outputPath;
     } else if (input.platform === 'ios') {
       if (input.preCapture?.length) {
@@ -72,6 +82,11 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     vlmConfig: input.vlmConfig,
     vlmPreflight: input.vlmPreflight,
     ignoreRegions: input.ignoreRegions,
+    dataRegions: input.dataRegions,
+    autoMaskedRegions: input.autoMaskedRegions,
+    appliedDeviceProfile: input.appliedDeviceProfile,
+    configSuggestions: input.configSuggestions,
+    appContentBounds: input.appContentBounds,
     previousReport: input.previousReport,
     runDelta: input.runDelta,
     floorDetection: input.floorDetection,

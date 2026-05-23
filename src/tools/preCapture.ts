@@ -1,5 +1,5 @@
 import { execFileAsync } from '../utils/exec';
-import { PreCaptureResult, PreCaptureStep } from '../types';
+import { DeviceSize, PreCaptureResult, PreCaptureStep } from '../types';
 
 const UNSAFE_COMMAND_PATTERN = /[&|;><`$()]/;
 
@@ -18,27 +18,47 @@ function validateAdbShellCommand(command: string): string[] {
   return tokens;
 }
 
-export async function runPreCaptureSteps(steps: PreCaptureStep[]): Promise<PreCaptureResult[]> {
+export async function runPreCaptureSteps(steps: PreCaptureStep[], context: { deviceSize?: DeviceSize; deviceId?: string } = {}): Promise<PreCaptureResult[]> {
   const results: PreCaptureResult[] = [];
 
   for (const step of steps) {
-    if (step.type !== 'adbShell') {
-      throw new Error(`Unsupported preCapture type: ${step.type}`);
+    let command: string;
+    let resolved: PreCaptureResult['resolved'] | undefined;
+    if (step.type === 'adbShell') {
+      command = step.command;
+    } else if (step.type === 'adbTapNormalized') {
+      if (!context.deviceSize) {
+        throw new Error(`Cannot resolve preCapture step '${step.description}': device size is unknown.`);
+      }
+      const x = Math.round(step.x * context.deviceSize.width);
+      const y = Math.round(step.y * context.deviceSize.height);
+      command = `input tap ${x} ${y}`;
+      resolved = {
+        x,
+        y,
+        width: context.deviceSize.width,
+        height: context.deviceSize.height
+      };
+    } else {
+      throw new Error(`Unsupported preCapture type: ${(step as { type?: string }).type}`);
     }
 
-    const tokens = validateAdbShellCommand(step.command);
+    const tokens = validateAdbShellCommand(command);
     try {
-      await execFileAsync('adb', ['shell', ...tokens]);
+      const adbArgs = context.deviceId ? ['-s', context.deviceId, 'shell', ...tokens] : ['shell', ...tokens];
+      await execFileAsync('adb', adbArgs);
       results.push({
         description: step.description,
         ok: true,
-        command: step.command
+        command,
+        resolved
       });
     } catch (error: any) {
       results.push({
         description: step.description,
         ok: false,
-        command: step.command,
+        command,
+        resolved,
         error: error?.message ?? String(error)
       });
       throw new Error(`Failed preCapture step '${step.description}': ${error?.message ?? String(error)}`);

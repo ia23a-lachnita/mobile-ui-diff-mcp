@@ -6,7 +6,7 @@ import { createDiffErrorMask } from '../image/diff';
 import { detectRegions } from '../image/regions';
 import { cropAndSave } from '../image/crops';
 import { explainDiffUsingOllama, preflightOllama, resolveOllamaConfig, ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
-import { IgnoreRegion, RegionReport, DiffReport, VlmSummary, VlmAnalysis, RegionOfInterestConfig, RegionOfInterestReport, QualityFailure, PriorityFinding, VisualAssertionConfig, VisualAssertionResult, FloorDetectionConfig, RunDelta, FloorBlocker, AgentSummary, HotspotDetectionConfig, LocalHotspot, VlmPolicy, VlmAvailability, ActionRequired } from '../types';
+import { ConfigSuggestion, DeviceProfile, IgnoreRegion, RegionReport, DiffReport, VlmSummary, VlmAnalysis, RegionOfInterestConfig, RegionOfInterestReport, QualityFailure, PriorityFinding, VisualAssertionConfig, VisualAssertionResult, FloorDetectionConfig, RunDelta, FloorBlocker, AgentSummary, HotspotDetectionConfig, LocalHotspot, VlmPolicy, VlmAvailability, ActionRequired } from '../types';
 import fs from 'fs/promises';
 
 export interface CompareImagesInput {
@@ -22,6 +22,11 @@ export interface CompareImagesInput {
   requireVlmAnalysis?: boolean;
   vlmPolicy?: VlmPolicy;
   ignoreRegions?: IgnoreRegion[];
+  dataRegions?: IgnoreRegion[];
+  autoMaskedRegions?: IgnoreRegion[];
+  appliedDeviceProfile?: DeviceProfile | null;
+  configSuggestions?: ConfigSuggestion[];
+  appContentBounds?: { x: number; y: number; width: number; height: number; coordinateSpace?: 'normalized' | 'expected' | 'actual' };
   regionsOfInterest?: RegionOfInterestConfig[];
   visualAssertions?: VisualAssertionConfig[];
   previousReport?: DiffReport;
@@ -284,6 +289,10 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
   const vlmPolicy = resolveVlmPolicy({ includeVlmAnalysis, requireVlmAnalysis, vlmPolicy: input.vlmPolicy });
   const shouldUseVlm = includeVlmAnalysis && vlmPolicy !== 'disabled';
   const ignoreRegions = input.ignoreRegions ?? [];
+  const dataRegions = (input.dataRegions ?? []).map((region) => ({ ...region, type: region.type ?? 'data' as const }));
+  const explicitMaskRegions = [...ignoreRegions, ...dataRegions];
+  const autoMaskedRegions = input.autoMaskedRegions ?? [];
+  const configSuggestions: ConfigSuggestion[] = [...(input.configSuggestions ?? [])];
   const regionsOfInterestInput = input.regionsOfInterest ?? [];
   const visualAssertionsInput = input.visualAssertions ?? [];
   const previousReport = input.previousReport;
@@ -367,7 +376,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     actualPng = PNG.sync.read(pngBuffer);
   }
 
-  const normalizedIgnoreRegions = ignoreRegions.map((region) => {
+  const normalizeRegion = (region: IgnoreRegion) => {
     const coordinateSpace = region.coordinateSpace ?? 'expected';
     const sourceWidth = coordinateSpace === 'actual' ? actualSourceWidth : expectedPng.width;
     const sourceHeight = coordinateSpace === 'actual' ? actualSourceHeight : expectedPng.height;
@@ -376,10 +385,13 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       ...normalizeBox(region, expectedPng.width, expectedPng.height, coordinateSpace, sourceWidth, sourceHeight),
       coordinateSpace: 'expected' as const
     };
-  });
+  };
+  const normalizedIgnoreRegions = explicitMaskRegions.map(normalizeRegion);
+  const normalizedAutoMaskedRegions = autoMaskedRegions.map(normalizeRegion);
+  const allMaskRegions = [...normalizedIgnoreRegions, ...normalizedAutoMaskedRegions];
 
-  applyIgnoreRegions(expectedPng, normalizedIgnoreRegions);
-  applyIgnoreRegions(actualPng, normalizedIgnoreRegions);
+  applyIgnoreRegions(expectedPng, allMaskRegions);
+  applyIgnoreRegions(actualPng, allMaskRegions);
 
   const { diffImage, diffPixels, mismatchMask } = createDiffErrorMask(expectedPng, actualPng, pixelmatchThreshold);
 
@@ -423,12 +435,30 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       roi.coordinateSpace === 'actual' ? actualSourceHeight : expectedPng.height
     )
   }));
+  const normalizedAppContentBounds = input.appContentBounds
+    ? normalizeBox(
+      input.appContentBounds,
+      expectedPng.width,
+      expectedPng.height,
+      input.appContentBounds.coordinateSpace ?? 'expected',
+      input.appContentBounds.coordinateSpace === 'actual' ? actualSourceWidth : expectedPng.width,
+      input.appContentBounds.coordinateSpace === 'actual' ? actualSourceHeight : expectedPng.height
+    )
+    : null;
 
   for (const dataMask of normalizedIgnoreRegions.filter((region) => region.type === 'data')) {
     const dataMaskBox = dataMask;
     for (const roi of normalizedRois.filter((roi) => roi.critical)) {
       if (boxesIntersect(dataMaskBox, roi.box)) {
         warnings.push(`Data mask overlaps critical ROI '${roi.label}'. Verify this is intentional.`);
+      }
+    }
+  }
+
+  for (const autoMask of normalizedAutoMaskedRegions) {
+    for (const roi of normalizedRois.filter((candidate) => candidate.critical)) {
+      if (boxesIntersect(autoMask, roi.box)) {
+        warnings.push(`Auto mask overlaps critical ROI '${roi.label}'. Review autoIgnore settings before accepting this run.`);
       }
     }
   }
@@ -450,6 +480,10 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     await cropAndSave(diffAbsPath, box, diffCrop);
 
     const intersectingRois = regionIntersections(box, normalizedRois);
+    const classification: 'app' | 'artifact' = normalizedAppContentBounds && !boxesIntersect(box, normalizedAppContentBounds)
+      ? 'artifact'
+      : 'app';
+    const actionable = classification === 'app';
     const fallbackLabel = intersectingRois[0]?.label ?? geometryFallbackLabel(box, expectedPng.width, expectedPng.height);
     const fallbackDescription = intersectingRois.length > 0
       ? `This changed region intersects the configured ROI '${intersectingRois[0].label}'. Local component diff should be reviewed even without VLM.`
@@ -483,6 +517,8 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       id: regionId,
       box,
       area: box.width * box.height,
+      actionable,
+      classification,
       cropPaths: {
         expected: expCrop,
         actual: actCrop,
@@ -498,7 +534,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     const area = box.width * box.height;
     const diffDensity = countMaskPixels(mismatchMask, box) / Math.max(1, area);
     const areaPercent = area / Math.max(1, totalPixels);
-    if (hotspotDetection.enabled && areaPercent >= hotspotDetection.minAreaPercent && diffDensity >= hotspotDetection.minDiffDensity) {
+    if (actionable && hotspotDetection.enabled && areaPercent >= hotspotDetection.minAreaPercent && diffDensity >= hotspotDetection.minDiffDensity) {
       localHotspotCandidates.push({
         regionId,
         area,
@@ -517,6 +553,8 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       return b.diffDensity - a.diffDensity;
     })
     .slice(0, hotspotDetection.maxHotspots);
+  const artifactRegions = regions.filter((region) => region.actionable === false || region.classification === 'artifact');
+  const actionableRegionCount = regions.filter((region) => region.actionable !== false).length;
 
   for (const roi of normalizedRois) {
     const roiRegionId = `roi-${roi.id}`;
@@ -674,7 +712,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     }
   }
 
-  const rankedRegions = [...regions]
+  const rankedRegions = regions.filter((region) => region.actionable !== false)
     .map((region) => ({
       region,
       intersectingRois: normalizedRois.filter((roi) => boxesIntersect(region.box, roi.box))
@@ -739,6 +777,18 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     warnings.push(`Critical region '${criticalRoiFailures[0].label}' failed local diff threshold. Do not treat global diff floor as acceptable.`);
   }
 
+  if (suggestedMaxDiffPercent !== null) {
+    configSuggestions.push({
+      kind: 'ignoreRegion',
+      confidence: 0.55,
+      reason: 'Global diff appears stable and local quality gates pass, so a threshold update may be appropriate.',
+      risk: 'Medium. Raising thresholds can hide visual regressions; review artifacts first.',
+      suggestedPatch: {
+        maxDiffPercent: suggestedMaxDiffPercent
+      }
+    });
+  }
+
   const agentSummary = buildAgentSummary({
     status: diffPercent <= maxDiffPercent ? 'pass' : 'fail',
     qualityStatus,
@@ -758,6 +808,8 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     pixelmatchThreshold,
     maxDiffPercent,
     regions,
+    artifactRegions: artifactRegions.length ? artifactRegions : undefined,
+    actionableRegionCount,
     regionsOfInterest: roiCropArtifacts,
     qualityStatus,
     qualityFailures,
@@ -765,10 +817,18 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     priorityFindings,
     localHotspots,
     visualAssertions,
+    imageSizes: {
+      expected: { width: expectedPng.width, height: expectedPng.height },
+      actualSource: { width: actualSourceWidth, height: actualSourceHeight },
+      comparison: { width: expectedPng.width, height: expectedPng.height }
+    },
     atFloor: floorState.atFloor,
     floorBlockedBy: floorState.floorBlockedBy.length ? floorState.floorBlockedBy : undefined,
     floorReason: floorState.floorReason,
-    maskedRegions: ignoreRegions,
+    maskedRegions: explicitMaskRegions,
+    autoMaskedRegions: autoMaskedRegions.length ? autoMaskedRegions : undefined,
+    appliedDeviceProfile: input.appliedDeviceProfile ?? undefined,
+    configSuggestions: configSuggestions.length ? configSuggestions : undefined,
     agentSummary,
     suggestedMaxDiffPercent,
     maxDiffPercentSuggestionBlockedBy: suggestionBlockers.length ? suggestionBlockers : undefined,

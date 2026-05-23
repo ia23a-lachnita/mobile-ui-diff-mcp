@@ -8,16 +8,31 @@ export interface IgnoreRegion {
   coordinateSpace?: 'expected' | 'actual' | 'normalized';
 }
 
-export interface PreCaptureStep {
+export interface AdbShellPreCaptureStep {
   type: 'adbShell';
   command: string;
   description: string;
 }
 
+export interface AdbTapNormalizedPreCaptureStep {
+  type: 'adbTapNormalized';
+  x: number;
+  y: number;
+  description: string;
+}
+
+export type PreCaptureStep = AdbShellPreCaptureStep | AdbTapNormalizedPreCaptureStep;
+
 export interface PreCaptureResult {
   description: string;
   ok: boolean;
   command: string;
+  resolved?: {
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+  };
   error?: string;
 }
 
@@ -59,6 +74,46 @@ export interface HotspotDetectionConfig {
   maxHotspots?: number;
   minAreaPercent?: number;
   minDiffDensity?: number;
+}
+
+export interface AutoIgnoreConfig {
+  enabled?: boolean;
+  screenshotOutOfBounds?: boolean;
+  systemBars?: boolean;
+  edgePanels?: boolean;
+}
+
+export interface DeviceSize {
+  width: number;
+  height: number;
+}
+
+export interface SystemUiEstimates {
+  statusBar?: IgnoreRegion;
+  navigationBar?: IgnoreRegion;
+  rightStrip?: IgnoreRegion;
+  bottomStrip?: IgnoreRegion;
+}
+
+export interface DeviceProfile {
+  id: string;
+  serial?: string;
+  manufacturer?: string;
+  model?: string;
+  androidVersion?: string;
+  wmSize?: DeviceSize;
+  screenshotSize?: DeviceSize;
+  density?: number;
+  systemUiEstimates?: SystemUiEstimates;
+  autoIgnoreRegions?: IgnoreRegion[];
+}
+
+export interface ConfigSuggestion {
+  kind: 'deviceProfile' | 'ignoreRegion' | 'dataRegion' | 'roiUpdate' | 'preCapture';
+  confidence: number;
+  reason: string;
+  risk: string;
+  suggestedPatch: Record<string, unknown>;
 }
 
 export type VlmPolicy = 'disabled' | 'optional' | 'required' | 'ask_user';
@@ -205,6 +260,8 @@ export interface RegionReport {
   id: string;
   box: { x: number; y: number; width: number; height: number };
   area: number;
+  actionable?: boolean;
+  classification?: "app" | "system" | "artifact";
   cropPaths: {
     expected: string;
     actual: string;
@@ -248,11 +305,21 @@ export interface DiffReport {
   qualityWarnings?: string[];
   priorityFindings?: PriorityFinding[];
   localHotspots?: LocalHotspot[];
+  artifactRegions?: RegionReport[];
+  actionableRegionCount?: number;
   visualAssertions?: VisualAssertionResult[];
+  imageSizes?: {
+    expected: DeviceSize;
+    actualSource: DeviceSize;
+    comparison: DeviceSize;
+  };
   atFloor?: boolean | null;
   floorBlockedBy?: FloorBlocker[];
   floorReason?: string;
   maskedRegions?: IgnoreRegion[];
+  autoMaskedRegions?: IgnoreRegion[];
+  appliedDeviceProfile?: DeviceProfile | null;
+  configSuggestions?: ConfigSuggestion[];
   agentSummary?: AgentSummary;
   suggestedMaxDiffPercent?: number | null;
   maxDiffPercentSuggestionBlockedBy?: string[];

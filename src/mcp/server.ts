@@ -8,6 +8,8 @@ import { runMobileUiDiff } from "../tools/runMobileUiDiff";
 import { runScreenUiDiff } from "../tools/runScreenUiDiff";
 import { captureAndroidScreenshot } from "../tools/captureAndroid";
 import { captureIosSimulatorScreenshot } from "../tools/captureIosSimulator";
+import { calibrateAndroidDevice } from "../tools/androidDevice";
+import { discoverStableRegions } from "../tools/discoverStableRegions";
 import { checkOllamaHealth } from "../vlm/ollama";
 
 export const ignoreRegionSchema = z.object({
@@ -24,6 +26,18 @@ export const preCaptureSchema = z.object({
   type: z.literal('adbShell'),
   command: z.string().min(1),
   description: z.string().min(1)
+}).or(z.object({
+  type: z.literal('adbTapNormalized'),
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  description: z.string().min(1)
+}));
+
+export const autoIgnoreSchema = z.object({
+  enabled: z.boolean().optional(),
+  screenshotOutOfBounds: z.boolean().optional(),
+  systemBars: z.boolean().optional(),
+  edgePanels: z.boolean().optional()
 });
 
 export const regionOfInterestSchema = z.object({
@@ -64,6 +78,14 @@ export const hotspotDetectionSchema = z.object({
   minDiffDensity: z.number().min(0).max(1).optional()
 });
 
+export const appContentBoundsSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+  width: z.number().positive(),
+  height: z.number().positive(),
+  coordinateSpace: z.enum(['normalized', 'expected', 'actual']).optional()
+});
+
 export const vlmPolicySchema = z.enum(['disabled', 'optional', 'required', 'ask_user']);
 
 export const vlmConfigSchema = z.object({
@@ -91,6 +113,8 @@ export const compareImagesSchema = z.object({
   requireVlmAnalysis: z.boolean().optional(),
   vlmPolicy: vlmPolicySchema.optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
+  dataRegions: z.array(ignoreRegionSchema).optional(),
+  appContentBounds: appContentBoundsSchema.optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
@@ -102,6 +126,17 @@ export const compareImagesSchema = z.object({
 export const captureAndroidSchema = z.object({
   outputPath: z.string().min(1),
   deviceId: z.string().regex(/^[a-zA-Z0-9.:_-]+$/).optional()
+});
+
+export const calibrateAndroidDeviceSchema = z.object({
+  deviceId: z.string().regex(/^[a-zA-Z0-9.:_-]+$/).optional(),
+  outputDir: z.string().min(1).optional()
+});
+
+export const discoverStableRegionsSchema = z.object({
+  screenNames: z.array(z.string().min(1)).min(1),
+  configPath: z.string().min(1).optional(),
+  outputDir: z.string().min(1)
 });
 
 export const captureIosSchema = z.object({
@@ -123,7 +158,11 @@ export const runMobileUiDiffSchema = z.object({
   requireVlmAnalysis: z.boolean().optional(),
   vlmPolicy: vlmPolicySchema.optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
+  dataRegions: z.array(ignoreRegionSchema).optional(),
+  autoMaskedRegions: z.array(ignoreRegionSchema).optional(),
   preCapture: z.array(preCaptureSchema).optional(),
+  deviceId: z.string().regex(/^[a-zA-Z0-9.:_-]+$/).optional(),
+  appContentBounds: appContentBoundsSchema.optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
@@ -149,7 +188,11 @@ export const runScreenUiDiffSchema = z.object({
   vlmPolicy: vlmPolicySchema.optional(),
   vlm: vlmConfigSchema,
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
+  dataRegions: z.array(ignoreRegionSchema).optional(),
+  autoIgnore: autoIgnoreSchema.optional(),
   preCapture: z.array(preCaptureSchema).optional(),
+  deviceId: z.string().regex(/^[a-zA-Z0-9.:_-]+$/).optional(),
+  appContentBounds: appContentBoundsSchema.optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
@@ -281,6 +324,17 @@ export function getToolList() {
       }
     },
     {
+      name: "calibrate_android_device",
+      description: "Collect adb device metadata, wm size/density, screencap dimensions, system UI estimates, and non-mutating device profile suggestions.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          deviceId: { type: "string", pattern: "^[a-zA-Z0-9.:_-]+$", description: "Optional adb device ID, including TCP IDs like 192.168.1.50:5555." },
+          outputDir: { type: "string", minLength: 1, description: "Optional directory for the calibration screenshot. Defaults to a temp directory." }
+        }
+      }
+    },
+    {
       name: "capture_ios_simulator_screenshot",
       description: "Capture an iOS Simulator screenshot via simctl. Use only when you need a screenshot artifact without comparison.",
       inputSchema: {
@@ -302,6 +356,7 @@ export function getToolList() {
           expectedImage: { type: "string", minLength: 1, description: "Path to the expected design/mockup PNG." },
           actualImage: { type: "string", minLength: 1, description: "Optional path to an existing actual screenshot PNG. When using an existing actual screenshot, compare_images is preferred unless profile/run metadata is needed. Required when platform is none." },
           outputDir: { type: "string", minLength: 1, description: "Directory where screenshots, diff artifacts, and region crops will be written." },
+          deviceId: { type: "string", pattern: "^[a-zA-Z0-9.:_-]+$", description: "Optional adb device ID for Android capture and preCapture commands." },
           threshold: { type: "number", minimum: 0, maximum: 1, default: 0.1, description: "Deprecated alias for pixelmatchThreshold. Used only when pixelmatchThreshold is omitted." },
           pixelmatchThreshold: { type: "number", minimum: 0, maximum: 1, default: 0.1, description: "Color sensitivity for pixel differences. Default: 0.1." },
           maxDiffPercent: { type: "number", minimum: 0, maximum: 1, default: 0.001, description: "Maximum differing-pixel ratio allowed before failing the report. Default: 0.001." },
@@ -331,13 +386,61 @@ export function getToolList() {
             type: "array",
             description: "Safe device navigation steps to run before capture when actualImage is omitted.",
             items: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    type: { type: "string", enum: ["adbShell"] },
+                    command: { type: "string", minLength: 1 },
+                    description: { type: "string", minLength: 1 }
+                  },
+                  required: ["type", "command", "description"]
+                },
+                {
+                  type: "object",
+                  properties: {
+                    type: { type: "string", enum: ["adbTapNormalized"] },
+                    x: { type: "number", minimum: 0, maximum: 1 },
+                    y: { type: "number", minimum: 0, maximum: 1 },
+                    description: { type: "string", minLength: 1 }
+                  },
+                  required: ["type", "x", "y", "description"]
+                }
+              ]
+            }
+          },
+          autoMaskedRegions: {
+            type: "array",
+            description: "Generated masks to apply and list separately as autoMaskedRegions in the report. Prefer run_screen_ui_diff with autoIgnore/deviceProfiles.",
+            items: {
               type: "object",
               properties: {
-                type: { type: "string", enum: ["adbShell"] },
-                command: { type: "string", minLength: 1 },
-                description: { type: "string", minLength: 1 }
+                x: { type: "integer", minimum: 0 },
+                y: { type: "integer", minimum: 0 },
+                width: { type: "integer", minimum: 1 },
+                height: { type: "integer", minimum: 1 },
+                reason: { type: "string" },
+                type: { type: "string", enum: ["system", "data", "dynamic"] },
+                coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"] }
               },
-              required: ["type", "command", "description"]
+              required: ["x", "y", "width", "height"]
+            }
+          },
+          dataRegions: {
+            type: "array",
+            description: "Dynamic data regions to mask as type:data while still warning on critical ROI overlap.",
+            items: {
+              type: "object",
+              properties: {
+                x: { type: "integer", minimum: 0 },
+                y: { type: "integer", minimum: 0 },
+                width: { type: "integer", minimum: 1 },
+                height: { type: "integer", minimum: 1 },
+                reason: { type: "string" },
+                type: { type: "string", enum: ["system", "data", "dynamic"] },
+                coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"] }
+              },
+              required: ["x", "y", "width", "height"]
             }
           },
           regionsOfInterest: {
@@ -419,6 +522,7 @@ export function getToolList() {
           platform: { type: "string", enum: ["android", "ios", "none"], description: "Optional override for the screen profile platform." },
           expectedImage: { type: "string", minLength: 1, description: "Optional override for the expected design/mockup PNG." },
           outputDir: { type: "string", minLength: 1, description: "Optional override for the output directory." },
+          deviceId: { type: "string", pattern: "^[a-zA-Z0-9.:_-]+$", description: "Optional adb device ID for Android profile matching, capture, and normalized preCapture taps." },
           pixelmatchThreshold: { type: "number", minimum: 0, maximum: 1, description: "Optional override for pixelmatch threshold." },
           maxDiffPercent: { type: "number", minimum: 0, maximum: 1, description: "Optional override for maximum diff percent." },
           maxRegions: { type: "integer", minimum: 1, maximum: 500, description: "Optional override for max diff regions." },
@@ -426,17 +530,53 @@ export function getToolList() {
           includeVlmAnalysis: { type: "boolean", description: "Set true to ask local Ollama/VLM to explain each changed region. Requires Ollama or returns fallback statuses." },
           requireVlmAnalysis: { type: "boolean", description: "When true, fail early if VLM analysis is requested but no model can be loaded." },
           vlmPolicy: { type: "string", enum: ["disabled", "optional", "required", "ask_user"], description: "Optional VLM availability policy override. Defaults to disabled when includeVlmAnalysis is false, required when requireVlmAnalysis is true, otherwise ask_user when VLM is requested." },
+          autoIgnore: {
+            type: "object",
+            description: "Controls runtime-generated masks. Generated masks are reported as autoMaskedRegions and are not written to config.",
+            properties: {
+              enabled: { type: "boolean" },
+              screenshotOutOfBounds: { type: "boolean" },
+              systemBars: { type: "boolean" },
+              edgePanels: { type: "boolean" }
+            }
+          },
+          appContentBounds: {
+            type: "object",
+            description: "Optional app-owned content bounds used for stale/system artifact suggestions.",
+            properties: {
+              x: { type: "number" },
+              y: { type: "number" },
+              width: { type: "number", exclusiveMinimum: 0 },
+              height: { type: "number", exclusiveMinimum: 0 },
+              coordinateSpace: { type: "string", enum: ["normalized", "expected", "actual"] }
+            },
+            required: ["x", "y", "width", "height"]
+          },
           preCapture: {
             type: "array",
             description: "Optional preCapture override. Safe navigation steps run before capture when actualImage is omitted.",
             items: {
-              type: "object",
-              properties: {
-                type: { type: "string", enum: ["adbShell"] },
-                command: { type: "string", minLength: 1 },
-                description: { type: "string", minLength: 1 }
-              },
-              required: ["type", "command", "description"]
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    type: { type: "string", enum: ["adbShell"] },
+                    command: { type: "string", minLength: 1 },
+                    description: { type: "string", minLength: 1 }
+                  },
+                  required: ["type", "command", "description"]
+                },
+                {
+                  type: "object",
+                  properties: {
+                    type: { type: "string", enum: ["adbTapNormalized"] },
+                    x: { type: "number", minimum: 0, maximum: 1 },
+                    y: { type: "number", minimum: 0, maximum: 1 },
+                    description: { type: "string", minLength: 1 }
+                  },
+                  required: ["type", "x", "y", "description"]
+                }
+              ]
             }
           },
           regionsOfInterest: {
@@ -532,9 +672,39 @@ export function getToolList() {
               },
               required: ["x", "y", "width", "height"]
             }
+          },
+          dataRegions: {
+            type: "array",
+            description: "Optional dynamic data regions to mask as type:data while still warning on critical ROI overlap.",
+            items: {
+              type: "object",
+              properties: {
+                x: { type: "integer", minimum: 0 },
+                y: { type: "integer", minimum: 0 },
+                width: { type: "integer", minimum: 1 },
+                height: { type: "integer", minimum: 1 },
+                reason: { type: "string" },
+                type: { type: "string", enum: ["system", "data", "dynamic"] },
+                coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"] }
+              },
+              required: ["x", "y", "width", "height"]
+            }
           }
         },
         required: ["screen"]
+      }
+    },
+    {
+      name: "discover_stable_regions",
+      description: "Run named screen profiles, compare their actual screenshots across screens, and return non-mutating suggestions for stable/system chrome masks. Suggestions include confidence, risk, reason, and tab/FAB impact warnings.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          screenNames: { type: "array", minItems: 1, items: { type: "string", minLength: 1 }, description: "Screen names defined in ui-diff.config.json." },
+          configPath: { type: "string", minLength: 1, description: "Optional path to ui-diff.config.json. Defaults to ./ui-diff.config.json." },
+          outputDir: { type: "string", minLength: 1, description: "Directory where discovery run artifacts are written." }
+        },
+        required: ["screenNames", "outputDir"]
       }
     },
     {
@@ -581,6 +751,11 @@ export function createServer() {
           const result = await captureAndroidScreenshot(args.outputPath, args.deviceId);
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
+        case "calibrate_android_device": {
+          const args = calibrateAndroidDeviceSchema.parse(request.params.arguments);
+          const result = await calibrateAndroidDevice(args);
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
         case "capture_ios_simulator_screenshot": {
           const args = captureIosSchema.parse(request.params.arguments);
           const result = await captureIosSimulatorScreenshot(args.outputPath, args.simulator);
@@ -594,6 +769,11 @@ export function createServer() {
         case "run_screen_ui_diff": {
           const args = runScreenUiDiffSchema.parse(request.params.arguments);
           const result = await runScreenUiDiff(args);
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+        case "discover_stable_regions": {
+          const args = discoverStableRegionsSchema.parse(request.params.arguments);
+          const result = await discoverStableRegions(args);
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
         case "vlm_health": {

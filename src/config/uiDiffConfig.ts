@@ -16,6 +16,36 @@ export const preCaptureSchema = z.object({
   type: z.literal('adbShell'),
   command: z.string().min(1),
   description: z.string().min(1)
+}).or(z.object({
+  type: z.literal('adbTapNormalized'),
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  description: z.string().min(1)
+}));
+
+export const autoIgnoreSchema = z.object({
+  enabled: z.boolean().optional(),
+  screenshotOutOfBounds: z.boolean().optional(),
+  systemBars: z.boolean().optional(),
+  edgePanels: z.boolean().optional()
+});
+
+export const sizeSchema = z.object({
+  width: z.number().int().positive(),
+  height: z.number().int().positive()
+});
+
+export const deviceProfileSchema = z.object({
+  id: z.string().min(1),
+  serial: z.string().min(1).optional(),
+  manufacturer: z.string().optional(),
+  model: z.string().optional(),
+  androidVersion: z.string().optional(),
+  wmSize: sizeSchema.optional(),
+  screenshotSize: sizeSchema.optional(),
+  density: z.number().int().positive().optional(),
+  systemUiEstimates: z.record(z.string(), ignoreRegionSchema).optional(),
+  autoIgnoreRegions: z.array(ignoreRegionSchema).optional()
 });
 
 export const regionOfInterestSchema = z.object({
@@ -82,7 +112,16 @@ export const uiDiffScreenSchema = z.object({
   requireVlmAnalysis: z.boolean().optional(),
   vlmPolicy: vlmPolicySchema.optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
+  dataRegions: z.array(ignoreRegionSchema).optional(),
+  autoIgnore: autoIgnoreSchema.optional(),
   preCapture: z.array(preCaptureSchema).optional(),
+  appContentBounds: z.object({
+    x: z.number(),
+    y: z.number(),
+    width: z.number().positive(),
+    height: z.number().positive(),
+    coordinateSpace: z.enum(['normalized', 'expected', 'actual']).optional()
+  }).optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
@@ -91,6 +130,8 @@ export const uiDiffScreenSchema = z.object({
 });
 
 export const uiDiffConfigSchema = z.object({
+  deviceProfiles: z.record(z.string(), deviceProfileSchema).optional(),
+  autoIgnore: autoIgnoreSchema.optional(),
   screens: z.record(z.string(), uiDiffScreenSchema)
 });
 

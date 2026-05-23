@@ -163,6 +163,35 @@ Create `ui-diff.config.json` in your working directory to define reusable screen
 
 ```json
 {
+  "deviceProfiles": {
+    "SM-G780G": {
+      "id": "SM-G780G",
+      "serial": "R58N123456A",
+      "manufacturer": "Samsung",
+      "model": "SM-G780G",
+      "androidVersion": "14",
+      "wmSize": { "width": 1080, "height": 2400 },
+      "screenshotSize": { "width": 1206, "height": 2622 },
+      "density": 480,
+      "autoIgnoreRegions": [
+        {
+          "x": 1080,
+          "y": 0,
+          "width": 126,
+          "height": 2622,
+          "reason": "right-side system/edge panel outside adb wm size",
+          "type": "system",
+          "coordinateSpace": "actual"
+        }
+      ]
+    }
+  },
+  "autoIgnore": {
+    "enabled": false,
+    "screenshotOutOfBounds": true,
+    "systemBars": false,
+    "edgePanels": false
+  },
   "screens": {
     "today": {
       "platform": "android",
@@ -176,8 +205,9 @@ Create `ui-diff.config.json` in your working directory to define reusable screen
       "vlmPolicy": "ask_user",
       "preCapture": [
         {
-          "type": "adbShell",
-          "command": "input tap 108 2280",
+          "type": "adbTapNormalized",
+          "x": 0.10,
+          "y": 0.95,
           "description": "Switch to Today tab"
         }
       ],
@@ -268,6 +298,10 @@ Create `ui-diff.config.json` in your working directory to define reusable screen
 }
 ```
 
+Screen profiles are the app/design contract. Device profiles are the current screenshot environment. `run_screen_ui_diff` matches the current Android model/serial to `deviceProfiles`, merges saved device `autoIgnoreRegions` with screen `ignoreRegions`, and writes the matched profile to `report.json` as `appliedDeviceProfile`.
+
+Runtime-generated masks from `autoIgnore` are listed separately as `autoMaskedRegions`. They are never written back to `ui-diff.config.json`, and the report warns if an auto mask overlaps a critical ROI.
+
 Then run a profile with optional overrides and run-to-run delta reporting:
 
 ```json
@@ -281,7 +315,65 @@ Then run a profile with optional overrides and run-to-run delta reporting:
 }
 ```
 
-`preCapture` v1 is intentionally narrow: only `adbShell` is supported, and commands are split into argv tokens before execution. Shell metacharacters such as `&`, `|`, `;`, `>`, `<`, `` ` ``, `$`, `(`, and `)` are rejected.
+`preCapture` supports `adbShell` and normalized Android taps. `adbTapNormalized` resolves `x`/`y` against the matched device profile `wmSize` at runtime, so tab coordinates survive switching from emulator to phone. Raw `adbShell` commands are split into argv tokens before execution. Shell metacharacters such as `&`, `|`, `;`, `>`, `<`, `` ` ``, `$`, `(`, and `)` are rejected.
+
+### Device Calibration Workflow
+
+When switching devices:
+
+1. Run `calibrate_android_device`.
+2. Review the returned `deviceProfile` and `configSuggestions`.
+3. Save the reviewed profile under `deviceProfiles`.
+4. Run `run_screen_ui_diff`.
+5. Inspect `autoMaskedRegions` and `artifactRegions` in the report.
+
+`calibrate_android_device` collects adb serial, manufacturer/model, Android version, `wm size`, `wm density`, screencap PNG dimensions, system UI estimates, and screenshot-vs-wm deltas. If the screenshot is wider or taller than `wm size`, it returns a pasteable device-profile suggestion with right-strip or bottom-strip system masks. It does not auto-edit `ui-diff.config.json`.
+
+When changing screen layout:
+
+1. Update the mockup.
+2. Update ROIs/assertions.
+3. Run `run_screen_ui_diff`.
+4. Review `configSuggestions`.
+
+When dynamic data causes mismatch, prefer app fixture mode. If that is not possible, use `dataRegions` / `ignoreRegions` with `type: "data"` so the report can warn when data masks overlap critical ROIs.
+
+### Config Suggestions
+
+Reports may include:
+
+```json
+{
+  "configSuggestions": [
+    {
+      "kind": "deviceProfile",
+      "confidence": 0.8,
+      "reason": "No matching device profile was found for the current adb device.",
+      "risk": "Review generated masks before adding them.",
+      "suggestedPatch": {}
+    }
+  ]
+}
+```
+
+Suggestions are review-only. The MCP does not mutate `ui-diff.config.json`; a future explicit apply tool can own that workflow.
+
+### Stable Region Discovery
+
+Use `discover_stable_regions` to run multiple named screens, load their actual screenshot artifacts, normalize dimensions when needed, and compare pixels across screens. It returns non-mutating suggestions for stable system chrome or weak-changing chrome masks:
+
+```json
+{
+  "name": "discover_stable_regions",
+  "arguments": {
+    "screenNames": ["today", "scan", "settings"],
+    "configPath": "ui-diff.config.json",
+    "outputDir": ".ui-diff/stable-regions"
+  }
+}
+```
+
+Each suggestion includes confidence, risk, reason, a `suggestedRegion`, and whether selected tab indicators or FABs may be affected. Suggestions are never applied automatically. Cross-screen stable regions are emitted as normalized regions because they are derived from actual screenshots and should remain portable across devices; convert them to `coordinateSpace:"actual"` only when you intentionally want a device-specific mask. Cross-screen stable regions are emitted as one pasteable config suggestion per input screen until shared/global ignore regions are supported.
 
 ### Auto-run folders
 
@@ -303,6 +395,7 @@ If `runName` is omitted, the tool scans `outputDir` for existing `run-###` folde
 - If no `regionsOfInterest` or `visualAssertions` are configured, `qualityStatus` is `"not_evaluated"` and `agentSummary.canStopIterating` is `false`; a global pixel pass does not prove design parity.
 - `priorityFindings` ranks the most important problems first so agents do not have to infer importance from a long region list.
 - `localHotspots` reports the largest local changed regions even without ROIs, using `hotspotDetection` defaults of `{ "enabled": true, "maxHotspots": 3, "minAreaPercent": 0.02, "minDiffDensity": 0.10 }`.
+- When `appContentBounds` is configured, diff regions fully outside those bounds are classified as `artifact`, listed in `artifactRegions`, and excluded from `localHotspots` and high-diff `priorityFindings`. `actionableRegionCount` counts only app-actionable regions.
 - `agentSummary` gives a natural-language verdict and a `canStopIterating` flag.
 - `suggestedMaxDiffPercent` is only emitted when global diff is failing, `qualityStatus` is `"pass"`, the report is at floor, and no critical ROI or critical assertion failed. If quality is not evaluated, the suggestion is blocked.
 - `atFloor` only becomes true when floor detection has enough history and `qualityStatus` is `"pass"`.
@@ -329,7 +422,9 @@ If `runName` is omitted, the tool scans `outputDir` for existing `run-###` folde
 
 - `ignoreRegions` still masks pixels before diffing.
 - `type: "system"` is for OS chrome, `type: "data"` is for live fixture mismatches, and `type: "dynamic"` is for loading/timestamps/ads/etc.
-- Data masks behave like ignore regions for diffing, but they are also listed in `maskedRegions`.
+- Saved device profile masks are merged with screen masks and listed in `maskedRegions`.
+- Runtime `autoIgnore` masks are listed separately in `autoMaskedRegions`.
+- Data masks behave like ignore regions for diffing, and data masks that overlap critical ROIs produce warnings.
 - If a data mask overlaps a critical ROI, the report emits a warning so it cannot hide a broken component silently.
 
 ### Fallback Labels

@@ -1,10 +1,11 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { loadUiDiffConfig } from '../config/uiDiffConfig';
-import { DiffReport, IgnoreRegion, VlmConfig, PreCaptureStep, RegionOfInterestConfig, VisualAssertionConfig, FloorDetectionConfig, HotspotDetectionConfig, VlmPolicy } from '../types';
+import { AutoIgnoreConfig, BoxLike, ConfigSuggestion, DeviceProfile, DiffReport, IgnoreRegion, VlmConfig, PreCaptureStep, RegionOfInterestConfig, VisualAssertionConfig, FloorDetectionConfig, HotspotDetectionConfig, VlmPolicy } from '../types';
 import { resolveAbsolutePath } from '../utils/fs';
 import { runMobileUiDiff } from './runMobileUiDiff';
 import { preflightOllama, resolveOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
+import { buildAutoMasksFromDeviceProfile, getAndroidDeviceInfo, matchDeviceProfile } from './androidDevice';
 
 export interface RunScreenUiDiffInput {
   screen: string;
@@ -23,7 +24,11 @@ export interface RunScreenUiDiffInput {
   vlmPolicy?: VlmPolicy;
   vlm?: VlmConfig;
   ignoreRegions?: IgnoreRegion[];
+  dataRegions?: IgnoreRegion[];
+  autoIgnore?: AutoIgnoreConfig;
   preCapture?: PreCaptureStep[];
+  deviceId?: string;
+  appContentBounds?: BoxLike & { coordinateSpace?: 'normalized' | 'expected' | 'actual' };
   regionsOfInterest?: RegionOfInterestConfig[];
   visualAssertions?: VisualAssertionConfig[];
   floorDetection?: FloorDetectionConfig;
@@ -63,6 +68,69 @@ export interface RunScreenUiDiffReport extends DiffReport {
     configPath: string;
   };
   delta?: RunScreenUiDiffDelta;
+}
+
+function buildDeviceProfileSuggestion(device: Awaited<ReturnType<typeof getAndroidDeviceInfo>>): ConfigSuggestion {
+  const profile: DeviceProfile = {
+    id: device.model ?? device.serial,
+    serial: device.serial,
+    manufacturer: device.manufacturer,
+    model: device.model,
+    androidVersion: device.androidVersion,
+    wmSize: device.wmSize,
+    density: device.density,
+    autoIgnoreRegions: []
+  };
+
+  return {
+    kind: 'deviceProfile',
+    confidence: 0.8,
+    reason: 'No matching device profile was found for the current adb device.',
+    risk: 'Low. Saving a profile separates device calibration from screen visual contracts; review generated masks before adding them.',
+    suggestedPatch: {
+      deviceProfiles: {
+        [profile.id]: profile
+      }
+    }
+  };
+}
+
+function sameSize(a: { width: number; height: number } | undefined, b: { width: number; height: number } | undefined): boolean {
+  return !!a && !!b && a.width === b.width && a.height === b.height;
+}
+
+function normalizeScreenBox(
+  box: BoxLike & { coordinateSpace?: 'normalized' | 'expected' | 'actual' },
+  expectedSize: { width: number; height: number },
+  actualSize: { width: number; height: number }
+): BoxLike {
+  const coordinateSpace = box.coordinateSpace ?? 'expected';
+  if (coordinateSpace === 'normalized') {
+    return {
+      x: Math.floor(box.x * expectedSize.width),
+      y: Math.floor(box.y * expectedSize.height),
+      width: Math.ceil(box.width * expectedSize.width),
+      height: Math.ceil(box.height * expectedSize.height)
+    };
+  }
+  if (coordinateSpace === 'actual') {
+    const scaleX = expectedSize.width / Math.max(1, actualSize.width);
+    const scaleY = expectedSize.height / Math.max(1, actualSize.height);
+    return {
+      x: Math.floor(box.x * scaleX),
+      y: Math.floor(box.y * scaleY),
+      width: Math.ceil(box.width * scaleX),
+      height: Math.ceil(box.height * scaleY)
+    };
+  }
+  return box;
+}
+
+function containsBox(outer: BoxLike, inner: BoxLike): boolean {
+  return inner.x >= outer.x
+    && inner.y >= outer.y
+    && inner.x + inner.width <= outer.x + outer.width
+    && inner.y + inner.height <= outer.y + outer.height;
 }
 
 interface ReportMetrics {
@@ -194,7 +262,14 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     requireVlmAnalysis: input.requireVlmAnalysis ?? screenConfig.requireVlmAnalysis,
     vlmPolicy: input.vlmPolicy ?? screenConfig.vlmPolicy,
     ignoreRegions: input.ignoreRegions ?? screenConfig.ignoreRegions,
+    dataRegions: input.dataRegions ?? screenConfig.dataRegions,
+    autoIgnore: {
+      ...(config.autoIgnore ?? {}),
+      ...(screenConfig.autoIgnore ?? {}),
+      ...(input.autoIgnore ?? {})
+    },
     preCapture: input.preCapture ?? screenConfig.preCapture,
+    appContentBounds: input.appContentBounds ?? screenConfig.appContentBounds,
     regionsOfInterest: input.regionsOfInterest ?? screenConfig.regionsOfInterest,
     visualAssertions: input.visualAssertions ?? screenConfig.visualAssertions,
     floorDetection: input.floorDetection ?? screenConfig.floorDetection,
@@ -258,6 +333,44 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
   const resolvedRunOutputDir = resolveAbsolutePath(runOutputDir);
 
   const previous = await findPreviousRunReport(resolvedBaseOutputDir, effectiveRunName);
+  const warnings: string[] = [];
+  const configSuggestions: ConfigSuggestion[] = [];
+  let detectedDevice: Awaited<ReturnType<typeof getAndroidDeviceInfo>> | null = null;
+  let appliedDeviceProfile: DeviceProfile | null = null;
+
+  const hasNormalizedPreCapture = (merged.preCapture ?? []).some((step) => step.type === 'adbTapNormalized');
+  const needsAndroidDetection = merged.platform === 'android'
+    && (
+      !!input.deviceId
+      || hasNormalizedPreCapture
+      || !!config.deviceProfiles
+      || merged.autoIgnore.enabled === true
+    );
+
+  if (needsAndroidDetection) {
+    try {
+      detectedDevice = await getAndroidDeviceInfo(input.deviceId);
+      appliedDeviceProfile = matchDeviceProfile(config.deviceProfiles, detectedDevice);
+      if (!appliedDeviceProfile) {
+        warnings.push('No matching Android device profile found. Run calibrate_android_device and save the reviewed profile in ui-diff.config.json.');
+        configSuggestions.push(buildDeviceProfileSuggestion(detectedDevice));
+      }
+    } catch (error: any) {
+      if (!input.actualImage) {
+        warnings.push(`Could not detect Android device before capture: ${error?.message ?? String(error)}`);
+      } else {
+        warnings.push(`Could not detect Android device for profile matching: ${error?.message ?? String(error)}`);
+      }
+    }
+  }
+
+  const deviceIgnoreRegions = appliedDeviceProfile?.autoIgnoreRegions ?? [];
+  const explicitIgnoreRegions = [
+    ...deviceIgnoreRegions,
+    ...(merged.ignoreRegions ?? [])
+  ];
+  const autoMaskedRegions = buildAutoMasksFromDeviceProfile(appliedDeviceProfile, merged.autoIgnore);
+  const preCaptureDeviceSize = appliedDeviceProfile?.wmSize ?? detectedDevice?.wmSize ?? appliedDeviceProfile?.screenshotSize;
 
   const report = await runMobileUiDiff({
     platform: merged.platform,
@@ -273,8 +386,15 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     vlmPolicy: resolvedVlmPolicy,
     vlmConfig: resolvedVlmConfig,
     vlmPreflight,
-    ignoreRegions: merged.ignoreRegions,
+    ignoreRegions: explicitIgnoreRegions,
+    dataRegions: merged.dataRegions,
+    autoMaskedRegions,
+    appliedDeviceProfile,
+    configSuggestions,
+    appContentBounds: merged.appContentBounds,
     preCapture: merged.preCapture,
+    preCaptureDeviceSize,
+    deviceId: detectedDevice?.serial ?? input.deviceId,
     previousReport: previous?.report,
     runDelta: previous?.report?.delta,
     floorDetection: merged.floorDetection,
@@ -324,10 +444,83 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     }
   }
 
+  if (appliedDeviceProfile?.screenshotSize && report.imageSizes?.actualSource && !sameSize(appliedDeviceProfile.screenshotSize, report.imageSizes.actualSource)) {
+    warnings.push(`Current screenshot size ${report.imageSizes.actualSource.width}x${report.imageSizes.actualSource.height} does not match device profile '${appliedDeviceProfile.id}' screenshotSize ${appliedDeviceProfile.screenshotSize.width}x${appliedDeviceProfile.screenshotSize.height}. Run calibrate_android_device and review the profile.`);
+    configSuggestions.push({
+      kind: 'deviceProfile',
+      confidence: 0.85,
+      reason: 'The captured screenshot dimensions differ from the matched device profile.',
+      risk: 'Low. Device-level masks and normalized tap coordinates may be stale until recalibrated.',
+      suggestedPatch: {
+        deviceProfiles: {
+          [appliedDeviceProfile.id]: {
+            screenshotSize: report.imageSizes.actualSource
+          }
+        }
+      }
+    });
+  }
+
+  if (detectedDevice?.wmSize && appliedDeviceProfile?.wmSize && !sameSize(detectedDevice.wmSize, appliedDeviceProfile.wmSize)) {
+    warnings.push(`Current adb wm size ${detectedDevice.wmSize.width}x${detectedDevice.wmSize.height} does not match device profile '${appliedDeviceProfile.id}' wmSize ${appliedDeviceProfile.wmSize.width}x${appliedDeviceProfile.wmSize.height}. Run calibrate_android_device.`);
+  }
+
+  if (merged.appContentBounds && report.imageSizes?.expected && report.imageSizes.actualSource) {
+    const bounds = normalizeScreenBox(merged.appContentBounds, report.imageSizes.expected, report.imageSizes.actualSource);
+    for (const hotspot of report.localHotspots ?? []) {
+      if (!containsBox(bounds, hotspot.box)) {
+        warnings.push(`Large hotspot '${hotspot.regionId}' is outside appContentBounds and may be a system/artifact region.`);
+        configSuggestions.push({
+          kind: 'deviceProfile',
+          confidence: 0.7,
+          reason: `Hotspot '${hotspot.regionId}' falls outside appContentBounds and is labeled ${hotspot.fallbackLabel}.`,
+          risk: 'Medium. Review the crop before adding a device mask so real off-canvas app UI is not hidden.',
+          suggestedPatch: {
+            deviceProfiles: {
+              [appliedDeviceProfile?.id ?? '<deviceProfileId>']: {
+                autoIgnoreRegions: [{
+                  ...hotspot.box,
+                  reason: `Possible system/artifact region from ${input.screen}`,
+                  type: 'system',
+                  coordinateSpace: 'expected'
+                }]
+              }
+            }
+          }
+        });
+      }
+    }
+  }
+
+  for (const roi of report.regionsOfInterest ?? []) {
+    if (report.diffPercent > 0 && roi.intersectingRegionIds.length === 0 && (roi.critical || roi.weight > 1)) {
+      warnings.push(`ROI '${roi.label}' does not overlap any meaningful changed region in this run. If the screen layout changed, the ROI config may be stale.`);
+      configSuggestions.push({
+        kind: 'roiUpdate',
+        confidence: 0.45,
+        reason: `ROI '${roi.label}' had no changed-region intersections while the screen still has differences.`,
+        risk: 'Medium. A quiet ROI may be correct; update only if the component moved or resized.',
+        suggestedPatch: {
+          screens: {
+            [input.screen]: {
+              regionsOfInterest: 'review ROI boxes against current mockup and screenshot'
+            }
+          }
+        }
+      });
+    }
+  }
+
+  const mergedWarnings = [...(report.warnings ?? []), ...warnings];
+  const mergedSuggestions = [...(report.configSuggestions ?? []), ...configSuggestions]
+    .filter((suggestion, index, all) => all.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(suggestion)) === index);
+
   const finalReport: RunScreenUiDiffReport = {
     ...report,
     run,
-    delta
+    delta,
+    warnings: mergedWarnings.length ? Array.from(new Set(mergedWarnings)) : undefined,
+    configSuggestions: mergedSuggestions.length ? mergedSuggestions : undefined
   };
 
   if (autoPullEnabled) {
