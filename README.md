@@ -325,8 +325,9 @@ When switching devices:
 2. Review the returned `deviceProfile` and `configSuggestions`.
 3. Save the reviewed profile under `deviceProfiles`.
 4. Run `run_screen_ui_diff`.
+5. Inspect `autoMaskedRegions` and `artifactRegions` in the report.
 
-`calibrate_android_device` collects adb serial, manufacturer/model, Android version, `wm size`, `wm density`, screencap PNG dimensions, system UI estimates, and screenshot-vs-wm deltas. If the screenshot is wider or taller than `wm size`, it suggests right-strip or bottom-strip system masks, but does not apply them.
+`calibrate_android_device` collects adb serial, manufacturer/model, Android version, `wm size`, `wm density`, screencap PNG dimensions, system UI estimates, and screenshot-vs-wm deltas. If the screenshot is wider or taller than `wm size`, it returns a pasteable device-profile suggestion with right-strip or bottom-strip system masks. It does not auto-edit `ui-diff.config.json`.
 
 When changing screen layout:
 
@@ -359,7 +360,7 @@ Suggestions are review-only. The MCP does not mutate `ui-diff.config.json`; a fu
 
 ### Stable Region Discovery
 
-Use `discover_stable_regions` to run multiple named screens and collect non-mutating suggestions for system chrome or stable chrome masks:
+Use `discover_stable_regions` to run multiple named screens, load their actual screenshot artifacts, normalize dimensions when needed, and compare pixels across screens. It returns non-mutating suggestions for stable system chrome or weak-changing chrome masks:
 
 ```json
 {
@@ -372,7 +373,7 @@ Use `discover_stable_regions` to run multiple named screens and collect non-muta
 }
 ```
 
-Each suggestion includes confidence, risk, reason, a `suggestedRegion`, and whether selected tab indicators or FABs may be affected.
+Each suggestion includes confidence, risk, reason, a `suggestedRegion`, and whether selected tab indicators or FABs may be affected. Suggestions are never applied automatically.
 
 ### Auto-run folders
 
@@ -394,6 +395,7 @@ If `runName` is omitted, the tool scans `outputDir` for existing `run-###` folde
 - If no `regionsOfInterest` or `visualAssertions` are configured, `qualityStatus` is `"not_evaluated"` and `agentSummary.canStopIterating` is `false`; a global pixel pass does not prove design parity.
 - `priorityFindings` ranks the most important problems first so agents do not have to infer importance from a long region list.
 - `localHotspots` reports the largest local changed regions even without ROIs, using `hotspotDetection` defaults of `{ "enabled": true, "maxHotspots": 3, "minAreaPercent": 0.02, "minDiffDensity": 0.10 }`.
+- When `appContentBounds` is configured, diff regions fully outside those bounds are classified as `artifact`, listed in `artifactRegions`, and excluded from `localHotspots` and high-diff `priorityFindings`. `actionableRegionCount` counts only app-actionable regions.
 - `agentSummary` gives a natural-language verdict and a `canStopIterating` flag.
 - `suggestedMaxDiffPercent` is only emitted when global diff is failing, `qualityStatus` is `"pass"`, the report is at floor, and no critical ROI or critical assertion failed. If quality is not evaluated, the suggestion is blocked.
 - `atFloor` only becomes true when floor detection has enough history and `qualityStatus` is `"pass"`.

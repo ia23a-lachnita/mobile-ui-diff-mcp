@@ -1,0 +1,95 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { PNG } from 'pngjs';
+import fs from 'fs/promises';
+import path from 'path';
+
+const mockState = vi.hoisted(() => ({
+  reports: new Map<string, any>()
+}));
+
+vi.mock('../src/tools/runScreenUiDiff', () => ({
+  runScreenUiDiff: vi.fn(async (input: { screen: string }) => {
+    const report = mockState.reports.get(input.screen);
+    if (!report) throw new Error(`missing mock report for ${input.screen}`);
+    return report;
+  })
+}));
+
+import { discoverStableRegions } from '../src/tools/discoverStableRegions';
+
+function fill(png: PNG, x: number, y: number, width: number, height: number, color: [number, number, number]) {
+  for (let yy = y; yy < y + height; yy++) {
+    for (let xx = x; xx < x + width; xx++) {
+      const idx = (png.width * yy + xx) << 2;
+      png.data[idx] = color[0];
+      png.data[idx + 1] = color[1];
+      png.data[idx + 2] = color[2];
+      png.data[idx + 3] = 255;
+    }
+  }
+}
+
+async function writeScreen(imagePath: string, mainColor: [number, number, number]) {
+  const png = new PNG({ width: 120, height: 200 });
+  fill(png, 0, 0, 120, 20, [24, 24, 24]);
+  fill(png, 0, 20, 120, 150, mainColor);
+  fill(png, 0, 170, 120, 30, [238, 238, 238]);
+  await fs.writeFile(imagePath, PNG.sync.write(png));
+}
+
+describe('discoverStableRegions', () => {
+  const testDir = path.join(__dirname, 'stable-region-fixtures');
+
+  beforeEach(async () => {
+    mockState.reports.clear();
+    await fs.mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(testDir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  it('compares screenshots across screens and suggests stable top/bottom chrome only', async () => {
+    const screens = [
+      { name: 'today', color: [220, 80, 80] as [number, number, number] },
+      { name: 'scan', color: [80, 220, 80] as [number, number, number] },
+      { name: 'settings', color: [80, 80, 220] as [number, number, number] }
+    ];
+
+    for (const screen of screens) {
+      const actualPath = path.join(testDir, `${screen.name}.png`);
+      await writeScreen(actualPath, screen.color);
+      mockState.reports.set(screen.name, {
+        status: 'pass',
+        diffPercent: 0,
+        run: {
+          screen: screen.name,
+          reportPath: path.join(testDir, `${screen.name}-report.json`)
+        },
+        artifacts: {
+          actual: actualPath
+        },
+        imageSizes: {
+          comparison: { width: 120, height: 200 }
+        },
+        configSuggestions: []
+      });
+    }
+
+    const result = await discoverStableRegions({
+      screenNames: screens.map((screen) => screen.name),
+      outputDir: path.join(testDir, 'out')
+    });
+
+    const stableRegions = result.suggestions.map((suggestion) => suggestion.suggestedRegion);
+    expect(stableRegions.some((region) => region.y === 0 && region.height >= 20)).toBe(true);
+    expect(stableRegions.some((region) => region.y >= 170 && region.y + region.height === 200)).toBe(true);
+    expect(stableRegions.some((region) => region.y > 30 && region.y < 140)).toBe(false);
+
+    const bottomSuggestion = result.suggestions.find((suggestion) => suggestion.suggestedRegion.y >= 170);
+    expect(bottomSuggestion?.mayAffectSelectedTabIndicatorsOrFabs).toBe(true);
+    expect(bottomSuggestion?.risk).toContain('selected tab indicators');
+  });
+});
+

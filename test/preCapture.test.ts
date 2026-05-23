@@ -256,4 +256,55 @@ describe('preCapture orchestration', () => {
       appliedDeviceProfile: expect.objectContaining({ id: 'SM-G780G' })
     }));
   });
+
+  it('warns when matched device profile screenshotSize is stale', async () => {
+    (compareImages as any).mockResolvedValueOnce({
+      status: 'pass',
+      diffPixels: 0,
+      totalPixels: 1,
+      diffPercent: 0,
+      pixelmatchThreshold: 0.1,
+      maxDiffPercent: 0.1,
+      regions: [],
+      imageSizes: {
+        expected: { width: 100, height: 100 },
+        actualSource: { width: 1206, height: 2622 },
+        comparison: { width: 100, height: 100 }
+      },
+      artifacts: {
+        expected: 'expected.png',
+        actual: 'actual.png',
+        diff: 'diff.png',
+        regionsDir: 'regions'
+      }
+    });
+    await fs.writeFile(configPath, JSON.stringify({
+      deviceProfiles: {
+        'SM-G780G': {
+          id: 'SM-G780G',
+          serial: 'SERIAL123',
+          model: 'SM-G780G',
+          wmSize: { width: 1080, height: 2400 },
+          screenshotSize: { width: 100, height: 100 },
+          autoIgnoreRegions: []
+        }
+      },
+      screens: {
+        today: {
+          platform: 'android',
+          expectedImage,
+          outputDir
+        }
+      }
+    }, null, 2));
+
+    const result = await runScreenUiDiff({
+      screen: 'today',
+      configPath,
+      actualImage: expectedImage
+    });
+
+    expect(result.warnings?.some((warning) => warning.includes("does not match device profile 'SM-G780G' screenshotSize"))).toBe(true);
+    expect(result.configSuggestions?.some((suggestion) => suggestion.kind === 'deviceProfile')).toBe(true);
+  });
 });

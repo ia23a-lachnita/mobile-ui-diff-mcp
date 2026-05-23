@@ -1003,4 +1003,61 @@ describe('compareImages and Schemas', () => {
     expect(result.qualityFailures?.[0]?.type).toBe('critical_visual_assertion_failed');
     expect(result.qualityFailures?.[0]?.assertionId).toBe('center-text-local-diff');
   });
+
+  it('y. classifies regions fully outside appContentBounds as non-actionable artifacts', async () => {
+    const expected = path.join(testDir, 'artifact-expected.png');
+    const actual = path.join(testDir, 'artifact-actual.png');
+    await createSizedTestImage(expected, 120, 100, () => {});
+    await createSizedTestImage(actual, 120, 100, (png) => {
+      drawRect(png, 100, 20, 20, 20, [0, 0, 0]);
+    });
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, 'out-artifact-bounds'),
+      maxDiffPercent: 0.001,
+      hotspotDetection: {
+        enabled: true,
+        maxHotspots: 5,
+        minAreaPercent: 0.001,
+        minDiffDensity: 0.1
+      },
+      appContentBounds: { x: 0, y: 0, width: 100, height: 100 }
+    } as any);
+
+    expect(result.regions[0].classification).toBe('artifact');
+    expect(result.regions[0].actionable).toBe(false);
+    expect(result.artifactRegions?.map((region) => region.id)).toContain(result.regions[0].id);
+    expect(result.actionableRegionCount).toBe(0);
+    expect(result.localHotspots ?? []).toHaveLength(0);
+    expect(result.priorityFindings ?? []).toHaveLength(0);
+  });
+
+  it('z. warns when an auto mask overlaps a critical ROI', async () => {
+    const expected = path.join(testDir, 'auto-mask-roi-expected.png');
+    const actual = path.join(testDir, 'auto-mask-roi-actual.png');
+    await createSizedTestImage(expected, 100, 100, () => {});
+    await createSizedTestImage(actual, 100, 100, () => {});
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, 'out-auto-mask-roi'),
+      autoMaskedRegions: [
+        { x: 0, y: 0, width: 100, height: 20, reason: 'generated status bar', type: 'system', coordinateSpace: 'expected' }
+      ],
+      regionsOfInterest: [
+        {
+          id: 'header',
+          label: 'Header',
+          type: 'zone',
+          critical: true,
+          box: { x: 0, y: 0, width: 100, height: 30 }
+        }
+      ]
+    } as any);
+
+    expect(result.warnings).toContain("Auto mask overlaps critical ROI 'Header'. Review autoIgnore settings before accepting this run.");
+  });
 });

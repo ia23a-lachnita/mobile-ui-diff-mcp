@@ -26,6 +26,7 @@ export interface CompareImagesInput {
   autoMaskedRegions?: IgnoreRegion[];
   appliedDeviceProfile?: DeviceProfile | null;
   configSuggestions?: ConfigSuggestion[];
+  appContentBounds?: { x: number; y: number; width: number; height: number; coordinateSpace?: 'normalized' | 'expected' | 'actual' };
   regionsOfInterest?: RegionOfInterestConfig[];
   visualAssertions?: VisualAssertionConfig[];
   previousReport?: DiffReport;
@@ -434,6 +435,16 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       roi.coordinateSpace === 'actual' ? actualSourceHeight : expectedPng.height
     )
   }));
+  const normalizedAppContentBounds = input.appContentBounds
+    ? normalizeBox(
+      input.appContentBounds,
+      expectedPng.width,
+      expectedPng.height,
+      input.appContentBounds.coordinateSpace ?? 'expected',
+      input.appContentBounds.coordinateSpace === 'actual' ? actualSourceWidth : expectedPng.width,
+      input.appContentBounds.coordinateSpace === 'actual' ? actualSourceHeight : expectedPng.height
+    )
+    : null;
 
   for (const dataMask of normalizedIgnoreRegions.filter((region) => region.type === 'data')) {
     const dataMaskBox = dataMask;
@@ -469,6 +480,10 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     await cropAndSave(diffAbsPath, box, diffCrop);
 
     const intersectingRois = regionIntersections(box, normalizedRois);
+    const classification: 'app' | 'artifact' = normalizedAppContentBounds && !boxesIntersect(box, normalizedAppContentBounds)
+      ? 'artifact'
+      : 'app';
+    const actionable = classification === 'app';
     const fallbackLabel = intersectingRois[0]?.label ?? geometryFallbackLabel(box, expectedPng.width, expectedPng.height);
     const fallbackDescription = intersectingRois.length > 0
       ? `This changed region intersects the configured ROI '${intersectingRois[0].label}'. Local component diff should be reviewed even without VLM.`
@@ -502,6 +517,8 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       id: regionId,
       box,
       area: box.width * box.height,
+      actionable,
+      classification,
       cropPaths: {
         expected: expCrop,
         actual: actCrop,
@@ -517,7 +534,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     const area = box.width * box.height;
     const diffDensity = countMaskPixels(mismatchMask, box) / Math.max(1, area);
     const areaPercent = area / Math.max(1, totalPixels);
-    if (hotspotDetection.enabled && areaPercent >= hotspotDetection.minAreaPercent && diffDensity >= hotspotDetection.minDiffDensity) {
+    if (actionable && hotspotDetection.enabled && areaPercent >= hotspotDetection.minAreaPercent && diffDensity >= hotspotDetection.minDiffDensity) {
       localHotspotCandidates.push({
         regionId,
         area,
@@ -536,6 +553,8 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       return b.diffDensity - a.diffDensity;
     })
     .slice(0, hotspotDetection.maxHotspots);
+  const artifactRegions = regions.filter((region) => region.actionable === false || region.classification === 'artifact');
+  const actionableRegionCount = regions.filter((region) => region.actionable !== false).length;
 
   for (const roi of normalizedRois) {
     const roiRegionId = `roi-${roi.id}`;
@@ -693,7 +712,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     }
   }
 
-  const rankedRegions = [...regions]
+  const rankedRegions = regions.filter((region) => region.actionable !== false)
     .map((region) => ({
       region,
       intersectingRois: normalizedRois.filter((roi) => boxesIntersect(region.box, roi.box))
@@ -789,6 +808,8 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     pixelmatchThreshold,
     maxDiffPercent,
     regions,
+    artifactRegions: artifactRegions.length ? artifactRegions : undefined,
+    actionableRegionCount,
     regionsOfInterest: roiCropArtifacts,
     qualityStatus,
     qualityFailures,

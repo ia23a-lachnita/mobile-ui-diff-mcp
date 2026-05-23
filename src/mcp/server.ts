@@ -78,6 +78,14 @@ export const hotspotDetectionSchema = z.object({
   minDiffDensity: z.number().min(0).max(1).optional()
 });
 
+export const appContentBoundsSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+  width: z.number().positive(),
+  height: z.number().positive(),
+  coordinateSpace: z.enum(['normalized', 'expected', 'actual']).optional()
+});
+
 export const vlmPolicySchema = z.enum(['disabled', 'optional', 'required', 'ask_user']);
 
 export const vlmConfigSchema = z.object({
@@ -106,6 +114,7 @@ export const compareImagesSchema = z.object({
   vlmPolicy: vlmPolicySchema.optional(),
   ignoreRegions: z.array(ignoreRegionSchema).optional(),
   dataRegions: z.array(ignoreRegionSchema).optional(),
+  appContentBounds: appContentBoundsSchema.optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
@@ -153,6 +162,7 @@ export const runMobileUiDiffSchema = z.object({
   autoMaskedRegions: z.array(ignoreRegionSchema).optional(),
   preCapture: z.array(preCaptureSchema).optional(),
   deviceId: z.string().regex(/^[a-zA-Z0-9.:_-]+$/).optional(),
+  appContentBounds: appContentBoundsSchema.optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
@@ -182,13 +192,7 @@ export const runScreenUiDiffSchema = z.object({
   autoIgnore: autoIgnoreSchema.optional(),
   preCapture: z.array(preCaptureSchema).optional(),
   deviceId: z.string().regex(/^[a-zA-Z0-9.:_-]+$/).optional(),
-  appContentBounds: z.object({
-    x: z.number(),
-    y: z.number(),
-    width: z.number().positive(),
-    height: z.number().positive(),
-    coordinateSpace: z.enum(['normalized', 'expected', 'actual']).optional()
-  }).optional(),
+  appContentBounds: appContentBoundsSchema.optional(),
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
@@ -692,7 +696,7 @@ export function getToolList() {
     },
     {
       name: "discover_stable_regions",
-      description: "Run named screen profiles and return non-mutating suggestions for stable/system chrome masks. Suggestions include confidence, risk, reason, and tab/FAB impact warnings.",
+      description: "Run named screen profiles, compare their actual screenshots across screens, and return non-mutating suggestions for stable/system chrome masks. Suggestions include confidence, risk, reason, and tab/FAB impact warnings.",
       inputSchema: {
         type: "object",
         properties: {

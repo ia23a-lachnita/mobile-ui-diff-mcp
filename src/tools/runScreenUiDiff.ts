@@ -391,6 +391,7 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     autoMaskedRegions,
     appliedDeviceProfile,
     configSuggestions,
+    appContentBounds: merged.appContentBounds,
     preCapture: merged.preCapture,
     preCaptureDeviceSize,
     deviceId: detectedDevice?.serial ?? input.deviceId,

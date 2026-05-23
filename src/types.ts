@@ -260,6 +260,8 @@ export interface RegionReport {
   id: string;
   box: { x: number; y: number; width: number; height: number };
   area: number;
+  actionable?: boolean;
+  classification?: "app" | "system" | "artifact";
   cropPaths: {
     expected: string;
     actual: string;
@@ -303,6 +305,8 @@ export interface DiffReport {
   qualityWarnings?: string[];
   priorityFindings?: PriorityFinding[];
   localHotspots?: LocalHotspot[];
+  artifactRegions?: RegionReport[];
+  actionableRegionCount?: number;
   visualAssertions?: VisualAssertionResult[];
   imageSizes?: {
     expected: DeviceSize;

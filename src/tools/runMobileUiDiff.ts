@@ -28,6 +28,7 @@ export interface RunMobileUiDiffInput {
   deviceId?: string;
   appliedDeviceProfile?: DeviceProfile | null;
   configSuggestions?: ConfigSuggestion[];
+  appContentBounds?: { x: number; y: number; width: number; height: number; coordinateSpace?: 'normalized' | 'expected' | 'actual' };
   previousReport?: DiffReport;
   runDelta?: RunDelta;
   floorDetection?: FloorDetectionConfig;
@@ -85,6 +86,7 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     autoMaskedRegions: input.autoMaskedRegions,
     appliedDeviceProfile: input.appliedDeviceProfile,
     configSuggestions: input.configSuggestions,
+    appContentBounds: input.appContentBounds,
     previousReport: input.previousReport,
     runDelta: input.runDelta,
     floorDetection: input.floorDetection,

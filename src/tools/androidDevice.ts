@@ -154,26 +154,27 @@ function buildStripRegions(wmSize: DeviceSize | undefined, screenshotSize: Devic
   return estimates;
 }
 
-function stripSuggestions(screenName: string | undefined, estimates: SystemUiEstimates): ConfigSuggestion[] {
-  const suggestions: ConfigSuggestion[] = [];
-  for (const [key, region] of Object.entries(estimates)) {
-    if (key !== 'rightStrip' && key !== 'bottomStrip') continue;
-    suggestions.push({
-      kind: 'deviceProfile',
-      confidence: 0.9,
-      reason: `${region.reason}. This looks device-specific, not app UI.`,
-      risk: 'Low if the strip is outside app content; review before saving because it will be masked on this device profile.',
-      suggestedPatch: {
-        deviceProfiles: {
-          '<deviceProfileId>': {
-            autoIgnoreRegions: [region]
-          }
-        },
-        screen: screenName
+function screenshotVsWmRegions(estimates: SystemUiEstimates): IgnoreRegion[] {
+  return [estimates.rightStrip, estimates.bottomStrip].filter((region): region is IgnoreRegion => !!region);
+}
+
+function deviceProfileSuggestion(profileKey: string, deviceProfile: DeviceProfile, stripRegions: IgnoreRegion[]): ConfigSuggestion | null {
+  if (stripRegions.length === 0) return null;
+  const suggestedProfile: DeviceProfile = {
+    ...deviceProfile,
+    autoIgnoreRegions: stripRegions
+  };
+  return {
+    kind: 'deviceProfile',
+    confidence: 0.9,
+    reason: 'Screenshot dimensions extend beyond adb wm size. These strips look device-specific, not app UI.',
+    risk: 'Low if the strips are outside app content; review before saving because profile masks apply whenever this device profile is matched.',
+    suggestedPatch: {
+      deviceProfiles: {
+        [profileKey]: suggestedProfile
       }
-    });
-  }
-  return suggestions;
+    }
+  };
 }
 
 export async function calibrateAndroidDevice(input: { deviceId?: string; outputDir?: string } = {}): Promise<AndroidCalibrationResult> {
@@ -186,8 +187,10 @@ export async function calibrateAndroidDevice(input: { deviceId?: string; outputD
   const screenshotSize = { width: png.width, height: png.height };
   const systemUiEstimates = buildStripRegions(info.wmSize, screenshotSize);
   const modelId = info.model || info.serial;
+  const profileKey = modelId || info.serial;
+  const stripRegions = screenshotVsWmRegions(systemUiEstimates);
   const deviceProfile: DeviceProfile = {
-    id: modelId,
+    id: profileKey,
     serial: info.serial,
     manufacturer: info.manufacturer,
     model: info.model,
@@ -196,8 +199,9 @@ export async function calibrateAndroidDevice(input: { deviceId?: string; outputD
     screenshotSize,
     density: info.density,
     systemUiEstimates,
-    autoIgnoreRegions: []
+    autoIgnoreRegions: stripRegions
   };
+  const suggestion = deviceProfileSuggestion(profileKey, deviceProfile, stripRegions);
 
   return {
     adbSerial: info.serial,
@@ -213,7 +217,7 @@ export async function calibrateAndroidDevice(input: { deviceId?: string; outputD
       heightDelta: info.wmSize ? screenshotSize.height - info.wmSize.height : null
     },
     deviceProfile,
-    configSuggestions: stripSuggestions(undefined, systemUiEstimates)
+    configSuggestions: suggestion ? [suggestion] : []
   };
 }
 
@@ -264,4 +268,3 @@ export function matchDeviceProfile(
 
   return null;
 }
-
