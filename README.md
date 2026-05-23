@@ -230,7 +230,16 @@ Create `ui-diff.config.json` in your working directory to define reusable screen
           "weight": 10,
           "coordinateSpace": "normalized",
           "box": { "x": 0.18, "y": 0.16, "width": 0.64, "height": 0.28 },
-          "maxDiffPercent": 0.06
+          "maxDiffPercent": 0.06,
+          "allowedDynamicSubregions": [
+            {
+              "id": "center-kcal-value",
+              "label": "Dynamic kcal text",
+              "coordinateSpace": "roiNormalized",
+              "box": { "x": 0.35, "y": 0.35, "width": 0.30, "height": 0.20 },
+              "reason": "Live kcal value differs from static mockup"
+            }
+          ]
         },
         {
           "id": "macro-ring-center-text",
@@ -336,7 +345,7 @@ When changing screen layout:
 3. Run `run_screen_ui_diff`.
 4. Review `configSuggestions`.
 
-When dynamic data causes mismatch, prefer app fixture mode. If that is not possible, use `dataRegions` / `ignoreRegions` with `type: "data"` so the report can warn when data masks overlap critical ROIs.
+When dynamic data causes mismatch, prefer app fixture mode. If that is not possible, use ROI-scoped `allowedDynamicSubregions` for narrow dynamic text/chart/data patches inside important components. Use broad `dataRegions` / `ignoreRegions` only for screen areas that should truly be excluded from all diffing.
 
 ### Config Suggestions
 
@@ -411,6 +420,21 @@ If `runName` is omitted, the tool scans `outputDir` for existing `run-###` folde
 - `regionsOfInterest` defines component zones that get their own diff metrics and crops under `regions-of-interest/`.
 - Critical ROIs can fail the report even when the global diff looks stable.
 - `visualAssertions` currently supports `roiMaxDiffPercent` and can be extended later.
+
+### ROI-Scoped Dynamic Subregions
+
+Use `allowedDynamicSubregions` when an important ROI contains live values that can legitimately differ from a static mockup, such as kcal text, 0g macro labels, progress values, or meal names. These boxes are applied only while scoring that ROI structurally. The global diff image and broad region detection still show the raw mismatch.
+
+Each dynamic subregion supports:
+
+- `coordinateSpace: "roiNormalized"`: `box` is `0..1` relative to the parent ROI.
+- `coordinateSpace: "normalized"`: `box` is `0..1` relative to the whole comparison image.
+- `coordinateSpace: "expected"`: `box` is in expected-image pixels.
+- `coordinateSpace: "actual"`: `box` is in actual screenshot pixels before normalization.
+
+Reports include `rawRoiDiffPercent`, `structuralRoiDiffPercent`, `dynamicMaskedPercentOfRoi`, and `resolvedDynamicSubregions` for every ROI. ROI pass/fail and `roiMaxDiffPercent` assertions use `structuralRoiDiffPercent` when dynamic subregions are configured; otherwise behavior is unchanged.
+
+Keep subregions tight. Broad masks can hide real defects in stroke width, radius, spacing, clipping, typography, or card geometry. Critical ROIs warn when dynamic subregions cover more than 25% of the ROI, and fail the quality gate above 40% unless the ROI explicitly sets `allowBroadDynamicSubregions: true`.
 
 ### Floor Detection
 

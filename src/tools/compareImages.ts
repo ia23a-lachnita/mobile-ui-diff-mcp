@@ -94,6 +94,77 @@ function countMaskPixels(mask: boolean[][], box: { x: number; y: number; width: 
   return count;
 }
 
+function intersectBoxes(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  if (right <= x || bottom <= y) return null;
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+function resolveRoiDynamicSubregionBox(
+  subregion: NonNullable<RegionOfInterestConfig['allowedDynamicSubregions']>[number],
+  roiBox: { x: number; y: number; width: number; height: number },
+  targetWidth: number,
+  targetHeight: number,
+  actualSourceWidth: number,
+  actualSourceHeight: number
+) {
+  const coordinateSpace = subregion.coordinateSpace ?? 'roiNormalized';
+  const resolved = coordinateSpace === 'roiNormalized'
+    ? {
+      x: roiBox.x + Math.floor(clamp(subregion.box.x, 0, 1) * roiBox.width),
+      y: roiBox.y + Math.floor(clamp(subregion.box.y, 0, 1) * roiBox.height),
+      width: Math.max(1, Math.ceil(clamp(subregion.box.width, 0, 1) * roiBox.width)),
+      height: Math.max(1, Math.ceil(clamp(subregion.box.height, 0, 1) * roiBox.height))
+    }
+    : normalizeBox(
+      subregion.box,
+      targetWidth,
+      targetHeight,
+      coordinateSpace,
+      coordinateSpace === 'actual' ? actualSourceWidth : targetWidth,
+      coordinateSpace === 'actual' ? actualSourceHeight : targetHeight
+    );
+
+  return intersectBoxes(resolved, roiBox);
+}
+
+function countRoiPixelsWithDynamicMask(
+  mask: boolean[][],
+  roiBox: { x: number; y: number; width: number; height: number },
+  dynamicBoxes: Array<{ x: number; y: number; width: number; height: number }>
+): { rawDiffPixels: number; structuralDiffPixels: number; dynamicMaskedPixels: number; structuralTotalPixels: number } {
+  let rawDiffPixels = 0;
+  let structuralDiffPixels = 0;
+  let dynamicMaskedPixels = 0;
+  const maxY = Math.min(mask.length, roiBox.y + roiBox.height);
+
+  for (let y = Math.max(0, roiBox.y); y < maxY; y++) {
+    const row = mask[y];
+    const maxX = Math.min(row.length, roiBox.x + roiBox.width);
+    for (let x = Math.max(0, roiBox.x); x < maxX; x++) {
+      const isDynamic = dynamicBoxes.some((box) =>
+        x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height
+      );
+      if (row[x]) {
+        rawDiffPixels++;
+        if (!isDynamic) structuralDiffPixels++;
+      }
+      if (isDynamic) dynamicMaskedPixels++;
+    }
+  }
+
+  const roiArea = Math.max(1, roiBox.width * roiBox.height);
+  return {
+    rawDiffPixels,
+    structuralDiffPixels,
+    dynamicMaskedPixels,
+    structuralTotalPixels: Math.max(1, roiArea - dynamicMaskedPixels)
+  };
+}
+
 function regionIntersections(region: { x: number; y: number; width: number; height: number }, rois: Array<{ id: string; label: string; box: { x: number; y: number; width: number; height: number } }>): Array<{ id: string; label: string }> {
   return rois.filter((roi) => boxesIntersect(region, roi.box)).map((roi) => ({ id: roi.id, label: roi.label }));
 }
@@ -209,6 +280,8 @@ function buildAgentSummary(input: {
   diffPercent: number;
   criticalFailures: QualityFailure[];
   criticalAssertionFailures: QualityFailure[];
+  qualityFailures: QualityFailure[];
+  roiReports: RegionOfInterestReport[];
   priorityFindings: PriorityFinding[];
   localHotspots: LocalHotspot[];
   actionRequired: ActionRequired | null;
@@ -225,8 +298,10 @@ function buildAgentSummary(input: {
 
   if (input.criticalFailures.length > 0) {
     const label = input.criticalFailures[0].label ?? 'critical region';
+    const structural = input.criticalFailures[0].structuralRoiDiffPercent ?? input.criticalFailures[0].diffPercent;
+    const structuralText = typeof structural === 'number' ? ` Structural ROI diff is ${(structural * 100).toFixed(2)}%, likely a layout, styling, or rendering issue.` : '';
     return {
-      verdict: `Do not accept. Critical ${label} region still differs significantly from mockup.`,
+      verdict: `Do not accept. Critical ${label} region still differs significantly from mockup.${structuralText}`,
       globalDiffPercent: input.diffPercent,
       qualityStatus: input.qualityStatus,
       topAction: `Fix ${label} before considering full-screen floor.`,
@@ -245,10 +320,42 @@ function buildAgentSummary(input: {
     };
   }
 
+  if (input.qualityStatus === 'fail') {
+    const excessiveMaskFailure = input.qualityFailures.find((failure) => failure.type === 'excessive_dynamic_masking');
+    if (excessiveMaskFailure) {
+      const label = excessiveMaskFailure.label ?? excessiveMaskFailure.roiId ?? 'critical ROI';
+      const masked = excessiveMaskFailure.dynamicMaskedPercentOfRoi ?? 0;
+      return {
+        verdict: `Do not accept. Dynamic masking covers ${(masked * 100).toFixed(1)}% of ${label}, so the quality gate is not trustworthy.`,
+        globalDiffPercent: input.diffPercent,
+        qualityStatus: input.qualityStatus,
+        topAction: `Narrow dynamic subregions in ${label}, or explicitly allow broad dynamic masking only after review.`,
+        canStopIterating: false
+      };
+    }
+
+    return {
+      verdict: 'Do not accept. Local visual quality gates failed.',
+      globalDiffPercent: input.diffPercent,
+      qualityStatus: input.qualityStatus,
+      topAction: input.priorityFindings[0]?.message ?? 'Review failed ROI and visual assertion details.',
+      canStopIterating: false
+    };
+  }
+
+  const likelyDataVariance = input.roiReports.find((roi) =>
+    roi.resolvedDynamicSubregions.length > 0
+    && roi.rawRoiDiffPercent > roi.maxDiffPercent
+    && roi.structuralRoiDiffPercent <= roi.maxDiffPercent
+  );
+
   if (input.status === 'fail') {
     const topAction = input.priorityFindings[0]?.message ?? 'Reduce global diff until report passes.';
+    const varianceText = likelyDataVariance
+      ? ` ${likelyDataVariance.label} has high raw ROI diff but passes structurally after narrow dynamic masking, which points to data variance; still review global diff before accepting.`
+      : '';
     return {
-      verdict: 'Global diff still above threshold.',
+      verdict: `Global diff still above threshold.${varianceText}`,
       globalDiffPercent: input.diffPercent,
       qualityStatus: input.qualityStatus,
       topAction,
@@ -267,6 +374,16 @@ function buildAgentSummary(input: {
       qualityStatus: input.qualityStatus,
       topAction: 'Configure regionsOfInterest / visualAssertions for important components before accepting the screen.',
       canStopIterating: false
+    };
+  }
+
+  if (likelyDataVariance) {
+    return {
+      verdict: `Screen acceptable by structural gates. ${likelyDataVariance.label} has high raw ROI diff but passes after narrow dynamic masking, so the remaining mismatch is likely data variance.`,
+      globalDiffPercent: input.diffPercent,
+      qualityStatus: input.qualityStatus,
+      topAction: 'Keep iterating only if unmasked ROI geometry, typography, or spacing still looks wrong in the artifacts.',
+      canStopIterating: true
     };
   }
 
@@ -467,6 +584,8 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
 
   const roiCropArtifacts: RegionOfInterestReport[] = [];
   const localHotspotCandidates: LocalHotspot[] = [];
+  const dynamicMaskQualityFailures: QualityFailure[] = [];
+  const dynamicMaskQualityWarnings: string[] = [];
 
   for (let i = 0; i < rawRegions.length; i++) {
     const box = rawRegions[i];
@@ -565,18 +684,74 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     await cropAndSave(processedActualPath, roi.box, actCrop);
     await cropAndSave(diffAbsPath, roi.box, diffCrop);
 
-    const diffPixelsInRoi = countMaskPixels(mismatchMask, roi.box);
-    const totalPixelsInRoi = Math.max(1, roi.box.width * roi.box.height);
-    const diffPercentInRoi = diffPixelsInRoi / totalPixelsInRoi;
+    const resolvedDynamicSubregions = (roi.allowedDynamicSubregions ?? [])
+      .map((subregion) => {
+        const box = resolveRoiDynamicSubregionBox(
+          subregion,
+          roi.box,
+          expectedPng.width,
+          expectedPng.height,
+          actualSourceWidth,
+          actualSourceHeight
+        );
+        if (!box) return null;
+        return {
+          id: subregion.id,
+          label: subregion.label,
+          reason: subregion.reason,
+          coordinateSpace: 'expected' as const,
+          box
+        };
+      })
+      .filter((subregion): subregion is NonNullable<typeof subregion> => subregion !== null);
+    const totalPixelsInRoiRaw = Math.max(1, roi.box.width * roi.box.height);
+    const roiPixelCounts = countRoiPixelsWithDynamicMask(
+      mismatchMask,
+      roi.box,
+      resolvedDynamicSubregions.map((subregion) => subregion.box)
+    );
+    const diffPixelsInRoi = roiPixelCounts.structuralDiffPixels;
+    const totalPixelsInRoi = roiPixelCounts.structuralTotalPixels;
+    const rawRoiDiffPercent = roiPixelCounts.rawDiffPixels / totalPixelsInRoiRaw;
+    const structuralRoiDiffPercent = diffPixelsInRoi / totalPixelsInRoi;
+    const dynamicMaskedPercentOfRoi = roiPixelCounts.dynamicMaskedPixels / totalPixelsInRoiRaw;
     const intersectingRegionIds = regions.filter((region) => boxesIntersect(region.box, roi.box)).map((region) => region.id);
     const maxDiffPercentForRoi = roi.maxDiffPercent ?? maxDiffPercent;
-    const status: 'pass' | 'fail' = diffPercentInRoi <= maxDiffPercentForRoi ? 'pass' : 'fail';
+    const status: 'pass' | 'fail' = structuralRoiDiffPercent <= maxDiffPercentForRoi ? 'pass' : 'fail';
     const diagnostics = status === 'fail'
       ? [
-          'Critical ROI exceeds maxDiffPercent.',
-          `Large local mismatch in ${roi.label} even though global diff may be stable.`
+          'Structural ROI diff exceeds maxDiffPercent.',
+          `Large unmasked local mismatch in ${roi.label} even though global diff may be stable.`
         ]
       : ['ROI within local diff threshold.'];
+    if (resolvedDynamicSubregions.length > 0) {
+      diagnostics.push(`Raw ROI diff ${(rawRoiDiffPercent * 100).toFixed(2)}%; structural ROI diff ${(structuralRoiDiffPercent * 100).toFixed(2)}% after dynamic subregion masking.`);
+      if (rawRoiDiffPercent > maxDiffPercentForRoi && structuralRoiDiffPercent <= maxDiffPercentForRoi) {
+        diagnostics.push('High raw ROI diff with passing structural diff suggests live data variance rather than structural UI drift.');
+      }
+    }
+    if ((roi.critical ?? false) && dynamicMaskedPercentOfRoi > 0.25) {
+      const warning = `Dynamic subregions mask ${(dynamicMaskedPercentOfRoi * 100).toFixed(1)}% of critical ROI '${roi.label}'. Keep masks narrow so structural defects remain visible.`;
+      diagnostics.push(warning);
+      warnings.push(warning);
+      dynamicMaskQualityWarnings.push(warning);
+    }
+    if ((roi.critical ?? false) && dynamicMaskedPercentOfRoi > 0.40 && roi.allowBroadDynamicSubregions !== true) {
+      const warning = `Excessive dynamic masking covers ${(dynamicMaskedPercentOfRoi * 100).toFixed(1)}% of critical ROI '${roi.label}'. Quality gate is not trustworthy without allowBroadDynamicSubregions:true.`;
+      diagnostics.push(warning);
+      warnings.push(warning);
+      dynamicMaskQualityWarnings.push(warning);
+      dynamicMaskQualityFailures.push({
+        type: 'excessive_dynamic_masking',
+        roiId: roi.id,
+        label: roi.label,
+        diffPercent: structuralRoiDiffPercent,
+        rawRoiDiffPercent,
+        structuralRoiDiffPercent,
+        dynamicMaskedPercentOfRoi,
+        maxDiffPercent: maxDiffPercentForRoi
+      });
+    }
 
     roiCropArtifacts.push({
       id: roi.id,
@@ -588,12 +763,16 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       status,
       diffPixels: diffPixelsInRoi,
       totalPixels: totalPixelsInRoi,
-      diffPercent: diffPercentInRoi,
-      diffDensity: diffPercentInRoi,
+      diffPercent: structuralRoiDiffPercent,
+      rawRoiDiffPercent,
+      structuralRoiDiffPercent,
+      dynamicMaskedPercentOfRoi,
+      resolvedDynamicSubregions,
+      diffDensity: structuralRoiDiffPercent,
       maxDiffPercent: maxDiffPercentForRoi,
       intersectingRegionIds,
       diagnostics,
-      weightedScore: diffPercentInRoi * (roi.weight ?? 1),
+      weightedScore: structuralRoiDiffPercent * (roi.weight ?? 1),
       artifacts: {
         expected: expCrop,
         actual: actCrop,
@@ -616,6 +795,9 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       roiId: roi.id,
       label: roi.label,
       diffPercent: roi.diffPercent,
+      rawRoiDiffPercent: roi.rawRoiDiffPercent,
+      structuralRoiDiffPercent: roi.structuralRoiDiffPercent,
+      dynamicMaskedPercentOfRoi: roi.dynamicMaskedPercentOfRoi,
       maxDiffPercent: roi.maxDiffPercent
     }));
 
@@ -656,23 +838,32 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
 
   const criticalAssertionFailures: QualityFailure[] = visualAssertions
     .filter((assertion) => assertion.severity === 'critical' && assertion.status === 'fail')
-    .map((assertion) => ({
-      type: 'critical_visual_assertion_failed',
-      assertionId: assertion.id,
-      label: visualAssertionsInput.find((candidate) => candidate.id === assertion.id)?.roiId,
-      diffPercent: assertion.actualDiffPercent,
-      maxDiffPercent: assertion.maxDiffPercent
-    }));
+    .map((assertion) => {
+      const roiId = visualAssertionsInput.find((candidate) => candidate.id === assertion.id)?.roiId;
+      const roi = roiCropArtifacts.find((candidate) => candidate.id === roiId);
+      return {
+        type: 'critical_visual_assertion_failed',
+        assertionId: assertion.id,
+        label: roiId,
+        diffPercent: assertion.actualDiffPercent,
+        rawRoiDiffPercent: roi?.rawRoiDiffPercent,
+        structuralRoiDiffPercent: roi?.structuralRoiDiffPercent,
+        dynamicMaskedPercentOfRoi: roi?.dynamicMaskedPercentOfRoi,
+        maxDiffPercent: assertion.maxDiffPercent
+      };
+    });
 
   const qualityFailures: QualityFailure[] = [
     ...criticalRoiFailures,
-    ...criticalAssertionFailures
+    ...criticalAssertionFailures,
+    ...dynamicMaskQualityFailures
   ];
 
   const hasQualityEvaluationConfig = regionsOfInterestInput.length > 0 || visualAssertionsInput.length > 0;
   const qualityWarnings = hasQualityEvaluationConfig
     ? []
     : ['No regionsOfInterest or visualAssertions configured. Global pixel status does not prove visual parity.'];
+  qualityWarnings.push(...dynamicMaskQualityWarnings);
   if (actionRequired?.type === 'vlm_unavailable') {
     qualityWarnings.push('VLM analysis was requested but unavailable. Ask the user whether to continue without semantic analysis.');
   }
@@ -710,6 +901,19 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
         ] : []
       });
     }
+  }
+  for (const failure of dynamicMaskQualityFailures) {
+    priorityFindings.push({
+      priority: priorityFindings.length + 1,
+      kind: 'excessive_dynamic_masking',
+      label: failure.label ?? failure.roiId ?? 'critical ROI',
+      message: `Excessive dynamic mask coverage in '${failure.label ?? failure.roiId}' makes the ROI quality gate untrustworthy.`,
+      artifactPaths: failure.roiId ? [
+        path.join(roiDir, `${failure.roiId}-expected.png`),
+        path.join(roiDir, `${failure.roiId}-actual.png`),
+        path.join(roiDir, `${failure.roiId}-diff.png`)
+      ] : []
+    });
   }
 
   const rankedRegions = regions.filter((region) => region.actionable !== false)
@@ -755,6 +959,9 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
         if (failure.type === 'critical_roi_failed') {
           return `Critical ROI '${failure.label ?? failure.roiId}' failed.`;
         }
+        if (failure.type === 'excessive_dynamic_masking') {
+          return `Critical ROI '${failure.label ?? failure.roiId}' has excessive dynamic masking.`;
+        }
         return `Critical visual assertion '${failure.assertionId}' failed.`;
       })
     ]
@@ -774,7 +981,11 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
   }
 
   if (criticalRoiFailures.length > 0) {
-    warnings.push(`Critical region '${criticalRoiFailures[0].label}' failed local diff threshold. Do not treat global diff floor as acceptable.`);
+    const failure = criticalRoiFailures[0];
+    const structural = typeof failure.structuralRoiDiffPercent === 'number'
+      ? ` Structural ROI diff: ${(failure.structuralRoiDiffPercent * 100).toFixed(2)}%.`
+      : '';
+    warnings.push(`Critical region '${failure.label}' failed structural local diff threshold.${structural} Do not treat global diff floor as acceptable.`);
   }
 
   if (suggestedMaxDiffPercent !== null) {
@@ -795,6 +1006,8 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     diffPercent,
     criticalFailures: criticalRoiFailures,
     criticalAssertionFailures,
+    qualityFailures,
+    roiReports: roiCropArtifacts,
     priorityFindings,
     localHotspots,
     actionRequired

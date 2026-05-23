@@ -48,6 +48,19 @@ export const deviceProfileSchema = z.object({
   autoIgnoreRegions: z.array(ignoreRegionSchema).optional()
 });
 
+export const allowedDynamicSubregionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1).optional(),
+  coordinateSpace: z.enum(['roiNormalized', 'normalized', 'expected', 'actual']).optional(),
+  box: z.object({
+    x: z.number(),
+    y: z.number(),
+    width: z.number().positive(),
+    height: z.number().positive()
+  }),
+  reason: z.string().min(1).optional()
+});
+
 export const regionOfInterestSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
@@ -61,7 +74,9 @@ export const regionOfInterestSchema = z.object({
     width: z.number().positive(),
     height: z.number().positive()
   }),
-  maxDiffPercent: z.number().min(0).max(1).optional()
+  maxDiffPercent: z.number().min(0).max(1).optional(),
+  allowedDynamicSubregions: z.array(allowedDynamicSubregionSchema).optional(),
+  allowBroadDynamicSubregions: z.boolean().optional()
 });
 
 export const visualAssertionSchema = z.object({
