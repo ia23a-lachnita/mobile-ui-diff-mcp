@@ -296,4 +296,4 @@ For each returned region, `analysisStatus` describes the state of the VLM feedba
 - Only standard PNG files are fully supported.
 - Requires your own adb setup for Android or macOS Xcode tools simulator.
 - Defaults to Ollama at localhost:11434 using qwen2.5vl:7b, but can be overridden with OLLAMA_BASE_URL and OLLAMA_MODEL.
-- **Static Screenshots Only:** This tool compares static screenshots and does not navigate app flows. It expects the app to already be perfectly positioned on the correct screen.
+- **Limited Navigation Hooks:** This tool is not a full navigation framework. It can run limited preCapture hooks, such as safe adbShell taps, before capture. Complex multi-step navigation flows should still be handled outside the tool.
