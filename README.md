@@ -274,7 +274,7 @@ If `runName` is omitted, the tool scans `outputDir` for existing `run-###` folde
 ## Ignore Regions
 You can send `ignoreRegions` to mask system UI elements that change frequently, like the status bar or notch:
 
-If the mockup and device screenshot have different dimensions, use `coordinateSpace: "actual"` for device coordinates or `coordinateSpace: "normalized"` for proportional regions.
+When mockup and device screenshots differ in dimensions, use `coordinateSpace:'actual'` for device screenshot coordinates or `coordinateSpace:'normalized'` for proportional regions.
 
 ```json
 {
@@ -296,4 +296,4 @@ For each returned region, `analysisStatus` describes the state of the VLM feedba
 - Only standard PNG files are fully supported.
 - Requires your own adb setup for Android or macOS Xcode tools simulator.
 - Defaults to Ollama at localhost:11434 using qwen2.5vl:7b, but can be overridden with OLLAMA_BASE_URL and OLLAMA_MODEL.
-- **Limited Navigation Hooks:** This tool is not a full navigation framework. It can run limited preCapture hooks, such as safe adbShell taps, before capture. Complex multi-step navigation flows should still be handled outside the tool.
+- This tool is not a full navigation framework. It can run limited preCapture hooks, such as safe adbShell taps, before capture. Complex multi-step navigation flows should still be handled outside the tool.
