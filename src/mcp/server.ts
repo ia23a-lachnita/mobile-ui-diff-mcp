@@ -13,10 +13,10 @@ import { discoverStableRegions } from "../tools/discoverStableRegions";
 import { checkOllamaHealth } from "../vlm/ollama";
 
 export const ignoreRegionSchema = z.object({
-  x: z.number().int().nonnegative(),
-  y: z.number().int().nonnegative(),
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
+  x: z.number().nonnegative(),
+  y: z.number().nonnegative(),
+  width: z.number().positive(),
+  height: z.number().positive(),
   reason: z.string().optional(),
   type: z.enum(['system', 'data', 'dynamic']).optional(),
   coordinateSpace: z.enum(['expected', 'actual', 'normalized']).optional()
@@ -249,10 +249,10 @@ export function getToolList() {
             items: {
               type: "object",
               properties: {
-                x: { type: "integer", minimum: 0 },
-                y: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 1 },
-                height: { type: "integer", minimum: 1 },
+                x: { type: "number", minimum: 0 },
+                y: { type: "number", minimum: 0 },
+                width: { type: "number", exclusiveMinimum: 0 },
+                height: { type: "number", exclusiveMinimum: 0 },
                 reason: { type: "string", description: "Optional human-readable reason for masking this region." },
                 type: { type: "string", enum: ["system", "data", "dynamic"], description: "Mask category. system for OS chrome, data for live fixture mismatches, dynamic for loading/timestamps/ads." },
                 coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"], description: "Coordinate space used for x/y/width/height. Default: expected." }
@@ -411,10 +411,10 @@ export function getToolList() {
             items: {
               type: "object",
               properties: {
-                x: { type: "integer", minimum: 0 },
-                y: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 1 },
-                height: { type: "integer", minimum: 1 },
+                x: { type: "number", minimum: 0 },
+                y: { type: "number", minimum: 0 },
+                width: { type: "number", exclusiveMinimum: 0 },
+                height: { type: "number", exclusiveMinimum: 0 },
                 reason: { type: "string", description: "Optional human-readable reason for masking this region." },
                 type: { type: "string", enum: ["system", "data", "dynamic"], description: "Mask category. system for OS chrome, data for live fixture mismatches, dynamic for loading/timestamps/ads." },
                 coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"], description: "Coordinate space used for x/y/width/height. Default: expected." }
@@ -455,10 +455,10 @@ export function getToolList() {
             items: {
               type: "object",
               properties: {
-                x: { type: "integer", minimum: 0 },
-                y: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 1 },
-                height: { type: "integer", minimum: 1 },
+                x: { type: "number", minimum: 0 },
+                y: { type: "number", minimum: 0 },
+                width: { type: "number", exclusiveMinimum: 0 },
+                height: { type: "number", exclusiveMinimum: 0 },
                 reason: { type: "string" },
                 type: { type: "string", enum: ["system", "data", "dynamic"] },
                 coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"] }
@@ -472,10 +472,10 @@ export function getToolList() {
             items: {
               type: "object",
               properties: {
-                x: { type: "integer", minimum: 0 },
-                y: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 1 },
-                height: { type: "integer", minimum: 1 },
+                x: { type: "number", minimum: 0 },
+                y: { type: "number", minimum: 0 },
+                width: { type: "number", exclusiveMinimum: 0 },
+                height: { type: "number", exclusiveMinimum: 0 },
                 reason: { type: "string" },
                 type: { type: "string", enum: ["system", "data", "dynamic"] },
                 coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"] }
@@ -752,10 +752,10 @@ export function getToolList() {
             items: {
               type: "object",
               properties: {
-                x: { type: "integer", minimum: 0 },
-                y: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 1 },
-                height: { type: "integer", minimum: 1 },
+                x: { type: "number", minimum: 0 },
+                y: { type: "number", minimum: 0 },
+                width: { type: "number", exclusiveMinimum: 0 },
+                height: { type: "number", exclusiveMinimum: 0 },
                 reason: { type: "string", description: "Optional human-readable reason for masking this region." },
                 type: { type: "string", enum: ["system", "data", "dynamic"], description: "Mask category. system for OS chrome, data for live fixture mismatches, dynamic for loading/timestamps/ads." },
                 coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"], description: "Coordinate space used for x/y/width/height. Use coordinateSpace:\"actual\" for device screenshot coordinates. Use coordinateSpace:\"normalized\" for proportional masks. Default is \"expected\"." }
@@ -769,10 +769,10 @@ export function getToolList() {
             items: {
               type: "object",
               properties: {
-                x: { type: "integer", minimum: 0 },
-                y: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 1 },
-                height: { type: "integer", minimum: 1 },
+                x: { type: "number", minimum: 0 },
+                y: { type: "number", minimum: 0 },
+                width: { type: "number", exclusiveMinimum: 0 },
+                height: { type: "number", exclusiveMinimum: 0 },
                 reason: { type: "string" },
                 type: { type: "string", enum: ["system", "data", "dynamic"] },
                 coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"] }
@@ -891,3 +891,4 @@ export async function runServer() {
   await server.connect(transport);
   console.error("mobile-ui-diff-mcp running on stdio");
 }
+

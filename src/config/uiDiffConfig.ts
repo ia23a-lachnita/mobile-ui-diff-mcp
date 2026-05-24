@@ -3,10 +3,10 @@ import { z } from 'zod';
 import { resolveAbsolutePath } from '../utils/fs';
 
 export const ignoreRegionSchema = z.object({
-  x: z.number().int().nonnegative(),
-  y: z.number().int().nonnegative(),
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
+  x: z.number().nonnegative(),
+  y: z.number().nonnegative(),
+  width: z.number().positive(),
+  height: z.number().positive(),
   reason: z.string().optional(),
   type: z.enum(['system', 'data', 'dynamic']).optional(),
   coordinateSpace: z.enum(['expected', 'actual', 'normalized']).optional()

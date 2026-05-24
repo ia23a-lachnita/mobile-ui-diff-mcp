@@ -9,6 +9,7 @@ import {
   captureAndroidSchema,
   captureIosSchema
 } from '../src/mcp/server';
+import { uiDiffConfigSchema } from '../src/config/uiDiffConfig';
 
 async function createTestImage(p: string, draw: (png: PNG) => void) {
   const png = new PNG({ width: 100, height: 100 });
@@ -303,6 +304,36 @@ describe('compareImages and Schemas', () => {
     });
     expect(parsedRun.maxRegions).toBe(50);
     expect(parsedRun.maxVlmRegions).toBe(10);
+
+    const parsedDecimalMasks = compareImagesSchema.safeParse({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-decimal-masks'),
+      ignoreRegions: [
+        { x: 0.1, y: 0.1, width: 0.3, height: 0.2, coordinateSpace: 'normalized', type: 'system' }
+      ],
+      dataRegions: [
+        { x: 0.4, y: 0.2, width: 0.2, height: 0.1, coordinateSpace: 'normalized', type: 'data' }
+      ]
+    });
+    expect(parsedDecimalMasks.success).toBe(true);
+
+    const parsedConfigDecimalMasks = uiDiffConfigSchema.safeParse({
+      screens: {
+        home: {
+          platform: 'none',
+          expectedImage: path.join(testDir, 'base.png'),
+          outputDir: path.join(testDir, 'out-config-decimal-masks'),
+          ignoreRegions: [
+            { x: 0.1, y: 0.1, width: 0.3, height: 0.2, coordinateSpace: 'normalized', type: 'system' }
+          ],
+          dataRegions: [
+            { x: 0.4, y: 0.2, width: 0.2, height: 0.1, coordinateSpace: 'normalized', type: 'data' }
+          ]
+        }
+      }
+    });
+    expect(parsedConfigDecimalMasks.success).toBe(true);
 
     const parsedDynamicRoi = compareImagesSchema.safeParse({
       expectedImage: path.join(testDir, 'base.png'),
