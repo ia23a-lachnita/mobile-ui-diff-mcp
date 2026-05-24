@@ -1132,6 +1132,12 @@ describe('compareImages and Schemas', () => {
     expect(result.qualityStatus).toBe('pass');
     expect(result.qualityFailures).toEqual([]);
     expect(result.visualAssertions?.every((assertion) => assertion.status === 'pass')).toBe(true);
+    expect(result.visualAssertions?.[0]).toMatchObject({
+      metricUsed: 'structuralRoiDiffPercent',
+      rawRoiDiffPercent: macroRing?.rawRoiDiffPercent,
+      structuralRoiDiffPercent: macroRing?.structuralRoiDiffPercent,
+      dynamicMaskedPercentOfRoi: macroRing?.dynamicMaskedPercentOfRoi
+    });
     expect(macroRing?.rawRoiDiffPercent).toBeGreaterThan(0.04);
     expect(macroRing?.structuralRoiDiffPercent).toBeLessThanOrEqual(0.04);
     expect(macroRing?.diffPercent).toBe(macroRing?.structuralRoiDiffPercent);
@@ -1140,6 +1146,7 @@ describe('compareImages and Schemas', () => {
       id: 'center-kcal-value',
       coordinateSpace: 'expected'
     });
+    await expect(fs.stat(macroRing?.artifacts.structuralDiff ?? '')).resolves.toBeDefined();
     expect(result.agentSummary?.verdict).toContain('likely data variance');
     expect(result.agentSummary?.canStopIterating).toBe(true);
   });
@@ -1188,6 +1195,27 @@ describe('compareImages and Schemas', () => {
     expect(result.qualityWarnings?.some((warning) => warning.includes('Excessive dynamic masking'))).toBe(true);
     expect(result.agentSummary?.verdict).toContain('quality gate is not trustworthy');
     expect(result.agentSummary?.canStopIterating).toBe(false);
+
+    const persisted = JSON.parse(await fs.readFile(path.join(testDir, 'out-broad-mask', 'report.json'), 'utf-8'));
+    expect(persisted).toEqual(result);
+    expect(persisted.regionsOfInterest[0]).toMatchObject({
+      rawRoiDiffPercent: roi?.rawRoiDiffPercent,
+      structuralRoiDiffPercent: roi?.structuralRoiDiffPercent,
+      dynamicMaskedPercentOfRoi: roi?.dynamicMaskedPercentOfRoi
+    });
+    expect(persisted.regionsOfInterest[0].resolvedDynamicSubregions).toEqual([
+      {
+        id: 'too-wide',
+        reason: 'Overly broad dynamic content',
+        coordinateSpace: 'expected',
+        box: { x: 10, y: 10, width: 52, height: 80 }
+      }
+    ]);
+    expect(persisted.regionsOfInterest[0].artifacts.structuralDiff).toBeTruthy();
+    expect(persisted.qualityWarnings).toEqual(result.qualityWarnings);
+    expect(persisted.qualityFailures).toEqual(result.qualityFailures);
+    expect(persisted.qualityStatus).toBe('fail');
+    expect(persisted.agentSummary).toEqual(result.agentSummary);
   });
 
   it('x4. still fails when structural macro ring geometry differs outside the dynamic subregion', async () => {
@@ -1232,6 +1260,77 @@ describe('compareImages and Schemas', () => {
       roiId: 'macro-ring'
     });
     expect(result.agentSummary?.verdict).toContain('layout, styling, or rendering issue');
+  });
+
+  it.each([
+    {
+      coordinateSpace: 'roiNormalized',
+      box: { x: 20 / 60, y: 20 / 60, width: 20 / 60, height: 10 / 60 },
+      expectedResolved: { x: 40, y: 40, width: 20, height: 10 },
+      actualScale: 1
+    },
+    {
+      coordinateSpace: 'normalized',
+      box: { x: 0.4, y: 0.4, width: 0.2, height: 0.1 },
+      expectedResolved: { x: 40, y: 40, width: 20, height: 10 },
+      actualScale: 1
+    },
+    {
+      coordinateSpace: 'expected',
+      box: { x: 40, y: 40, width: 20, height: 10 },
+      expectedResolved: { x: 40, y: 40, width: 20, height: 10 },
+      actualScale: 1
+    },
+    {
+      coordinateSpace: 'actual',
+      box: { x: 80, y: 80, width: 40, height: 20 },
+      expectedResolved: { x: 40, y: 40, width: 20, height: 10 },
+      actualScale: 2
+    }
+  ])('x5. resolves allowedDynamicSubregions in $coordinateSpace coordinate space', async ({ coordinateSpace, box, expectedResolved, actualScale }) => {
+    const expected = path.join(testDir, `dynamic-space-${coordinateSpace}-expected.png`);
+    const actual = path.join(testDir, `dynamic-space-${coordinateSpace}-actual.png`);
+    await createSizedTestImage(expected, 100, 100, () => {});
+    if (actualScale === 2) {
+      await createSizedTestImage(actual, 200, 200, (png) => {
+        drawRect(png, 80, 80, 40, 20, [0, 0, 0]);
+      });
+    } else {
+      await createSizedTestImage(actual, 100, 100, (png) => {
+        drawRect(png, 40, 40, 20, 10, [0, 0, 0]);
+      });
+    }
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, `out-dynamic-space-${coordinateSpace}`),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'roi',
+          label: 'ROI',
+          type: 'component',
+          critical: true,
+          box: { x: 20, y: 20, width: 60, height: 60 },
+          maxDiffPercent: 0.01,
+          allowedDynamicSubregions: [
+            {
+              id: `dynamic-${coordinateSpace}`,
+              coordinateSpace,
+              box,
+              reason: 'coordinate space coverage'
+            }
+          ]
+        }
+      ]
+    } as any);
+
+    const roi = result.regionsOfInterest?.[0];
+    expect(roi?.rawRoiDiffPercent).toBeGreaterThan(0.01);
+    expect(roi?.structuralRoiDiffPercent).toBeLessThanOrEqual(0.01);
+    expect(roi?.resolvedDynamicSubregions[0].box).toEqual(expectedResolved);
+    expect(result.qualityStatus).toBe('pass');
   });
 
   it('y. classifies regions fully outside appContentBounds as non-actionable artifacts', async () => {

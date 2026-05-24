@@ -92,6 +92,10 @@ npm run compare -- --expected examples/mockups/login.png --actual examples/actua
   --maxRegions 50 \
   --maxVlmRegions 10 \
   --ignoreRegions '[{"x":0,"y":0,"width":390,"height":48}]' \
+  --dataRegions '[{"x":10,"y":20,"width":80,"height":20,"type":"data"}]' \
+  --regionsOfInterest '[{"id":"macro-ring","label":"Macro ring chart","type":"component","critical":true,"box":{"x":0.18,"y":0.16,"width":0.64,"height":0.28},"coordinateSpace":"normalized","maxDiffPercent":0.06,"allowedDynamicSubregions":[{"id":"center-kcal-value","coordinateSpace":"roiNormalized","box":{"x":0.35,"y":0.35,"width":0.30,"height":0.20}}]}]' \
+  --visualAssertions '[{"id":"macro-ring-local-diff","type":"roiMaxDiffPercent","roiId":"macro-ring","maxDiffPercent":0.06,"severity":"critical","message":"Macro ring chart differs too much."}]' \
+  --vlmPolicy optional \
   --vlm
 ```
 
@@ -433,6 +437,8 @@ Each dynamic subregion supports:
 - `coordinateSpace: "actual"`: `box` is in actual screenshot pixels before normalization.
 
 Reports include `rawRoiDiffPercent`, `structuralRoiDiffPercent`, `dynamicMaskedPercentOfRoi`, and `resolvedDynamicSubregions` for every ROI. ROI pass/fail and `roiMaxDiffPercent` assertions use `structuralRoiDiffPercent` when dynamic subregions are configured; otherwise behavior is unchanged.
+
+ROI artifacts include both the raw `diff` crop and a `structuralDiff` crop. The structural crop hides only the ROI-scoped dynamic subregions, so downstream agents can inspect the pixels that actually contributed to `structuralRoiDiffPercent`.
 
 Keep subregions tight. Broad masks can hide real defects in stroke width, radius, spacing, clipping, typography, or card geometry. Critical ROIs warn when dynamic subregions cover more than 25% of the ROI, and fail the quality gate above 40% unless the ROI explicitly sets `allowBroadDynamicSubregions: true`.
 

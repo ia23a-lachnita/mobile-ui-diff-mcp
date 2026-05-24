@@ -108,6 +108,10 @@ describe('preCapture orchestration', () => {
     expect(callOrder[0]).toContain('execFileAsync:adb shell input tap 108 2280');
     expect(callOrder[1]).toBe('captureAndroidScreenshot');
     expect(callOrder[2]).toBe('compareImages');
+
+    const persisted = JSON.parse(await fs.readFile(path.join(outputDir, 'report.json'), 'utf-8'));
+    expect(persisted).toEqual(result);
+    expect(persisted.preCapture).toEqual(result.preCapture);
   });
 
   it('skips preCapture when actualImage is already provided to mobile diff', async () => {

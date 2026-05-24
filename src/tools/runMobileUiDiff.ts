@@ -6,6 +6,7 @@ import { captureIosSimulatorScreenshot } from './captureIosSimulator';
 import { ConfigSuggestion, DeviceProfile, DeviceSize, DiffReport, IgnoreRegion, PreCaptureResult, PreCaptureStep, FloorDetectionConfig, RunDelta, RegionOfInterestConfig, VisualAssertionConfig, HotspotDetectionConfig, VlmPolicy } from '../types';
 import { ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 import { runPreCaptureSteps } from './preCapture';
+import fs from 'fs/promises';
 
 export interface RunMobileUiDiffInput {
   platform: 'android' | 'ios' | 'none';
@@ -99,5 +100,6 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     report.preCapture = preCaptureResults;
   }
 
+  await fs.writeFile(path.join(outputDir, 'report.json'), JSON.stringify(report, null, 2));
   return report;
 }

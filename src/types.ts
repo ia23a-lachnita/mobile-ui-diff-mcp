@@ -196,6 +196,10 @@ export interface VisualAssertionResult {
   severity: 'critical' | 'high' | 'medium' | 'low';
   message: string;
   actualDiffPercent?: number;
+  metricUsed?: 'structuralRoiDiffPercent';
+  rawRoiDiffPercent?: number;
+  structuralRoiDiffPercent?: number;
+  dynamicMaskedPercentOfRoi?: number;
   maxDiffPercent: number;
 }
 
@@ -237,11 +241,12 @@ export interface RegionOfInterestReport {
     expected: string;
     actual: string;
     diff: string;
+    structuralDiff?: string;
   };
 }
 
 export interface FloorBlocker {
-  type: 'critical_roi_failed' | 'critical_visual_assertion_failed' | 'quality_not_evaluated';
+  type: 'critical_roi_failed' | 'critical_visual_assertion_failed' | 'quality_not_evaluated' | 'quality_failed';
   roiId?: string;
   assertionId?: string;
   label?: string;

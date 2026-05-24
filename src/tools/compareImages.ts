@@ -8,6 +8,7 @@ import { cropAndSave } from '../image/crops';
 import { explainDiffUsingOllama, preflightOllama, resolveOllamaConfig, ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 import { ConfigSuggestion, DeviceProfile, IgnoreRegion, RegionReport, DiffReport, VlmSummary, VlmAnalysis, RegionOfInterestConfig, RegionOfInterestReport, QualityFailure, PriorityFinding, VisualAssertionConfig, VisualAssertionResult, FloorDetectionConfig, RunDelta, FloorBlocker, AgentSummary, HotspotDetectionConfig, LocalHotspot, VlmPolicy, VlmAvailability, ActionRequired } from '../types';
 import fs from 'fs/promises';
+import { PNG } from 'pngjs';
 
 export interface CompareImagesInput {
   expectedImage: string;
@@ -41,6 +42,10 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function ceilPixel(value: number): number {
+  return Math.ceil(value - 1e-9);
+}
+
 function normalizeBox(
   box: { x: number; y: number; width: number; height: number },
   targetWidth: number,
@@ -52,8 +57,8 @@ function normalizeBox(
   if (coordinateSpace === 'normalized') {
     const left = Math.floor(clamp(box.x, 0, 1) * targetWidth);
     const top = Math.floor(clamp(box.y, 0, 1) * targetHeight);
-    const right = Math.ceil(clamp(box.x + box.width, 0, 1) * targetWidth);
-    const bottom = Math.ceil(clamp(box.y + box.height, 0, 1) * targetHeight);
+    const right = ceilPixel(clamp(box.x + box.width, 0, 1) * targetWidth);
+    const bottom = ceilPixel(clamp(box.y + box.height, 0, 1) * targetHeight);
     return {
       x: clamp(left, 0, Math.max(0, targetWidth - 1)),
       y: clamp(top, 0, Math.max(0, targetHeight - 1)),
@@ -66,8 +71,8 @@ function normalizeBox(
   const scaleY = targetHeight / Math.max(1, sourceHeight);
   const left = Math.floor(box.x * scaleX);
   const top = Math.floor(box.y * scaleY);
-  const right = Math.ceil((box.x + box.width) * scaleX);
-  const bottom = Math.ceil((box.y + box.height) * scaleY);
+  const right = ceilPixel((box.x + box.width) * scaleX);
+  const bottom = ceilPixel((box.y + box.height) * scaleY);
 
   return {
     x: clamp(left, 0, Math.max(0, targetWidth - 1)),
@@ -116,8 +121,8 @@ function resolveRoiDynamicSubregionBox(
     ? {
       x: roiBox.x + Math.floor(clamp(subregion.box.x, 0, 1) * roiBox.width),
       y: roiBox.y + Math.floor(clamp(subregion.box.y, 0, 1) * roiBox.height),
-      width: Math.max(1, Math.ceil(clamp(subregion.box.width, 0, 1) * roiBox.width)),
-      height: Math.max(1, Math.ceil(clamp(subregion.box.height, 0, 1) * roiBox.height))
+      width: Math.max(1, ceilPixel(clamp(subregion.box.width, 0, 1) * roiBox.width)),
+      height: Math.max(1, ceilPixel(clamp(subregion.box.height, 0, 1) * roiBox.height))
     }
     : normalizeBox(
       subregion.box,
@@ -163,6 +168,39 @@ function countRoiPixelsWithDynamicMask(
     dynamicMaskedPixels,
     structuralTotalPixels: Math.max(1, roiArea - dynamicMaskedPixels)
   };
+}
+
+function isPointInsideAnyBox(x: number, y: number, boxes: Array<{ x: number; y: number; width: number; height: number }>): boolean {
+  return boxes.some((box) => x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height);
+}
+
+async function writeStructuralRoiDiffCrop(
+  diffImage: PNG,
+  roiBox: { x: number; y: number; width: number; height: number },
+  dynamicBoxes: Array<{ x: number; y: number; width: number; height: number }>,
+  outputPath: string
+): Promise<void> {
+  const crop = new PNG({ width: roiBox.width, height: roiBox.height });
+  for (let y = 0; y < roiBox.height; y++) {
+    for (let x = 0; x < roiBox.width; x++) {
+      const sourceX = roiBox.x + x;
+      const sourceY = roiBox.y + y;
+      const targetIdx = (crop.width * y + x) << 2;
+      if (isPointInsideAnyBox(sourceX, sourceY, dynamicBoxes)) {
+        crop.data[targetIdx] = 0;
+        crop.data[targetIdx + 1] = 0;
+        crop.data[targetIdx + 2] = 0;
+        crop.data[targetIdx + 3] = 0;
+        continue;
+      }
+      const sourceIdx = (diffImage.width * sourceY + sourceX) << 2;
+      crop.data[targetIdx] = diffImage.data[sourceIdx];
+      crop.data[targetIdx + 1] = diffImage.data[sourceIdx + 1];
+      crop.data[targetIdx + 2] = diffImage.data[sourceIdx + 2];
+      crop.data[targetIdx + 3] = diffImage.data[sourceIdx + 3];
+    }
+  }
+  await writePng(crop, outputPath);
 }
 
 function regionIntersections(region: { x: number; y: number; width: number; height: number }, rois: Array<{ id: string; label: string; box: { x: number; y: number; width: number; height: number } }>): Array<{ id: string; label: string }> {
@@ -245,6 +283,14 @@ function evaluateFloorState(input: {
       atFloor: false,
       floorBlockedBy: blockers,
       floorReason: 'Global diff is stable, but critical visual regions are still failing.'
+    };
+  }
+
+  if (input.qualityStatus === 'fail') {
+    return {
+      atFloor: false,
+      floorBlockedBy: [{ type: 'quality_failed', message: 'Local UI quality gates failed.' }],
+      floorReason: 'Local UI quality gates failed.'
     };
   }
 
@@ -680,6 +726,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     const expCrop = path.join(roiDir, `${roi.id}-expected.png`);
     const actCrop = path.join(roiDir, `${roi.id}-actual.png`);
     const diffCrop = path.join(roiDir, `${roi.id}-diff.png`);
+    const structuralDiffCrop = path.join(roiDir, `${roi.id}-structural-diff.png`);
     await cropAndSave(processedExpectedPath, roi.box, expCrop);
     await cropAndSave(processedActualPath, roi.box, actCrop);
     await cropAndSave(diffAbsPath, roi.box, diffCrop);
@@ -704,11 +751,13 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
         };
       })
       .filter((subregion): subregion is NonNullable<typeof subregion> => subregion !== null);
+    const resolvedDynamicBoxes = resolvedDynamicSubregions.map((subregion) => subregion.box);
+    await writeStructuralRoiDiffCrop(diffImage, roi.box, resolvedDynamicBoxes, structuralDiffCrop);
     const totalPixelsInRoiRaw = Math.max(1, roi.box.width * roi.box.height);
     const roiPixelCounts = countRoiPixelsWithDynamicMask(
       mismatchMask,
       roi.box,
-      resolvedDynamicSubregions.map((subregion) => subregion.box)
+      resolvedDynamicBoxes
     );
     const diffPixelsInRoi = roiPixelCounts.structuralDiffPixels;
     const totalPixelsInRoi = roiPixelCounts.structuralTotalPixels;
@@ -776,7 +825,8 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       artifacts: {
         expected: expCrop,
         actual: actCrop,
-        diff: diffCrop
+        diff: diffCrop,
+        structuralDiff: structuralDiffCrop
       }
     });
   }
@@ -832,6 +882,10 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       severity: assertion.severity,
       message: assertion.message,
       actualDiffPercent,
+      metricUsed: 'structuralRoiDiffPercent',
+      rawRoiDiffPercent: roi.rawRoiDiffPercent,
+      structuralRoiDiffPercent: roi.structuralRoiDiffPercent,
+      dynamicMaskedPercentOfRoi: roi.dynamicMaskedPercentOfRoi,
       maxDiffPercent: assertion.maxDiffPercent
     };
   });
@@ -1013,7 +1067,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     actionRequired
   });
 
-  return {
+  const report: DiffReport = {
     status: diffPercent <= maxDiffPercent ? "pass" : "fail",
     diffPixels,
     totalPixels,
@@ -1057,4 +1111,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     warnings: warnings.length ? warnings : undefined,
     vlm: vlmSummary
   };
+
+  await fs.writeFile(path.join(outputDir, 'report.json'), JSON.stringify(report, null, 2));
+  return report;
 }
