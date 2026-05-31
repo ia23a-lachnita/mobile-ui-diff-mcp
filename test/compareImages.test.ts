@@ -6,8 +6,10 @@ import { compareImages } from '../src/tools/compareImages';
 import {
   compareImagesSchema,
   runMobileUiDiffSchema,
+  runScreenUiDiffSchema,
   captureAndroidSchema,
-  captureIosSchema
+  captureIosSchema,
+  getToolList
 } from '../src/mcp/server';
 import { uiDiffConfigSchema } from '../src/config/uiDiffConfig';
 
@@ -239,6 +241,69 @@ describe('compareImages and Schemas', () => {
       preCapture: [{ type: 'adbShell', command: 'input tap 1 1', description: 'nope' }]
     } as any);
     expect(preCaptureParsed.success).toBe(false);
+  });
+
+  it('f2. MCP schemas accept normalized decimal ignore and data regions', () => {
+    const normalizedIgnoreRegion = {
+      x: 0.125,
+      y: 0.05,
+      width: 0.75,
+      height: 0.1,
+      coordinateSpace: 'normalized',
+      reason: 'normalized status chrome'
+    };
+    const normalizedDataRegion = {
+      x: 0.2,
+      y: 0.35,
+      width: 0.45,
+      height: 0.18,
+      coordinateSpace: 'normalized',
+      type: 'data',
+      reason: 'normalized live data'
+    };
+
+    expect(compareImagesSchema.safeParse({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-normalized-schema-compare'),
+      ignoreRegions: [normalizedIgnoreRegion],
+      dataRegions: [normalizedDataRegion]
+    }).success).toBe(true);
+
+    expect(runMobileUiDiffSchema.safeParse({
+      platform: 'none',
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-normalized-schema-mobile'),
+      ignoreRegions: [normalizedIgnoreRegion],
+      dataRegions: [normalizedDataRegion],
+      autoMaskedRegions: [normalizedIgnoreRegion]
+    }).success).toBe(true);
+
+    expect(runScreenUiDiffSchema.safeParse({
+      screen: 'home',
+      ignoreRegions: [normalizedIgnoreRegion],
+      dataRegions: [normalizedDataRegion]
+    }).success).toBe(true);
+  });
+
+  it('f3. public tool schemas expose mask coordinates as numbers', () => {
+    const tools = getToolList();
+    const assertMaskCoordinateTypes = (toolName: string, propertyName: string) => {
+      const tool = tools.find((candidate) => candidate.name === toolName) as any;
+      const props = tool.inputSchema.properties[propertyName].items.properties;
+      expect(props.x.type).toBe('number');
+      expect(props.y.type).toBe('number');
+      expect(props.width.type).toBe('number');
+      expect(props.height.type).toBe('number');
+    };
+
+    assertMaskCoordinateTypes('compare_images', 'ignoreRegions');
+    assertMaskCoordinateTypes('run_mobile_ui_diff', 'ignoreRegions');
+    assertMaskCoordinateTypes('run_mobile_ui_diff', 'dataRegions');
+    assertMaskCoordinateTypes('run_mobile_ui_diff', 'autoMaskedRegions');
+    assertMaskCoordinateTypes('run_screen_ui_diff', 'ignoreRegions');
+    assertMaskCoordinateTypes('run_screen_ui_diff', 'dataRegions');
   });
 
   it('g. Ollama fallback returns structured fallback status', async () => {
@@ -1397,6 +1462,7 @@ describe('compareImages and Schemas', () => {
       type: 'invalid_capture',
       severity: 'blocking'
     });
+    expect(result.status).toBe('fail');
     expect(result.qualityStatus).toBe('fail');
     expect(result.qualityWarnings).toContain('Actual screenshot appears invalid or asleep. Recapture before trusting ROI, VLM, or quality analysis.');
     expect(result.agentSummary?.canStopIterating).toBe(false);

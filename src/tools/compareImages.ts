@@ -1138,8 +1138,12 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     });
   }
 
+  const reportStatus: DiffReport['status'] = invalidCapture.invalid
+    ? 'fail'
+    : (diffPercent <= maxDiffPercent ? 'pass' : 'fail');
+
   const agentSummary = buildAgentSummary({
-    status: diffPercent <= maxDiffPercent ? 'pass' : 'fail',
+    status: reportStatus,
     qualityStatus,
     diffPercent,
     criticalFailures: criticalRoiFailures,
@@ -1152,7 +1156,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
   });
 
   const report: DiffReport = {
-    status: diffPercent <= maxDiffPercent ? "pass" : "fail",
+    status: reportStatus,
     diffPixels,
     totalPixels,
     diffPercent,
