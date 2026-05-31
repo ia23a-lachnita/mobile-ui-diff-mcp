@@ -74,6 +74,21 @@ When `vlmPolicy` is `"ask_user"` and VLM is unavailable, reports include:
 
 Claude Code instruction: If `actionRequired.type === "vlm_unavailable"`, stop and ask the user. Do not treat the report as final visual parity.
 
+If the actual screenshot appears black/asleep/invalid before ROI or VLM analysis, reports include:
+
+```json
+{
+  "actionRequired": {
+    "type": "invalid_capture",
+    "severity": "blocking",
+    "message": "Actual screenshot appears invalid or asleep."
+  },
+  "qualityStatus": "fail"
+}
+```
+
+Claude Code instruction: If `actionRequired.type === "invalid_capture"`, wake/unlock the device or simulator, foreground the target screen, and recapture. Do not accept ROI, VLM, or quality results from the invalid capture.
+
 ## Installation & Build
 
 ```sh

@@ -251,6 +251,59 @@ function buildVlmUnavailableActionRequired(): ActionRequired {
   };
 }
 
+function buildInvalidCaptureActionRequired(): ActionRequired {
+  return {
+    type: 'invalid_capture',
+    severity: 'blocking',
+    message: 'Actual screenshot appears invalid or asleep.',
+    recommendedUserPrompt: 'Wake and unlock the device or simulator, navigate to the target screen, and recapture before judging visual quality.',
+    suggestedFixes: [
+      'Wake/unlock the device or simulator and rerun capture.',
+      'Verify the app is foregrounded on the target screen.',
+      'If this was an intentional all-black screen, provide a valid actualImage artifact after confirming the expected UI state.'
+    ]
+  };
+}
+
+function detectInvalidActualCapture(png: PNG): { invalid: boolean; reason?: string } {
+  const totalPixels = Math.max(1, png.width * png.height);
+  let luminanceSum = 0;
+  let luminanceSqSum = 0;
+  let visiblePixels = 0;
+  let brightPixels = 0;
+
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      const idx = (png.width * y + x) << 2;
+      const alpha = png.data[idx + 3] / 255;
+      const luminance = (
+        0.2126 * png.data[idx]
+        + 0.7152 * png.data[idx + 1]
+        + 0.0722 * png.data[idx + 2]
+      ) * alpha;
+      luminanceSum += luminance;
+      luminanceSqSum += luminance * luminance;
+      if (luminance > 16) visiblePixels++;
+      if (luminance > 32) brightPixels++;
+    }
+  }
+
+  const mean = luminanceSum / totalPixels;
+  const variance = Math.max(0, (luminanceSqSum / totalPixels) - mean * mean);
+  const standardDeviation = Math.sqrt(variance);
+  const visibleRatio = visiblePixels / totalPixels;
+  const brightRatio = brightPixels / totalPixels;
+
+  if (mean <= 8 && standardDeviation <= 6 && brightRatio < 0.002) {
+    return { invalid: true, reason: 'near-black screenshot with almost no visible detail' };
+  }
+  if (visibleRatio < 0.005 && standardDeviation <= 8) {
+    return { invalid: true, reason: 'screenshot has too few visible pixels to trust' };
+  }
+
+  return { invalid: false };
+}
+
 function evaluateFloorState(input: {
   floorDetection?: FloorDetectionConfig;
   runDelta?: RunDelta;
@@ -482,7 +535,23 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     selectedModel: shouldUseVlm ? vlmConfig.model : null
   };
 
-  if (shouldUseVlm) {
+  await ensureDir(outputDir);
+  await ensureDir(regionsDir);
+  await ensureDir(roiDir);
+
+  const expectedAbsPath = resolveAbsolutePath(input.expectedImage);
+  const actualAbsPath = resolveAbsolutePath(input.actualImage);
+
+  const expectedPng = await loadImageAsPng(expectedAbsPath);
+  let actualPng = await loadImageAsPng(actualAbsPath);
+  const actualSourceWidth = actualPng.width;
+  const actualSourceHeight = actualPng.height;
+  const invalidCapture = detectInvalidActualCapture(actualPng);
+  if (invalidCapture.invalid) {
+    actionRequired = buildInvalidCaptureActionRequired();
+  }
+
+  if (shouldUseVlm && !invalidCapture.invalid) {
     if (!vlmPreflight) {
       vlmPreflight = await preflightOllama(vlmConfig, true);
     }
@@ -516,18 +585,6 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       vlmSummary.warnings.push(vlmUnavailableWarning);
     }
   }
-
-  await ensureDir(outputDir);
-  await ensureDir(regionsDir);
-  await ensureDir(roiDir);
-
-  const expectedAbsPath = resolveAbsolutePath(input.expectedImage);
-  const actualAbsPath = resolveAbsolutePath(input.actualImage);
-
-  const expectedPng = await loadImageAsPng(expectedAbsPath);
-  let actualPng = await loadImageAsPng(actualAbsPath);
-  const actualSourceWidth = actualPng.width;
-  const actualSourceHeight = actualPng.height;
 
   if (expectedPng.width !== actualPng.width || expectedPng.height !== actualPng.height) {
     // Resize actual image
@@ -632,6 +689,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
   const localHotspotCandidates: LocalHotspot[] = [];
   const dynamicMaskQualityFailures: QualityFailure[] = [];
   const dynamicMaskQualityWarnings: string[] = [];
+  const nonCriticalRoiQualityWarnings: string[] = [];
 
   for (let i = 0; i < rawRegions.length; i++) {
     const box = rawRegions[i];
@@ -657,7 +715,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     let analysis: VlmAnalysis | null = null;
     let analysisStatus: "skipped" | "ok" | "fallback" | "error" = "skipped";
     
-    if (shouldUseVlm && vlmCandidates.has(box)) {
+    if (shouldUseVlm && !invalidCapture.invalid && vlmCandidates.has(box)) {
      if (vlmPreflight?.available && vlmPreflight.selectedModel) {
        const ollamaResult = await explainDiffUsingOllama(expCrop, actCrop, diffCrop, {
          baseUrl: vlmConfig.baseUrl,
@@ -767,6 +825,9 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     const intersectingRegionIds = regions.filter((region) => boxesIntersect(region.box, roi.box)).map((region) => region.id);
     const maxDiffPercentForRoi = roi.maxDiffPercent ?? maxDiffPercent;
     const status: 'pass' | 'fail' = structuralRoiDiffPercent <= maxDiffPercentForRoi ? 'pass' : 'fail';
+    if ((roi.critical ?? false) === false && status === 'fail') {
+      nonCriticalRoiQualityWarnings.push(`Non-critical ROI '${roi.label}' failed local diff threshold while qualityStatus remains pass. Review the ROI before accepting visual parity.`);
+    }
     const diagnostics = status === 'fail'
       ? [
           'Structural ROI diff exceeds maxDiffPercent.',
@@ -785,21 +846,24 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       warnings.push(warning);
       dynamicMaskQualityWarnings.push(warning);
     }
-    if ((roi.critical ?? false) && dynamicMaskedPercentOfRoi > 0.40 && roi.allowBroadDynamicSubregions !== true) {
-      const warning = `Excessive dynamic masking covers ${(dynamicMaskedPercentOfRoi * 100).toFixed(1)}% of critical ROI '${roi.label}'. Quality gate is not trustworthy without allowBroadDynamicSubregions:true.`;
+    if (dynamicMaskedPercentOfRoi > 0.40) {
+      const roiImportance = (roi.critical ?? false) ? 'critical' : 'non-critical';
+      const warning = `Excessive dynamic masking covers ${(dynamicMaskedPercentOfRoi * 100).toFixed(1)}% of ${roiImportance} ROI '${roi.label}'. Quality gate is not trustworthy without allowBroadDynamicSubregions:true.`;
       diagnostics.push(warning);
       warnings.push(warning);
       dynamicMaskQualityWarnings.push(warning);
-      dynamicMaskQualityFailures.push({
-        type: 'excessive_dynamic_masking',
-        roiId: roi.id,
-        label: roi.label,
-        diffPercent: structuralRoiDiffPercent,
-        rawRoiDiffPercent,
-        structuralRoiDiffPercent,
-        dynamicMaskedPercentOfRoi,
-        maxDiffPercent: maxDiffPercentForRoi
-      });
+      if ((roi.critical ?? false) && roi.allowBroadDynamicSubregions !== true) {
+        dynamicMaskQualityFailures.push({
+          type: 'excessive_dynamic_masking',
+          roiId: roi.id,
+          label: roi.label,
+          diffPercent: structuralRoiDiffPercent,
+          rawRoiDiffPercent,
+          structuralRoiDiffPercent,
+          dynamicMaskedPercentOfRoi,
+          maxDiffPercent: maxDiffPercentForRoi
+        });
+      }
     }
 
     roiCropArtifacts.push({
@@ -907,7 +971,16 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       };
     });
 
+  const invalidCaptureQualityFailures: QualityFailure[] = invalidCapture.invalid
+    ? [{
+      type: 'invalid_capture',
+      label: 'actual screenshot',
+      diffPercent
+    }]
+    : [];
+
   const qualityFailures: QualityFailure[] = [
+    ...invalidCaptureQualityFailures,
     ...criticalRoiFailures,
     ...criticalAssertionFailures,
     ...dynamicMaskQualityFailures
@@ -918,12 +991,20 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     ? []
     : ['No regionsOfInterest or visualAssertions configured. Global pixel status does not prove visual parity.'];
   qualityWarnings.push(...dynamicMaskQualityWarnings);
+  if (invalidCapture.invalid) {
+    qualityWarnings.push('Actual screenshot appears invalid or asleep. Recapture before trusting ROI, VLM, or quality analysis.');
+  }
   if (actionRequired?.type === 'vlm_unavailable') {
     qualityWarnings.push('VLM analysis was requested but unavailable. Ask the user whether to continue without semantic analysis.');
   }
-  const qualityStatus: 'pass' | 'fail' | 'not_evaluated' = !hasQualityEvaluationConfig
+  const qualityStatus: 'pass' | 'fail' | 'not_evaluated' = invalidCapture.invalid
+    ? 'fail'
+    : !hasQualityEvaluationConfig
     ? 'not_evaluated'
     : (qualityFailures.length > 0 ? 'fail' : 'pass');
+  if (qualityStatus === 'pass') {
+    qualityWarnings.push(...nonCriticalRoiQualityWarnings);
+  }
 
   const priorityFindings: PriorityFinding[] = [];
   for (const failure of criticalRoiFailures) {
@@ -1015,6 +1096,9 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
         }
         if (failure.type === 'excessive_dynamic_masking') {
           return `Critical ROI '${failure.label ?? failure.roiId}' has excessive dynamic masking.`;
+        }
+        if (failure.type === 'invalid_capture') {
+          return 'Actual screenshot appears invalid or asleep; recapture before adjusting thresholds.';
         }
         return `Critical visual assertion '${failure.assertionId}' failed.`;
       })

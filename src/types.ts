@@ -139,7 +139,7 @@ export interface VlmAvailability {
 }
 
 export interface ActionRequired {
-  type: 'vlm_unavailable';
+  type: 'vlm_unavailable' | 'invalid_capture';
   severity: 'blocking';
   message: string;
   recommendedUserPrompt: string;
@@ -171,7 +171,7 @@ export interface RunDelta {
 }
 
 export interface QualityFailure {
-  type: 'critical_roi_failed' | 'critical_visual_assertion_failed' | 'global_diff_failed' | 'excessive_dynamic_masking';
+  type: 'critical_roi_failed' | 'critical_visual_assertion_failed' | 'global_diff_failed' | 'excessive_dynamic_masking' | 'invalid_capture';
   roiId?: string;
   assertionId?: string;
   label?: string;

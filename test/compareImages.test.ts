@@ -1364,6 +1364,149 @@ describe('compareImages and Schemas', () => {
     expect(result.qualityStatus).toBe('pass');
   });
 
+  it('x6. blocks quality pass and asks for recapture when the actual screenshot is black', async () => {
+    const expected = path.join(testDir, 'black-capture-expected.png');
+    const actual = path.join(testDir, 'black-capture-actual.png');
+    await createSizedTestImage(expected, 100, 100, (png) => {
+      drawRect(png, 0, 0, 100, 100, [8, 10, 14]);
+      drawRect(png, 12, 12, 76, 10, [68, 76, 92]);
+      drawRect(png, 12, 34, 54, 8, [220, 226, 235]);
+    });
+    await createSizedTestImage(actual, 100, 100, (png) => {
+      drawRect(png, 0, 0, 100, 100, [0, 0, 0]);
+    });
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, 'out-black-capture'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'content',
+          label: 'Content',
+          type: 'component',
+          critical: false,
+          box: { x: 0, y: 0, width: 100, height: 100 },
+          maxDiffPercent: 1.0
+        }
+      ]
+    } as any);
+
+    expect(result.actionRequired).toMatchObject({
+      type: 'invalid_capture',
+      severity: 'blocking'
+    });
+    expect(result.qualityStatus).toBe('fail');
+    expect(result.qualityWarnings).toContain('Actual screenshot appears invalid or asleep. Recapture before trusting ROI, VLM, or quality analysis.');
+    expect(result.agentSummary?.canStopIterating).toBe(false);
+  });
+
+  it('x7. does not reject a dark but valid UI capture', async () => {
+    const expected = path.join(testDir, 'dark-valid-expected.png');
+    const actual = path.join(testDir, 'dark-valid-actual.png');
+    const drawDarkUi = (png: PNG) => {
+      drawRect(png, 0, 0, 100, 100, [7, 9, 13]);
+      drawRect(png, 8, 8, 84, 20, [26, 31, 39]);
+      drawRect(png, 14, 16, 44, 5, [184, 193, 207]);
+      drawRect(png, 12, 42, 76, 28, [18, 25, 34]);
+      drawRect(png, 18, 50, 20, 8, [78, 148, 128]);
+      drawRect(png, 18, 62, 58, 4, [96, 112, 132]);
+    };
+    await createSizedTestImage(expected, 100, 100, drawDarkUi);
+    await createSizedTestImage(actual, 100, 100, drawDarkUi);
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, 'out-dark-valid'),
+      regionsOfInterest: [
+        {
+          id: 'dark-card',
+          label: 'Dark card',
+          type: 'component',
+          critical: true,
+          box: { x: 0, y: 0, width: 100, height: 100 },
+          maxDiffPercent: 0
+        }
+      ]
+    } as any);
+
+    expect(result.actionRequired).toBeNull();
+    expect(result.qualityStatus).toBe('pass');
+    expect(result.qualityWarnings).toEqual([]);
+  });
+
+  it('x8. warns when a non-critical ROI fails while qualityStatus passes', async () => {
+    const expected = path.join(testDir, 'non-critical-roi-expected.png');
+    const actual = path.join(testDir, 'non-critical-roi-actual.png');
+    await createSizedTestImage(expected, 100, 100, () => {});
+    await createSizedTestImage(actual, 100, 100, (png) => {
+      drawRect(png, 60, 60, 30, 30, [0, 0, 0]);
+    });
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, 'out-non-critical-roi-warning'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'secondary-card',
+          label: 'Secondary card',
+          type: 'component',
+          critical: false,
+          box: { x: 60, y: 60, width: 30, height: 30 },
+          maxDiffPercent: 0.01
+        }
+      ]
+    } as any);
+
+    expect(result.regionsOfInterest?.[0].status).toBe('fail');
+    expect(result.qualityStatus).toBe('pass');
+    expect(result.qualityWarnings).toContain("Non-critical ROI 'Secondary card' failed local diff threshold while qualityStatus remains pass. Review the ROI before accepting visual parity.");
+  });
+
+  it('x9. warns when a broad dynamic mask covers a non-critical ROI', async () => {
+    const expected = path.join(testDir, 'non-critical-broad-mask-expected.png');
+    const actual = path.join(testDir, 'non-critical-broad-mask-actual.png');
+    await createSizedTestImage(expected, 100, 100, () => {});
+    await createSizedTestImage(actual, 100, 100, (png) => {
+      drawRect(png, 10, 10, 50, 80, [0, 0, 0]);
+    });
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, 'out-non-critical-broad-mask'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'secondary-data-card',
+          label: 'Secondary data card',
+          type: 'component',
+          critical: false,
+          box: { x: 10, y: 10, width: 80, height: 80 },
+          maxDiffPercent: 0.01,
+          allowedDynamicSubregions: [
+            {
+              id: 'too-wide',
+              coordinateSpace: 'roiNormalized',
+              box: { x: 0, y: 0, width: 0.65, height: 1 },
+              reason: 'Overly broad dynamic content'
+            }
+          ]
+        }
+      ]
+    } as any);
+
+    const roi = result.regionsOfInterest?.[0];
+    expect(roi?.status).toBe('pass');
+    expect(roi?.dynamicMaskedPercentOfRoi).toBeGreaterThan(0.4);
+    expect(result.qualityStatus).toBe('pass');
+    expect(result.qualityWarnings?.some((warning) => warning.includes("Excessive dynamic masking covers 65.0% of non-critical ROI 'Secondary data card'"))).toBe(true);
+  });
+
   it('y. classifies regions fully outside appContentBounds as non-actionable artifacts', async () => {
     const expected = path.join(testDir, 'artifact-expected.png');
     const actual = path.join(testDir, 'artifact-actual.png');
