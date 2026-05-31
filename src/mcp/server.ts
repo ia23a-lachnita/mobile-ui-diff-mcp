@@ -13,10 +13,10 @@ import { discoverStableRegions } from "../tools/discoverStableRegions";
 import { checkOllamaHealth } from "../vlm/ollama";
 
 export const ignoreRegionSchema = z.object({
-  x: z.number().int().nonnegative(),
-  y: z.number().int().nonnegative(),
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
+  x: z.number().nonnegative(),
+  y: z.number().nonnegative(),
+  width: z.number().positive(),
+  height: z.number().positive(),
   reason: z.string().optional(),
   type: z.enum(['system', 'data', 'dynamic']).optional(),
   coordinateSpace: z.enum(['expected', 'actual', 'normalized']).optional()
@@ -40,6 +40,19 @@ export const autoIgnoreSchema = z.object({
   edgePanels: z.boolean().optional()
 });
 
+export const allowedDynamicSubregionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1).optional(),
+  coordinateSpace: z.enum(['roiNormalized', 'normalized', 'expected', 'actual']).optional(),
+  box: z.object({
+    x: z.number(),
+    y: z.number(),
+    width: z.number().positive(),
+    height: z.number().positive()
+  }),
+  reason: z.string().min(1).optional()
+});
+
 export const regionOfInterestSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
@@ -53,7 +66,9 @@ export const regionOfInterestSchema = z.object({
     width: z.number().positive(),
     height: z.number().positive()
   }),
-  maxDiffPercent: z.number().min(0).max(1).optional()
+  maxDiffPercent: z.number().min(0).max(1).optional(),
+  allowedDynamicSubregions: z.array(allowedDynamicSubregionSchema).optional(),
+  allowBroadDynamicSubregions: z.boolean().optional()
 });
 
 export const visualAssertionSchema = z.object({
@@ -234,10 +249,10 @@ export function getToolList() {
             items: {
               type: "object",
               properties: {
-                x: { type: "integer", minimum: 0 },
-                y: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 1 },
-                height: { type: "integer", minimum: 1 },
+                x: { type: "number", minimum: 0 },
+                y: { type: "number", minimum: 0 },
+                width: { type: "number", exclusiveMinimum: 0 },
+                height: { type: "number", exclusiveMinimum: 0 },
                 reason: { type: "string", description: "Optional human-readable reason for masking this region." },
                 type: { type: "string", enum: ["system", "data", "dynamic"], description: "Mask category. system for OS chrome, data for live fixture mismatches, dynamic for loading/timestamps/ads." },
                 coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"], description: "Coordinate space used for x/y/width/height. Default: expected." }
@@ -267,7 +282,32 @@ export function getToolList() {
                   },
                   required: ["x", "y", "width", "height"]
                 },
-                maxDiffPercent: { type: "number", minimum: 0, maximum: 1 }
+                maxDiffPercent: { type: "number", minimum: 0, maximum: 1 },
+                allowedDynamicSubregions: {
+                  type: "array",
+                  description: "Narrow dynamic boxes inside this ROI that are excluded only from structural ROI scoring. Prefer this over broad dataRegions for live text, counters, charts, or meal data.",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string", minLength: 1 },
+                      label: { type: "string", minLength: 1 },
+                      coordinateSpace: { type: "string", enum: ["roiNormalized", "normalized", "expected", "actual"], description: "roiNormalized is relative to the parent ROI; normalized is relative to the whole image; expected/actual are source pixels." },
+                      box: {
+                        type: "object",
+                        properties: {
+                          x: { type: "number" },
+                          y: { type: "number" },
+                          width: { type: "number", exclusiveMinimum: 0 },
+                          height: { type: "number", exclusiveMinimum: 0 }
+                        },
+                        required: ["x", "y", "width", "height"]
+                      },
+                      reason: { type: "string", minLength: 1 }
+                    },
+                    required: ["id", "box"]
+                  }
+                },
+                allowBroadDynamicSubregions: { type: "boolean", description: "Escape hatch for critical ROIs whose dynamic subregions intentionally cover more than 40%. Default false." }
               },
               required: ["id", "label", "type", "box"]
             }
@@ -371,10 +411,10 @@ export function getToolList() {
             items: {
               type: "object",
               properties: {
-                x: { type: "integer", minimum: 0 },
-                y: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 1 },
-                height: { type: "integer", minimum: 1 },
+                x: { type: "number", minimum: 0 },
+                y: { type: "number", minimum: 0 },
+                width: { type: "number", exclusiveMinimum: 0 },
+                height: { type: "number", exclusiveMinimum: 0 },
                 reason: { type: "string", description: "Optional human-readable reason for masking this region." },
                 type: { type: "string", enum: ["system", "data", "dynamic"], description: "Mask category. system for OS chrome, data for live fixture mismatches, dynamic for loading/timestamps/ads." },
                 coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"], description: "Coordinate space used for x/y/width/height. Default: expected." }
@@ -415,10 +455,10 @@ export function getToolList() {
             items: {
               type: "object",
               properties: {
-                x: { type: "integer", minimum: 0 },
-                y: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 1 },
-                height: { type: "integer", minimum: 1 },
+                x: { type: "number", minimum: 0 },
+                y: { type: "number", minimum: 0 },
+                width: { type: "number", exclusiveMinimum: 0 },
+                height: { type: "number", exclusiveMinimum: 0 },
                 reason: { type: "string" },
                 type: { type: "string", enum: ["system", "data", "dynamic"] },
                 coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"] }
@@ -432,10 +472,10 @@ export function getToolList() {
             items: {
               type: "object",
               properties: {
-                x: { type: "integer", minimum: 0 },
-                y: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 1 },
-                height: { type: "integer", minimum: 1 },
+                x: { type: "number", minimum: 0 },
+                y: { type: "number", minimum: 0 },
+                width: { type: "number", exclusiveMinimum: 0 },
+                height: { type: "number", exclusiveMinimum: 0 },
                 reason: { type: "string" },
                 type: { type: "string", enum: ["system", "data", "dynamic"] },
                 coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"] }
@@ -465,7 +505,32 @@ export function getToolList() {
                   },
                   required: ["x", "y", "width", "height"]
                 },
-                maxDiffPercent: { type: "number", minimum: 0, maximum: 1 }
+                maxDiffPercent: { type: "number", minimum: 0, maximum: 1 },
+                allowedDynamicSubregions: {
+                  type: "array",
+                  description: "Narrow dynamic boxes inside this ROI that are excluded only from structural ROI scoring. Prefer this over broad dataRegions for live text, counters, charts, or meal data.",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string", minLength: 1 },
+                      label: { type: "string", minLength: 1 },
+                      coordinateSpace: { type: "string", enum: ["roiNormalized", "normalized", "expected", "actual"], description: "roiNormalized is relative to the parent ROI; normalized is relative to the whole image; expected/actual are source pixels." },
+                      box: {
+                        type: "object",
+                        properties: {
+                          x: { type: "number" },
+                          y: { type: "number" },
+                          width: { type: "number", exclusiveMinimum: 0 },
+                          height: { type: "number", exclusiveMinimum: 0 }
+                        },
+                        required: ["x", "y", "width", "height"]
+                      },
+                      reason: { type: "string", minLength: 1 }
+                    },
+                    required: ["id", "box"]
+                  }
+                },
+                allowBroadDynamicSubregions: { type: "boolean", description: "Escape hatch for critical ROIs whose dynamic subregions intentionally cover more than 40%. Default false." }
               },
               required: ["id", "label", "type", "box"]
             }
@@ -601,7 +666,32 @@ export function getToolList() {
                   },
                   required: ["x", "y", "width", "height"]
                 },
-                maxDiffPercent: { type: "number", minimum: 0, maximum: 1 }
+                maxDiffPercent: { type: "number", minimum: 0, maximum: 1 },
+                allowedDynamicSubregions: {
+                  type: "array",
+                  description: "Narrow dynamic boxes inside this ROI that are excluded only from structural ROI scoring. Prefer this over broad dataRegions for live text, counters, charts, or meal data.",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string", minLength: 1 },
+                      label: { type: "string", minLength: 1 },
+                      coordinateSpace: { type: "string", enum: ["roiNormalized", "normalized", "expected", "actual"], description: "roiNormalized is relative to the parent ROI; normalized is relative to the whole image; expected/actual are source pixels." },
+                      box: {
+                        type: "object",
+                        properties: {
+                          x: { type: "number" },
+                          y: { type: "number" },
+                          width: { type: "number", exclusiveMinimum: 0 },
+                          height: { type: "number", exclusiveMinimum: 0 }
+                        },
+                        required: ["x", "y", "width", "height"]
+                      },
+                      reason: { type: "string", minLength: 1 }
+                    },
+                    required: ["id", "box"]
+                  }
+                },
+                allowBroadDynamicSubregions: { type: "boolean", description: "Escape hatch for critical ROIs whose dynamic subregions intentionally cover more than 40%. Default false." }
               },
               required: ["id", "label", "type", "box"]
             }
@@ -662,10 +752,10 @@ export function getToolList() {
             items: {
               type: "object",
               properties: {
-                x: { type: "integer", minimum: 0 },
-                y: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 1 },
-                height: { type: "integer", minimum: 1 },
+                x: { type: "number", minimum: 0 },
+                y: { type: "number", minimum: 0 },
+                width: { type: "number", exclusiveMinimum: 0 },
+                height: { type: "number", exclusiveMinimum: 0 },
                 reason: { type: "string", description: "Optional human-readable reason for masking this region." },
                 type: { type: "string", enum: ["system", "data", "dynamic"], description: "Mask category. system for OS chrome, data for live fixture mismatches, dynamic for loading/timestamps/ads." },
                 coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"], description: "Coordinate space used for x/y/width/height. Use coordinateSpace:\"actual\" for device screenshot coordinates. Use coordinateSpace:\"normalized\" for proportional masks. Default is \"expected\"." }
@@ -679,10 +769,10 @@ export function getToolList() {
             items: {
               type: "object",
               properties: {
-                x: { type: "integer", minimum: 0 },
-                y: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 1 },
-                height: { type: "integer", minimum: 1 },
+                x: { type: "number", minimum: 0 },
+                y: { type: "number", minimum: 0 },
+                width: { type: "number", exclusiveMinimum: 0 },
+                height: { type: "number", exclusiveMinimum: 0 },
                 reason: { type: "string" },
                 type: { type: "string", enum: ["system", "data", "dynamic"] },
                 coordinateSpace: { type: "string", enum: ["expected", "actual", "normalized"] }
@@ -801,3 +891,4 @@ export async function runServer() {
   await server.connect(transport);
   console.error("mobile-ui-diff-mcp running on stdio");
 }
+

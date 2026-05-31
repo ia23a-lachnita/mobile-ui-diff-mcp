@@ -6,9 +6,12 @@ import { compareImages } from '../src/tools/compareImages';
 import {
   compareImagesSchema,
   runMobileUiDiffSchema,
+  runScreenUiDiffSchema,
   captureAndroidSchema,
-  captureIosSchema
+  captureIosSchema,
+  getToolList
 } from '../src/mcp/server';
+import { uiDiffConfigSchema } from '../src/config/uiDiffConfig';
 
 async function createTestImage(p: string, draw: (png: PNG) => void) {
   const png = new PNG({ width: 100, height: 100 });
@@ -93,6 +96,32 @@ function drawTodayMacroFixture(png: PNG, variant: 'expected' | 'actual') {
   }
   drawRect(png, 24, 250, 192, 18, [232, 236, 240]);
   drawRect(png, 24, 284, 172, 18, [232, 236, 240]);
+}
+
+function drawTodayDynamicFixture(png: PNG, variant: 'expected' | 'actual' | 'structural-defect') {
+  drawRect(png, 0, 0, png.width, png.height, [248, 249, 246]);
+  drawRect(png, 20, 20, 200, 170, [255, 255, 255]);
+
+  if (variant === 'structural-defect') {
+    drawRing(png, 120, 105, 58, 10, [48, 140, 118]);
+    drawRing(png, 120, 105, 40, 8, [230, 162, 78]);
+  } else {
+    drawRing(png, 120, 105, 50, 6, [48, 140, 118]);
+    drawRing(png, 120, 105, 38, 6, [230, 162, 78]);
+  }
+
+  if (variant === 'expected') {
+    drawRect(png, 96, 98, 48, 8, [20, 24, 31]);
+    drawRect(png, 104, 112, 32, 6, [88, 96, 104]);
+  } else {
+    drawRect(png, 78, 92, 84, 18, [20, 24, 31]);
+    drawRect(png, 92, 114, 56, 8, [88, 96, 104]);
+  }
+
+  drawRect(png, 20, 220, 200, 90, [255, 255, 255]);
+  drawRect(png, 32, 234, variant === 'expected' ? 84 : 148, 10, [20, 24, 31]);
+  drawRect(png, 32, 258, variant === 'expected' ? 130 : 78, 10, [232, 236, 240]);
+  drawRect(png, 32, 282, variant === 'expected' ? 92 : 156, 10, [232, 236, 240]);
 }
 
 function stubUnavailableOllama() {
@@ -214,6 +243,69 @@ describe('compareImages and Schemas', () => {
     expect(preCaptureParsed.success).toBe(false);
   });
 
+  it('f2. MCP schemas accept normalized decimal ignore and data regions', () => {
+    const normalizedIgnoreRegion = {
+      x: 0.125,
+      y: 0.05,
+      width: 0.75,
+      height: 0.1,
+      coordinateSpace: 'normalized',
+      reason: 'normalized status chrome'
+    };
+    const normalizedDataRegion = {
+      x: 0.2,
+      y: 0.35,
+      width: 0.45,
+      height: 0.18,
+      coordinateSpace: 'normalized',
+      type: 'data',
+      reason: 'normalized live data'
+    };
+
+    expect(compareImagesSchema.safeParse({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-normalized-schema-compare'),
+      ignoreRegions: [normalizedIgnoreRegion],
+      dataRegions: [normalizedDataRegion]
+    }).success).toBe(true);
+
+    expect(runMobileUiDiffSchema.safeParse({
+      platform: 'none',
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-normalized-schema-mobile'),
+      ignoreRegions: [normalizedIgnoreRegion],
+      dataRegions: [normalizedDataRegion],
+      autoMaskedRegions: [normalizedIgnoreRegion]
+    }).success).toBe(true);
+
+    expect(runScreenUiDiffSchema.safeParse({
+      screen: 'home',
+      ignoreRegions: [normalizedIgnoreRegion],
+      dataRegions: [normalizedDataRegion]
+    }).success).toBe(true);
+  });
+
+  it('f3. public tool schemas expose mask coordinates as numbers', () => {
+    const tools = getToolList();
+    const assertMaskCoordinateTypes = (toolName: string, propertyName: string) => {
+      const tool = tools.find((candidate) => candidate.name === toolName) as any;
+      const props = tool.inputSchema.properties[propertyName].items.properties;
+      expect(props.x.type).toBe('number');
+      expect(props.y.type).toBe('number');
+      expect(props.width.type).toBe('number');
+      expect(props.height.type).toBe('number');
+    };
+
+    assertMaskCoordinateTypes('compare_images', 'ignoreRegions');
+    assertMaskCoordinateTypes('run_mobile_ui_diff', 'ignoreRegions');
+    assertMaskCoordinateTypes('run_mobile_ui_diff', 'dataRegions');
+    assertMaskCoordinateTypes('run_mobile_ui_diff', 'autoMaskedRegions');
+    assertMaskCoordinateTypes('run_screen_ui_diff', 'ignoreRegions');
+    assertMaskCoordinateTypes('run_screen_ui_diff', 'dataRegions');
+  });
+
   it('g. Ollama fallback returns structured fallback status', async () => {
     const originalUrl = process.env.OLLAMA_BASE_URL;
     process.env.OLLAMA_BASE_URL = 'http://localhost:59999';
@@ -277,6 +369,54 @@ describe('compareImages and Schemas', () => {
     });
     expect(parsedRun.maxRegions).toBe(50);
     expect(parsedRun.maxVlmRegions).toBe(10);
+
+    const parsedDecimalMasks = compareImagesSchema.safeParse({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-decimal-masks'),
+      ignoreRegions: [
+        { x: 0.1, y: 0.1, width: 0.3, height: 0.2, coordinateSpace: 'normalized', type: 'system' }
+      ],
+      dataRegions: [
+        { x: 0.4, y: 0.2, width: 0.2, height: 0.1, coordinateSpace: 'normalized', type: 'data' }
+      ]
+    });
+    expect(parsedDecimalMasks.success).toBe(true);
+
+    const parsedConfigDecimalMasks = uiDiffConfigSchema.safeParse({
+      screens: {
+        home: {
+          platform: 'none',
+          expectedImage: path.join(testDir, 'base.png'),
+          outputDir: path.join(testDir, 'out-config-decimal-masks'),
+          ignoreRegions: [
+            { x: 0.1, y: 0.1, width: 0.3, height: 0.2, coordinateSpace: 'normalized', type: 'system' }
+          ],
+          dataRegions: [
+            { x: 0.4, y: 0.2, width: 0.2, height: 0.1, coordinateSpace: 'normalized', type: 'data' }
+          ]
+        }
+      }
+    });
+    expect(parsedConfigDecimalMasks.success).toBe(true);
+
+    const parsedDynamicRoi = compareImagesSchema.safeParse({
+      expectedImage: path.join(testDir, 'base.png'),
+      actualImage: path.join(testDir, 'identical.png'),
+      outputDir: path.join(testDir, 'out-dynamic-schema'),
+      regionsOfInterest: [{
+        id: 'macro-ring',
+        label: 'Macro ring chart',
+        type: 'component',
+        box: { x: 0, y: 0, width: 1, height: 1 },
+        allowedDynamicSubregions: [{
+          id: 'center-kcal-value',
+          coordinateSpace: 'roiNormalized',
+          box: { x: 0.35, y: 0.35, width: 0.3, height: 0.2 }
+        }]
+      }]
+    });
+    expect(parsedDynamicRoi.success).toBe(true);
   });
 
   it('j. does not warn about missing VLM when VLM analysis is disabled', async () => {
@@ -1002,6 +1142,435 @@ describe('compareImages and Schemas', () => {
     expect(result.qualityStatus).toBe('fail');
     expect(result.qualityFailures?.[0]?.type).toBe('critical_visual_assertion_failed');
     expect(result.qualityFailures?.[0]?.assertionId).toBe('center-text-local-diff');
+  });
+
+  it('x2. passes structurally when narrow ROI dynamic subregions cover live Today data', async () => {
+    const expectedToday = path.join(testDir, 'today-dynamic-expected.png');
+    const actualToday = path.join(testDir, 'today-dynamic-actual.png');
+    await createSizedTestImage(expectedToday, 240, 340, (png) => drawTodayDynamicFixture(png, 'expected'));
+    await createSizedTestImage(actualToday, 240, 340, (png) => drawTodayDynamicFixture(png, 'actual'));
+
+    const result = await compareImages({
+      expectedImage: expectedToday,
+      actualImage: actualToday,
+      outputDir: path.join(testDir, 'out-today-dynamic-structural-pass'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: true,
+          weight: 10,
+          box: { x: 40, y: 40, width: 160, height: 130 },
+          maxDiffPercent: 0.04,
+          allowedDynamicSubregions: [
+            {
+              id: 'center-kcal-value',
+              label: 'Dynamic kcal text',
+              coordinateSpace: 'roiNormalized',
+              box: { x: 0.23, y: 0.38, width: 0.54, height: 0.28 },
+              reason: 'Live kcal value differs from static mockup'
+            }
+          ]
+        },
+        {
+          id: 'meal-card',
+          label: 'Meal card',
+          type: 'component',
+          critical: true,
+          weight: 6,
+          box: { x: 20, y: 220, width: 200, height: 90 },
+          maxDiffPercent: 0.03,
+          allowedDynamicSubregions: [
+            {
+              id: 'meal-title',
+              coordinateSpace: 'roiNormalized',
+              box: { x: 0.05, y: 0.10, width: 0.78, height: 0.18 },
+              reason: 'Live meal name differs from fixture'
+            },
+            {
+              id: 'meal-first-macro-bar',
+              coordinateSpace: 'roiNormalized',
+              box: { x: 0.05, y: 0.38, width: 0.78, height: 0.14 },
+              reason: 'Live macro grams differ from fixture'
+            },
+            {
+              id: 'meal-second-macro-bar',
+              coordinateSpace: 'roiNormalized',
+              box: { x: 0.05, y: 0.64, width: 0.78, height: 0.14 },
+              reason: 'Live macro grams differ from fixture'
+            }
+          ]
+        }
+      ],
+      visualAssertions: [
+        {
+          id: 'macro-ring-structural-diff',
+          type: 'roiMaxDiffPercent',
+          roiId: 'macro-ring',
+          maxDiffPercent: 0.04,
+          severity: 'critical',
+          message: 'Macro ring structural diff must stay low.'
+        },
+        {
+          id: 'meal-card-structural-diff',
+          type: 'roiMaxDiffPercent',
+          roiId: 'meal-card',
+          maxDiffPercent: 0.03,
+          severity: 'critical',
+          message: 'Meal card structural diff must stay low.'
+        }
+      ]
+    } as any);
+
+    const macroRing = result.regionsOfInterest?.find((roi) => roi.id === 'macro-ring');
+    expect(result.qualityStatus).toBe('pass');
+    expect(result.qualityFailures).toEqual([]);
+    expect(result.visualAssertions?.every((assertion) => assertion.status === 'pass')).toBe(true);
+    expect(result.visualAssertions?.[0]).toMatchObject({
+      metricUsed: 'structuralRoiDiffPercent',
+      rawRoiDiffPercent: macroRing?.rawRoiDiffPercent,
+      structuralRoiDiffPercent: macroRing?.structuralRoiDiffPercent,
+      dynamicMaskedPercentOfRoi: macroRing?.dynamicMaskedPercentOfRoi
+    });
+    expect(macroRing?.rawRoiDiffPercent).toBeGreaterThan(0.04);
+    expect(macroRing?.structuralRoiDiffPercent).toBeLessThanOrEqual(0.04);
+    expect(macroRing?.diffPercent).toBe(macroRing?.structuralRoiDiffPercent);
+    expect(macroRing?.dynamicMaskedPercentOfRoi).toBeGreaterThan(0);
+    expect(macroRing?.resolvedDynamicSubregions[0]).toMatchObject({
+      id: 'center-kcal-value',
+      coordinateSpace: 'expected'
+    });
+    await expect(fs.stat(macroRing?.artifacts.structuralDiff ?? '')).resolves.toBeDefined();
+    expect(result.agentSummary?.verdict).toContain('likely data variance');
+    expect(result.agentSummary?.canStopIterating).toBe(true);
+  });
+
+  it('x3. blocks clean quality pass when critical ROI dynamic masking is too broad', async () => {
+    const expected = path.join(testDir, 'broad-mask-expected.png');
+    const actual = path.join(testDir, 'broad-mask-actual.png');
+    await createSizedTestImage(expected, 100, 100, () => {});
+    await createSizedTestImage(actual, 100, 100, (png) => {
+      drawRect(png, 10, 10, 50, 80, [0, 0, 0]);
+    });
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, 'out-broad-mask'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'critical-card',
+          label: 'Critical card',
+          type: 'component',
+          critical: true,
+          box: { x: 10, y: 10, width: 80, height: 80 },
+          maxDiffPercent: 0.01,
+          allowedDynamicSubregions: [
+            {
+              id: 'too-wide',
+              coordinateSpace: 'roiNormalized',
+              box: { x: 0, y: 0, width: 0.65, height: 1 },
+              reason: 'Overly broad dynamic content'
+            }
+          ]
+        }
+      ]
+    } as any);
+
+    const roi = result.regionsOfInterest?.[0];
+    expect(roi?.structuralRoiDiffPercent).toBe(0);
+    expect(roi?.dynamicMaskedPercentOfRoi).toBeGreaterThan(0.4);
+    expect(result.qualityStatus).toBe('fail');
+    expect(result.qualityFailures?.[0]).toMatchObject({
+      type: 'excessive_dynamic_masking',
+      roiId: 'critical-card'
+    });
+    expect(result.qualityWarnings?.some((warning) => warning.includes('Excessive dynamic masking'))).toBe(true);
+    expect(result.agentSummary?.verdict).toContain('quality gate is not trustworthy');
+    expect(result.agentSummary?.canStopIterating).toBe(false);
+
+    const persisted = JSON.parse(await fs.readFile(path.join(testDir, 'out-broad-mask', 'report.json'), 'utf-8'));
+    expect(persisted).toEqual(result);
+    expect(persisted.regionsOfInterest[0]).toMatchObject({
+      rawRoiDiffPercent: roi?.rawRoiDiffPercent,
+      structuralRoiDiffPercent: roi?.structuralRoiDiffPercent,
+      dynamicMaskedPercentOfRoi: roi?.dynamicMaskedPercentOfRoi
+    });
+    expect(persisted.regionsOfInterest[0].resolvedDynamicSubregions).toEqual([
+      {
+        id: 'too-wide',
+        reason: 'Overly broad dynamic content',
+        coordinateSpace: 'expected',
+        box: { x: 10, y: 10, width: 52, height: 80 }
+      }
+    ]);
+    expect(persisted.regionsOfInterest[0].artifacts.structuralDiff).toBeTruthy();
+    expect(persisted.qualityWarnings).toEqual(result.qualityWarnings);
+    expect(persisted.qualityFailures).toEqual(result.qualityFailures);
+    expect(persisted.qualityStatus).toBe('fail');
+    expect(persisted.agentSummary).toEqual(result.agentSummary);
+  });
+
+  it('x4. still fails when structural macro ring geometry differs outside the dynamic subregion', async () => {
+    const expectedToday = path.join(testDir, 'today-structural-expected.png');
+    const actualToday = path.join(testDir, 'today-structural-actual.png');
+    await createSizedTestImage(expectedToday, 240, 340, (png) => drawTodayDynamicFixture(png, 'expected'));
+    await createSizedTestImage(actualToday, 240, 340, (png) => drawTodayDynamicFixture(png, 'structural-defect'));
+
+    const result = await compareImages({
+      expectedImage: expectedToday,
+      actualImage: actualToday,
+      outputDir: path.join(testDir, 'out-today-structural-defect'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'macro-ring',
+          label: 'Macro ring chart',
+          type: 'component',
+          critical: true,
+          weight: 10,
+          box: { x: 40, y: 40, width: 160, height: 130 },
+          maxDiffPercent: 0.04,
+          allowedDynamicSubregions: [
+            {
+              id: 'center-kcal-value',
+              coordinateSpace: 'roiNormalized',
+              box: { x: 0.23, y: 0.38, width: 0.54, height: 0.28 },
+              reason: 'Live kcal value differs from static mockup'
+            }
+          ]
+        }
+      ]
+    } as any);
+
+    const roi = result.regionsOfInterest?.[0];
+    expect(roi?.rawRoiDiffPercent).toBeGreaterThan(roi?.structuralRoiDiffPercent ?? 0);
+    expect(roi?.structuralRoiDiffPercent).toBeGreaterThan(0.04);
+    expect(roi?.status).toBe('fail');
+    expect(result.qualityStatus).toBe('fail');
+    expect(result.qualityFailures?.[0]).toMatchObject({
+      type: 'critical_roi_failed',
+      roiId: 'macro-ring'
+    });
+    expect(result.agentSummary?.verdict).toContain('layout, styling, or rendering issue');
+  });
+
+  it.each([
+    {
+      coordinateSpace: 'roiNormalized',
+      box: { x: 20 / 60, y: 20 / 60, width: 20 / 60, height: 10 / 60 },
+      expectedResolved: { x: 40, y: 40, width: 20, height: 10 },
+      actualScale: 1
+    },
+    {
+      coordinateSpace: 'normalized',
+      box: { x: 0.4, y: 0.4, width: 0.2, height: 0.1 },
+      expectedResolved: { x: 40, y: 40, width: 20, height: 10 },
+      actualScale: 1
+    },
+    {
+      coordinateSpace: 'expected',
+      box: { x: 40, y: 40, width: 20, height: 10 },
+      expectedResolved: { x: 40, y: 40, width: 20, height: 10 },
+      actualScale: 1
+    },
+    {
+      coordinateSpace: 'actual',
+      box: { x: 80, y: 80, width: 40, height: 20 },
+      expectedResolved: { x: 40, y: 40, width: 20, height: 10 },
+      actualScale: 2
+    }
+  ])('x5. resolves allowedDynamicSubregions in $coordinateSpace coordinate space', async ({ coordinateSpace, box, expectedResolved, actualScale }) => {
+    const expected = path.join(testDir, `dynamic-space-${coordinateSpace}-expected.png`);
+    const actual = path.join(testDir, `dynamic-space-${coordinateSpace}-actual.png`);
+    await createSizedTestImage(expected, 100, 100, () => {});
+    if (actualScale === 2) {
+      await createSizedTestImage(actual, 200, 200, (png) => {
+        drawRect(png, 80, 80, 40, 20, [0, 0, 0]);
+      });
+    } else {
+      await createSizedTestImage(actual, 100, 100, (png) => {
+        drawRect(png, 40, 40, 20, 10, [0, 0, 0]);
+      });
+    }
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, `out-dynamic-space-${coordinateSpace}`),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'roi',
+          label: 'ROI',
+          type: 'component',
+          critical: true,
+          box: { x: 20, y: 20, width: 60, height: 60 },
+          maxDiffPercent: 0.01,
+          allowedDynamicSubregions: [
+            {
+              id: `dynamic-${coordinateSpace}`,
+              coordinateSpace,
+              box,
+              reason: 'coordinate space coverage'
+            }
+          ]
+        }
+      ]
+    } as any);
+
+    const roi = result.regionsOfInterest?.[0];
+    expect(roi?.rawRoiDiffPercent).toBeGreaterThan(0.01);
+    expect(roi?.structuralRoiDiffPercent).toBeLessThanOrEqual(0.01);
+    expect(roi?.resolvedDynamicSubregions[0].box).toEqual(expectedResolved);
+    expect(result.qualityStatus).toBe('pass');
+  });
+
+  it('x6. blocks quality pass and asks for recapture when the actual screenshot is black', async () => {
+    const expected = path.join(testDir, 'black-capture-expected.png');
+    const actual = path.join(testDir, 'black-capture-actual.png');
+    await createSizedTestImage(expected, 100, 100, (png) => {
+      drawRect(png, 0, 0, 100, 100, [8, 10, 14]);
+      drawRect(png, 12, 12, 76, 10, [68, 76, 92]);
+      drawRect(png, 12, 34, 54, 8, [220, 226, 235]);
+    });
+    await createSizedTestImage(actual, 100, 100, (png) => {
+      drawRect(png, 0, 0, 100, 100, [0, 0, 0]);
+    });
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, 'out-black-capture'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'content',
+          label: 'Content',
+          type: 'component',
+          critical: false,
+          box: { x: 0, y: 0, width: 100, height: 100 },
+          maxDiffPercent: 1.0
+        }
+      ]
+    } as any);
+
+    expect(result.actionRequired).toMatchObject({
+      type: 'invalid_capture',
+      severity: 'blocking'
+    });
+    expect(result.status).toBe('fail');
+    expect(result.qualityStatus).toBe('fail');
+    expect(result.qualityWarnings).toContain('Actual screenshot appears invalid or asleep. Recapture before trusting ROI, VLM, or quality analysis.');
+    expect(result.agentSummary?.canStopIterating).toBe(false);
+  });
+
+  it('x7. does not reject a dark but valid UI capture', async () => {
+    const expected = path.join(testDir, 'dark-valid-expected.png');
+    const actual = path.join(testDir, 'dark-valid-actual.png');
+    const drawDarkUi = (png: PNG) => {
+      drawRect(png, 0, 0, 100, 100, [7, 9, 13]);
+      drawRect(png, 8, 8, 84, 20, [26, 31, 39]);
+      drawRect(png, 14, 16, 44, 5, [184, 193, 207]);
+      drawRect(png, 12, 42, 76, 28, [18, 25, 34]);
+      drawRect(png, 18, 50, 20, 8, [78, 148, 128]);
+      drawRect(png, 18, 62, 58, 4, [96, 112, 132]);
+    };
+    await createSizedTestImage(expected, 100, 100, drawDarkUi);
+    await createSizedTestImage(actual, 100, 100, drawDarkUi);
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, 'out-dark-valid'),
+      regionsOfInterest: [
+        {
+          id: 'dark-card',
+          label: 'Dark card',
+          type: 'component',
+          critical: true,
+          box: { x: 0, y: 0, width: 100, height: 100 },
+          maxDiffPercent: 0
+        }
+      ]
+    } as any);
+
+    expect(result.actionRequired).toBeNull();
+    expect(result.qualityStatus).toBe('pass');
+    expect(result.qualityWarnings).toEqual([]);
+  });
+
+  it('x8. warns when a non-critical ROI fails while qualityStatus passes', async () => {
+    const expected = path.join(testDir, 'non-critical-roi-expected.png');
+    const actual = path.join(testDir, 'non-critical-roi-actual.png');
+    await createSizedTestImage(expected, 100, 100, () => {});
+    await createSizedTestImage(actual, 100, 100, (png) => {
+      drawRect(png, 60, 60, 30, 30, [0, 0, 0]);
+    });
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, 'out-non-critical-roi-warning'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'secondary-card',
+          label: 'Secondary card',
+          type: 'component',
+          critical: false,
+          box: { x: 60, y: 60, width: 30, height: 30 },
+          maxDiffPercent: 0.01
+        }
+      ]
+    } as any);
+
+    expect(result.regionsOfInterest?.[0].status).toBe('fail');
+    expect(result.qualityStatus).toBe('pass');
+    expect(result.qualityWarnings).toContain("Non-critical ROI 'Secondary card' failed local diff threshold while qualityStatus remains pass. Review the ROI before accepting visual parity.");
+  });
+
+  it('x9. warns when a broad dynamic mask covers a non-critical ROI', async () => {
+    const expected = path.join(testDir, 'non-critical-broad-mask-expected.png');
+    const actual = path.join(testDir, 'non-critical-broad-mask-actual.png');
+    await createSizedTestImage(expected, 100, 100, () => {});
+    await createSizedTestImage(actual, 100, 100, (png) => {
+      drawRect(png, 10, 10, 50, 80, [0, 0, 0]);
+    });
+
+    const result = await compareImages({
+      expectedImage: expected,
+      actualImage: actual,
+      outputDir: path.join(testDir, 'out-non-critical-broad-mask'),
+      maxDiffPercent: 1.0,
+      regionsOfInterest: [
+        {
+          id: 'secondary-data-card',
+          label: 'Secondary data card',
+          type: 'component',
+          critical: false,
+          box: { x: 10, y: 10, width: 80, height: 80 },
+          maxDiffPercent: 0.01,
+          allowedDynamicSubregions: [
+            {
+              id: 'too-wide',
+              coordinateSpace: 'roiNormalized',
+              box: { x: 0, y: 0, width: 0.65, height: 1 },
+              reason: 'Overly broad dynamic content'
+            }
+          ]
+        }
+      ]
+    } as any);
+
+    const roi = result.regionsOfInterest?.[0];
+    expect(roi?.status).toBe('pass');
+    expect(roi?.dynamicMaskedPercentOfRoi).toBeGreaterThan(0.4);
+    expect(result.qualityStatus).toBe('pass');
+    expect(result.qualityWarnings?.some((warning) => warning.includes("Excessive dynamic masking covers 65.0% of non-critical ROI 'Secondary data card'"))).toBe(true);
   });
 
   it('y. classifies regions fully outside appContentBounds as non-actionable artifacts', async () => {

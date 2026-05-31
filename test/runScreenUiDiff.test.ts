@@ -176,6 +176,70 @@ describe('runScreenUiDiff', () => {
     expect(run4.delta?.trend).toBe('unchanged');
   });
 
+  it('persists ROI dynamic masking fields in report.json', async () => {
+    const dynamicExpected = path.join(testDir, 'dynamic-expected.png');
+    const dynamicActual = path.join(testDir, 'dynamic-actual.png');
+    const dynamicConfigPath = path.join(testDir, 'ui-diff-dynamic.config.json');
+    const dynamicOutputDir = path.join(testDir, 'dynamic-runs');
+
+    await createTestImage(dynamicExpected, (png) => {
+      drawRect(png, 10, 10, 80, 80, [255, 255, 255]);
+      drawRect(png, 35, 42, 30, 8, [20, 24, 31]);
+    });
+    await createTestImage(dynamicActual, (png) => {
+      drawRect(png, 10, 10, 80, 80, [255, 255, 255]);
+      drawRect(png, 22, 38, 56, 16, [20, 24, 31]);
+    });
+    await fs.writeFile(dynamicConfigPath, JSON.stringify({
+      screens: {
+        dynamic: {
+          platform: 'none',
+          expectedImage: dynamicExpected,
+          outputDir: dynamicOutputDir,
+          maxDiffPercent: 1,
+          regionsOfInterest: [
+            {
+              id: 'macro-ring',
+              label: 'Macro ring chart',
+              type: 'component',
+              critical: true,
+              box: { x: 10, y: 10, width: 80, height: 80 },
+              maxDiffPercent: 0.01,
+              allowedDynamicSubregions: [
+                {
+                  id: 'center-kcal-value',
+                  coordinateSpace: 'roiNormalized',
+                  box: { x: 0.15, y: 0.30, width: 0.70, height: 0.28 },
+                  reason: 'Live kcal value differs'
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }, null, 2));
+
+    const run = await runScreenUiDiff({
+      screen: 'dynamic',
+      configPath: dynamicConfigPath,
+      actualImage: dynamicActual,
+      runName: 'run-001'
+    });
+    const persisted = JSON.parse(await fs.readFile(run.run.reportPath, 'utf-8'));
+    const roi = persisted.regionsOfInterest[0];
+
+    expect(persisted).toEqual(run);
+    expect(persisted.qualityStatus).toBe('pass');
+    expect(roi.rawRoiDiffPercent).toBeGreaterThan(0.01);
+    expect(roi.structuralRoiDiffPercent).toBeLessThanOrEqual(0.01);
+    expect(roi.dynamicMaskedPercentOfRoi).toBeGreaterThan(0);
+    expect(roi.resolvedDynamicSubregions[0]).toMatchObject({
+      id: 'center-kcal-value',
+      coordinateSpace: 'expected'
+    });
+    expect(persisted.qualityFailures).toEqual([]);
+  });
+
   it('lists tool descriptions that prefer compare_images when actualImage is provided', () => {
     const tools = getToolList();
     const compareTool = tools.find((tool) => tool.name === 'compare_images');
@@ -184,6 +248,7 @@ describe('runScreenUiDiff', () => {
 
     expect(JSON.stringify(tools)).toContain('prefer compare_images');
     expect(JSON.stringify(compareTool)).toContain('regionsOfInterest');
+    expect(JSON.stringify(compareTool)).toContain('allowedDynamicSubregions');
     expect(JSON.stringify(compareTool)).toContain('visualAssertions');
     expect(JSON.stringify(compareTool)).toContain('floorDetection');
     expect(JSON.stringify(compareTool)).not.toContain('preCapture');

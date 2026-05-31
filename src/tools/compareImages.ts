@@ -8,6 +8,7 @@ import { cropAndSave } from '../image/crops';
 import { explainDiffUsingOllama, preflightOllama, resolveOllamaConfig, ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 import { ConfigSuggestion, DeviceProfile, IgnoreRegion, RegionReport, DiffReport, VlmSummary, VlmAnalysis, RegionOfInterestConfig, RegionOfInterestReport, QualityFailure, PriorityFinding, VisualAssertionConfig, VisualAssertionResult, FloorDetectionConfig, RunDelta, FloorBlocker, AgentSummary, HotspotDetectionConfig, LocalHotspot, VlmPolicy, VlmAvailability, ActionRequired } from '../types';
 import fs from 'fs/promises';
+import { PNG } from 'pngjs';
 
 export interface CompareImagesInput {
   expectedImage: string;
@@ -41,6 +42,10 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function ceilPixel(value: number): number {
+  return Math.ceil(value - 1e-9);
+}
+
 function normalizeBox(
   box: { x: number; y: number; width: number; height: number },
   targetWidth: number,
@@ -52,8 +57,8 @@ function normalizeBox(
   if (coordinateSpace === 'normalized') {
     const left = Math.floor(clamp(box.x, 0, 1) * targetWidth);
     const top = Math.floor(clamp(box.y, 0, 1) * targetHeight);
-    const right = Math.ceil(clamp(box.x + box.width, 0, 1) * targetWidth);
-    const bottom = Math.ceil(clamp(box.y + box.height, 0, 1) * targetHeight);
+    const right = ceilPixel(clamp(box.x + box.width, 0, 1) * targetWidth);
+    const bottom = ceilPixel(clamp(box.y + box.height, 0, 1) * targetHeight);
     return {
       x: clamp(left, 0, Math.max(0, targetWidth - 1)),
       y: clamp(top, 0, Math.max(0, targetHeight - 1)),
@@ -66,8 +71,8 @@ function normalizeBox(
   const scaleY = targetHeight / Math.max(1, sourceHeight);
   const left = Math.floor(box.x * scaleX);
   const top = Math.floor(box.y * scaleY);
-  const right = Math.ceil((box.x + box.width) * scaleX);
-  const bottom = Math.ceil((box.y + box.height) * scaleY);
+  const right = ceilPixel((box.x + box.width) * scaleX);
+  const bottom = ceilPixel((box.y + box.height) * scaleY);
 
   return {
     x: clamp(left, 0, Math.max(0, targetWidth - 1)),
@@ -92,6 +97,110 @@ function countMaskPixels(mask: boolean[][], box: { x: number; y: number; width: 
     }
   }
   return count;
+}
+
+function intersectBoxes(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  if (right <= x || bottom <= y) return null;
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+function resolveRoiDynamicSubregionBox(
+  subregion: NonNullable<RegionOfInterestConfig['allowedDynamicSubregions']>[number],
+  roiBox: { x: number; y: number; width: number; height: number },
+  targetWidth: number,
+  targetHeight: number,
+  actualSourceWidth: number,
+  actualSourceHeight: number
+) {
+  const coordinateSpace = subregion.coordinateSpace ?? 'roiNormalized';
+  const resolved = coordinateSpace === 'roiNormalized'
+    ? {
+      x: roiBox.x + Math.floor(clamp(subregion.box.x, 0, 1) * roiBox.width),
+      y: roiBox.y + Math.floor(clamp(subregion.box.y, 0, 1) * roiBox.height),
+      width: Math.max(1, ceilPixel(clamp(subregion.box.width, 0, 1) * roiBox.width)),
+      height: Math.max(1, ceilPixel(clamp(subregion.box.height, 0, 1) * roiBox.height))
+    }
+    : normalizeBox(
+      subregion.box,
+      targetWidth,
+      targetHeight,
+      coordinateSpace,
+      coordinateSpace === 'actual' ? actualSourceWidth : targetWidth,
+      coordinateSpace === 'actual' ? actualSourceHeight : targetHeight
+    );
+
+  return intersectBoxes(resolved, roiBox);
+}
+
+function countRoiPixelsWithDynamicMask(
+  mask: boolean[][],
+  roiBox: { x: number; y: number; width: number; height: number },
+  dynamicBoxes: Array<{ x: number; y: number; width: number; height: number }>
+): { rawDiffPixels: number; structuralDiffPixels: number; dynamicMaskedPixels: number; structuralTotalPixels: number } {
+  let rawDiffPixels = 0;
+  let structuralDiffPixels = 0;
+  let dynamicMaskedPixels = 0;
+  const maxY = Math.min(mask.length, roiBox.y + roiBox.height);
+
+  for (let y = Math.max(0, roiBox.y); y < maxY; y++) {
+    const row = mask[y];
+    const maxX = Math.min(row.length, roiBox.x + roiBox.width);
+    for (let x = Math.max(0, roiBox.x); x < maxX; x++) {
+      const isDynamic = dynamicBoxes.some((box) =>
+        x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height
+      );
+      if (row[x]) {
+        rawDiffPixels++;
+        if (!isDynamic) structuralDiffPixels++;
+      }
+      if (isDynamic) dynamicMaskedPixels++;
+    }
+  }
+
+  const roiArea = Math.max(1, roiBox.width * roiBox.height);
+  return {
+    rawDiffPixels,
+    structuralDiffPixels,
+    dynamicMaskedPixels,
+    structuralTotalPixels: Math.max(1, roiArea - dynamicMaskedPixels)
+  };
+}
+
+function isPointInsideAnyBox(x: number, y: number, boxes: Array<{ x: number; y: number; width: number; height: number }>): boolean {
+  return boxes.some((box) => x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height);
+}
+
+async function writeStructuralRoiDiffCrop(
+  diffImage: PNG,
+  roiBox: { x: number; y: number; width: number; height: number },
+  dynamicBoxes: Array<{ x: number; y: number; width: number; height: number }>,
+  outputPath: string
+): Promise<void> {
+  const crop = new PNG({ width: roiBox.width, height: roiBox.height });
+  for (let y = 0; y < roiBox.height; y++) {
+    for (let x = 0; x < roiBox.width; x++) {
+      const sourceX = roiBox.x + x;
+      const sourceY = roiBox.y + y;
+      const targetIdx = (crop.width * y + x) << 2;
+      if (isPointInsideAnyBox(sourceX, sourceY, dynamicBoxes)) {
+        crop.data[targetIdx] = 0;
+        crop.data[targetIdx + 1] = 0;
+        crop.data[targetIdx + 2] = 0;
+        crop.data[targetIdx + 3] = 0;
+        continue;
+      }
+      const sourceIdx = (diffImage.width * sourceY + sourceX) << 2;
+      crop.data[targetIdx] = diffImage.data[sourceIdx];
+      crop.data[targetIdx + 1] = diffImage.data[sourceIdx + 1];
+      crop.data[targetIdx + 2] = diffImage.data[sourceIdx + 2];
+      crop.data[targetIdx + 3] = diffImage.data[sourceIdx + 3];
+    }
+  }
+  await writePng(crop, outputPath);
 }
 
 function regionIntersections(region: { x: number; y: number; width: number; height: number }, rois: Array<{ id: string; label: string; box: { x: number; y: number; width: number; height: number } }>): Array<{ id: string; label: string }> {
@@ -142,6 +251,59 @@ function buildVlmUnavailableActionRequired(): ActionRequired {
   };
 }
 
+function buildInvalidCaptureActionRequired(): ActionRequired {
+  return {
+    type: 'invalid_capture',
+    severity: 'blocking',
+    message: 'Actual screenshot appears invalid or asleep.',
+    recommendedUserPrompt: 'Wake and unlock the device or simulator, navigate to the target screen, and recapture before judging visual quality.',
+    suggestedFixes: [
+      'Wake/unlock the device or simulator and rerun capture.',
+      'Verify the app is foregrounded on the target screen.',
+      'If this was an intentional all-black screen, provide a valid actualImage artifact after confirming the expected UI state.'
+    ]
+  };
+}
+
+function detectInvalidActualCapture(png: PNG): { invalid: boolean; reason?: string } {
+  const totalPixels = Math.max(1, png.width * png.height);
+  let luminanceSum = 0;
+  let luminanceSqSum = 0;
+  let visiblePixels = 0;
+  let brightPixels = 0;
+
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      const idx = (png.width * y + x) << 2;
+      const alpha = png.data[idx + 3] / 255;
+      const luminance = (
+        0.2126 * png.data[idx]
+        + 0.7152 * png.data[idx + 1]
+        + 0.0722 * png.data[idx + 2]
+      ) * alpha;
+      luminanceSum += luminance;
+      luminanceSqSum += luminance * luminance;
+      if (luminance > 16) visiblePixels++;
+      if (luminance > 32) brightPixels++;
+    }
+  }
+
+  const mean = luminanceSum / totalPixels;
+  const variance = Math.max(0, (luminanceSqSum / totalPixels) - mean * mean);
+  const standardDeviation = Math.sqrt(variance);
+  const visibleRatio = visiblePixels / totalPixels;
+  const brightRatio = brightPixels / totalPixels;
+
+  if (mean <= 8 && standardDeviation <= 6 && brightRatio < 0.002) {
+    return { invalid: true, reason: 'near-black screenshot with almost no visible detail' };
+  }
+  if (visibleRatio < 0.005 && standardDeviation <= 8) {
+    return { invalid: true, reason: 'screenshot has too few visible pixels to trust' };
+  }
+
+  return { invalid: false };
+}
+
 function evaluateFloorState(input: {
   floorDetection?: FloorDetectionConfig;
   runDelta?: RunDelta;
@@ -177,6 +339,14 @@ function evaluateFloorState(input: {
     };
   }
 
+  if (input.qualityStatus === 'fail') {
+    return {
+      atFloor: false,
+      floorBlockedBy: [{ type: 'quality_failed', message: 'Local UI quality gates failed.' }],
+      floorReason: 'Local UI quality gates failed.'
+    };
+  }
+
   if (!input.previousReport) {
     return { atFloor: null, floorBlockedBy: [], floorReason: 'No floor history available.' };
   }
@@ -209,6 +379,8 @@ function buildAgentSummary(input: {
   diffPercent: number;
   criticalFailures: QualityFailure[];
   criticalAssertionFailures: QualityFailure[];
+  qualityFailures: QualityFailure[];
+  roiReports: RegionOfInterestReport[];
   priorityFindings: PriorityFinding[];
   localHotspots: LocalHotspot[];
   actionRequired: ActionRequired | null;
@@ -225,8 +397,10 @@ function buildAgentSummary(input: {
 
   if (input.criticalFailures.length > 0) {
     const label = input.criticalFailures[0].label ?? 'critical region';
+    const structural = input.criticalFailures[0].structuralRoiDiffPercent ?? input.criticalFailures[0].diffPercent;
+    const structuralText = typeof structural === 'number' ? ` Structural ROI diff is ${(structural * 100).toFixed(2)}%, likely a layout, styling, or rendering issue.` : '';
     return {
-      verdict: `Do not accept. Critical ${label} region still differs significantly from mockup.`,
+      verdict: `Do not accept. Critical ${label} region still differs significantly from mockup.${structuralText}`,
       globalDiffPercent: input.diffPercent,
       qualityStatus: input.qualityStatus,
       topAction: `Fix ${label} before considering full-screen floor.`,
@@ -245,10 +419,42 @@ function buildAgentSummary(input: {
     };
   }
 
+  if (input.qualityStatus === 'fail') {
+    const excessiveMaskFailure = input.qualityFailures.find((failure) => failure.type === 'excessive_dynamic_masking');
+    if (excessiveMaskFailure) {
+      const label = excessiveMaskFailure.label ?? excessiveMaskFailure.roiId ?? 'critical ROI';
+      const masked = excessiveMaskFailure.dynamicMaskedPercentOfRoi ?? 0;
+      return {
+        verdict: `Do not accept. Dynamic masking covers ${(masked * 100).toFixed(1)}% of ${label}, so the quality gate is not trustworthy.`,
+        globalDiffPercent: input.diffPercent,
+        qualityStatus: input.qualityStatus,
+        topAction: `Narrow dynamic subregions in ${label}, or explicitly allow broad dynamic masking only after review.`,
+        canStopIterating: false
+      };
+    }
+
+    return {
+      verdict: 'Do not accept. Local visual quality gates failed.',
+      globalDiffPercent: input.diffPercent,
+      qualityStatus: input.qualityStatus,
+      topAction: input.priorityFindings[0]?.message ?? 'Review failed ROI and visual assertion details.',
+      canStopIterating: false
+    };
+  }
+
+  const likelyDataVariance = input.roiReports.find((roi) =>
+    roi.resolvedDynamicSubregions.length > 0
+    && roi.rawRoiDiffPercent > roi.maxDiffPercent
+    && roi.structuralRoiDiffPercent <= roi.maxDiffPercent
+  );
+
   if (input.status === 'fail') {
     const topAction = input.priorityFindings[0]?.message ?? 'Reduce global diff until report passes.';
+    const varianceText = likelyDataVariance
+      ? ` ${likelyDataVariance.label} has high raw ROI diff but passes structurally after narrow dynamic masking, which points to data variance; still review global diff before accepting.`
+      : '';
     return {
-      verdict: 'Global diff still above threshold.',
+      verdict: `Global diff still above threshold.${varianceText}`,
       globalDiffPercent: input.diffPercent,
       qualityStatus: input.qualityStatus,
       topAction,
@@ -267,6 +473,16 @@ function buildAgentSummary(input: {
       qualityStatus: input.qualityStatus,
       topAction: 'Configure regionsOfInterest / visualAssertions for important components before accepting the screen.',
       canStopIterating: false
+    };
+  }
+
+  if (likelyDataVariance) {
+    return {
+      verdict: `Screen acceptable by structural gates. ${likelyDataVariance.label} has high raw ROI diff but passes after narrow dynamic masking, so the remaining mismatch is likely data variance.`,
+      globalDiffPercent: input.diffPercent,
+      qualityStatus: input.qualityStatus,
+      topAction: 'Keep iterating only if unmasked ROI geometry, typography, or spacing still looks wrong in the artifacts.',
+      canStopIterating: true
     };
   }
 
@@ -319,7 +535,23 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     selectedModel: shouldUseVlm ? vlmConfig.model : null
   };
 
-  if (shouldUseVlm) {
+  await ensureDir(outputDir);
+  await ensureDir(regionsDir);
+  await ensureDir(roiDir);
+
+  const expectedAbsPath = resolveAbsolutePath(input.expectedImage);
+  const actualAbsPath = resolveAbsolutePath(input.actualImage);
+
+  const expectedPng = await loadImageAsPng(expectedAbsPath);
+  let actualPng = await loadImageAsPng(actualAbsPath);
+  const actualSourceWidth = actualPng.width;
+  const actualSourceHeight = actualPng.height;
+  const invalidCapture = detectInvalidActualCapture(actualPng);
+  if (invalidCapture.invalid) {
+    actionRequired = buildInvalidCaptureActionRequired();
+  }
+
+  if (shouldUseVlm && !invalidCapture.invalid) {
     if (!vlmPreflight) {
       vlmPreflight = await preflightOllama(vlmConfig, true);
     }
@@ -353,18 +585,6 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       vlmSummary.warnings.push(vlmUnavailableWarning);
     }
   }
-
-  await ensureDir(outputDir);
-  await ensureDir(regionsDir);
-  await ensureDir(roiDir);
-
-  const expectedAbsPath = resolveAbsolutePath(input.expectedImage);
-  const actualAbsPath = resolveAbsolutePath(input.actualImage);
-
-  const expectedPng = await loadImageAsPng(expectedAbsPath);
-  let actualPng = await loadImageAsPng(actualAbsPath);
-  const actualSourceWidth = actualPng.width;
-  const actualSourceHeight = actualPng.height;
 
   if (expectedPng.width !== actualPng.width || expectedPng.height !== actualPng.height) {
     // Resize actual image
@@ -467,6 +687,9 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
 
   const roiCropArtifacts: RegionOfInterestReport[] = [];
   const localHotspotCandidates: LocalHotspot[] = [];
+  const dynamicMaskQualityFailures: QualityFailure[] = [];
+  const dynamicMaskQualityWarnings: string[] = [];
+  const nonCriticalRoiQualityWarnings: string[] = [];
 
   for (let i = 0; i < rawRegions.length; i++) {
     const box = rawRegions[i];
@@ -492,7 +715,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     let analysis: VlmAnalysis | null = null;
     let analysisStatus: "skipped" | "ok" | "fallback" | "error" = "skipped";
     
-    if (shouldUseVlm && vlmCandidates.has(box)) {
+    if (shouldUseVlm && !invalidCapture.invalid && vlmCandidates.has(box)) {
      if (vlmPreflight?.available && vlmPreflight.selectedModel) {
        const ollamaResult = await explainDiffUsingOllama(expCrop, actCrop, diffCrop, {
          baseUrl: vlmConfig.baseUrl,
@@ -561,22 +784,87 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     const expCrop = path.join(roiDir, `${roi.id}-expected.png`);
     const actCrop = path.join(roiDir, `${roi.id}-actual.png`);
     const diffCrop = path.join(roiDir, `${roi.id}-diff.png`);
+    const structuralDiffCrop = path.join(roiDir, `${roi.id}-structural-diff.png`);
     await cropAndSave(processedExpectedPath, roi.box, expCrop);
     await cropAndSave(processedActualPath, roi.box, actCrop);
     await cropAndSave(diffAbsPath, roi.box, diffCrop);
 
-    const diffPixelsInRoi = countMaskPixels(mismatchMask, roi.box);
-    const totalPixelsInRoi = Math.max(1, roi.box.width * roi.box.height);
-    const diffPercentInRoi = diffPixelsInRoi / totalPixelsInRoi;
+    const resolvedDynamicSubregions = (roi.allowedDynamicSubregions ?? [])
+      .map((subregion) => {
+        const box = resolveRoiDynamicSubregionBox(
+          subregion,
+          roi.box,
+          expectedPng.width,
+          expectedPng.height,
+          actualSourceWidth,
+          actualSourceHeight
+        );
+        if (!box) return null;
+        return {
+          id: subregion.id,
+          label: subregion.label,
+          reason: subregion.reason,
+          coordinateSpace: 'expected' as const,
+          box
+        };
+      })
+      .filter((subregion): subregion is NonNullable<typeof subregion> => subregion !== null);
+    const resolvedDynamicBoxes = resolvedDynamicSubregions.map((subregion) => subregion.box);
+    await writeStructuralRoiDiffCrop(diffImage, roi.box, resolvedDynamicBoxes, structuralDiffCrop);
+    const totalPixelsInRoiRaw = Math.max(1, roi.box.width * roi.box.height);
+    const roiPixelCounts = countRoiPixelsWithDynamicMask(
+      mismatchMask,
+      roi.box,
+      resolvedDynamicBoxes
+    );
+    const diffPixelsInRoi = roiPixelCounts.structuralDiffPixels;
+    const totalPixelsInRoi = roiPixelCounts.structuralTotalPixels;
+    const rawRoiDiffPercent = roiPixelCounts.rawDiffPixels / totalPixelsInRoiRaw;
+    const structuralRoiDiffPercent = diffPixelsInRoi / totalPixelsInRoi;
+    const dynamicMaskedPercentOfRoi = roiPixelCounts.dynamicMaskedPixels / totalPixelsInRoiRaw;
     const intersectingRegionIds = regions.filter((region) => boxesIntersect(region.box, roi.box)).map((region) => region.id);
     const maxDiffPercentForRoi = roi.maxDiffPercent ?? maxDiffPercent;
-    const status: 'pass' | 'fail' = diffPercentInRoi <= maxDiffPercentForRoi ? 'pass' : 'fail';
+    const status: 'pass' | 'fail' = structuralRoiDiffPercent <= maxDiffPercentForRoi ? 'pass' : 'fail';
+    if ((roi.critical ?? false) === false && status === 'fail') {
+      nonCriticalRoiQualityWarnings.push(`Non-critical ROI '${roi.label}' failed local diff threshold while qualityStatus remains pass. Review the ROI before accepting visual parity.`);
+    }
     const diagnostics = status === 'fail'
       ? [
-          'Critical ROI exceeds maxDiffPercent.',
-          `Large local mismatch in ${roi.label} even though global diff may be stable.`
+          'Structural ROI diff exceeds maxDiffPercent.',
+          `Large unmasked local mismatch in ${roi.label} even though global diff may be stable.`
         ]
       : ['ROI within local diff threshold.'];
+    if (resolvedDynamicSubregions.length > 0) {
+      diagnostics.push(`Raw ROI diff ${(rawRoiDiffPercent * 100).toFixed(2)}%; structural ROI diff ${(structuralRoiDiffPercent * 100).toFixed(2)}% after dynamic subregion masking.`);
+      if (rawRoiDiffPercent > maxDiffPercentForRoi && structuralRoiDiffPercent <= maxDiffPercentForRoi) {
+        diagnostics.push('High raw ROI diff with passing structural diff suggests live data variance rather than structural UI drift.');
+      }
+    }
+    if ((roi.critical ?? false) && dynamicMaskedPercentOfRoi > 0.25) {
+      const warning = `Dynamic subregions mask ${(dynamicMaskedPercentOfRoi * 100).toFixed(1)}% of critical ROI '${roi.label}'. Keep masks narrow so structural defects remain visible.`;
+      diagnostics.push(warning);
+      warnings.push(warning);
+      dynamicMaskQualityWarnings.push(warning);
+    }
+    if (dynamicMaskedPercentOfRoi > 0.40) {
+      const roiImportance = (roi.critical ?? false) ? 'critical' : 'non-critical';
+      const warning = `Excessive dynamic masking covers ${(dynamicMaskedPercentOfRoi * 100).toFixed(1)}% of ${roiImportance} ROI '${roi.label}'. Quality gate is not trustworthy without allowBroadDynamicSubregions:true.`;
+      diagnostics.push(warning);
+      warnings.push(warning);
+      dynamicMaskQualityWarnings.push(warning);
+      if ((roi.critical ?? false) && roi.allowBroadDynamicSubregions !== true) {
+        dynamicMaskQualityFailures.push({
+          type: 'excessive_dynamic_masking',
+          roiId: roi.id,
+          label: roi.label,
+          diffPercent: structuralRoiDiffPercent,
+          rawRoiDiffPercent,
+          structuralRoiDiffPercent,
+          dynamicMaskedPercentOfRoi,
+          maxDiffPercent: maxDiffPercentForRoi
+        });
+      }
+    }
 
     roiCropArtifacts.push({
       id: roi.id,
@@ -588,16 +876,21 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       status,
       diffPixels: diffPixelsInRoi,
       totalPixels: totalPixelsInRoi,
-      diffPercent: diffPercentInRoi,
-      diffDensity: diffPercentInRoi,
+      diffPercent: structuralRoiDiffPercent,
+      rawRoiDiffPercent,
+      structuralRoiDiffPercent,
+      dynamicMaskedPercentOfRoi,
+      resolvedDynamicSubregions,
+      diffDensity: structuralRoiDiffPercent,
       maxDiffPercent: maxDiffPercentForRoi,
       intersectingRegionIds,
       diagnostics,
-      weightedScore: diffPercentInRoi * (roi.weight ?? 1),
+      weightedScore: structuralRoiDiffPercent * (roi.weight ?? 1),
       artifacts: {
         expected: expCrop,
         actual: actCrop,
-        diff: diffCrop
+        diff: diffCrop,
+        structuralDiff: structuralDiffCrop
       }
     });
   }
@@ -616,6 +909,9 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       roiId: roi.id,
       label: roi.label,
       diffPercent: roi.diffPercent,
+      rawRoiDiffPercent: roi.rawRoiDiffPercent,
+      structuralRoiDiffPercent: roi.structuralRoiDiffPercent,
+      dynamicMaskedPercentOfRoi: roi.dynamicMaskedPercentOfRoi,
       maxDiffPercent: roi.maxDiffPercent
     }));
 
@@ -650,35 +946,65 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       severity: assertion.severity,
       message: assertion.message,
       actualDiffPercent,
+      metricUsed: 'structuralRoiDiffPercent',
+      rawRoiDiffPercent: roi.rawRoiDiffPercent,
+      structuralRoiDiffPercent: roi.structuralRoiDiffPercent,
+      dynamicMaskedPercentOfRoi: roi.dynamicMaskedPercentOfRoi,
       maxDiffPercent: assertion.maxDiffPercent
     };
   });
 
   const criticalAssertionFailures: QualityFailure[] = visualAssertions
     .filter((assertion) => assertion.severity === 'critical' && assertion.status === 'fail')
-    .map((assertion) => ({
-      type: 'critical_visual_assertion_failed',
-      assertionId: assertion.id,
-      label: visualAssertionsInput.find((candidate) => candidate.id === assertion.id)?.roiId,
-      diffPercent: assertion.actualDiffPercent,
-      maxDiffPercent: assertion.maxDiffPercent
-    }));
+    .map((assertion) => {
+      const roiId = visualAssertionsInput.find((candidate) => candidate.id === assertion.id)?.roiId;
+      const roi = roiCropArtifacts.find((candidate) => candidate.id === roiId);
+      return {
+        type: 'critical_visual_assertion_failed',
+        assertionId: assertion.id,
+        label: roiId,
+        diffPercent: assertion.actualDiffPercent,
+        rawRoiDiffPercent: roi?.rawRoiDiffPercent,
+        structuralRoiDiffPercent: roi?.structuralRoiDiffPercent,
+        dynamicMaskedPercentOfRoi: roi?.dynamicMaskedPercentOfRoi,
+        maxDiffPercent: assertion.maxDiffPercent
+      };
+    });
+
+  const invalidCaptureQualityFailures: QualityFailure[] = invalidCapture.invalid
+    ? [{
+      type: 'invalid_capture',
+      label: 'actual screenshot',
+      diffPercent
+    }]
+    : [];
 
   const qualityFailures: QualityFailure[] = [
+    ...invalidCaptureQualityFailures,
     ...criticalRoiFailures,
-    ...criticalAssertionFailures
+    ...criticalAssertionFailures,
+    ...dynamicMaskQualityFailures
   ];
 
   const hasQualityEvaluationConfig = regionsOfInterestInput.length > 0 || visualAssertionsInput.length > 0;
   const qualityWarnings = hasQualityEvaluationConfig
     ? []
     : ['No regionsOfInterest or visualAssertions configured. Global pixel status does not prove visual parity.'];
+  qualityWarnings.push(...dynamicMaskQualityWarnings);
+  if (invalidCapture.invalid) {
+    qualityWarnings.push('Actual screenshot appears invalid or asleep. Recapture before trusting ROI, VLM, or quality analysis.');
+  }
   if (actionRequired?.type === 'vlm_unavailable') {
     qualityWarnings.push('VLM analysis was requested but unavailable. Ask the user whether to continue without semantic analysis.');
   }
-  const qualityStatus: 'pass' | 'fail' | 'not_evaluated' = !hasQualityEvaluationConfig
+  const qualityStatus: 'pass' | 'fail' | 'not_evaluated' = invalidCapture.invalid
+    ? 'fail'
+    : !hasQualityEvaluationConfig
     ? 'not_evaluated'
     : (qualityFailures.length > 0 ? 'fail' : 'pass');
+  if (qualityStatus === 'pass') {
+    qualityWarnings.push(...nonCriticalRoiQualityWarnings);
+  }
 
   const priorityFindings: PriorityFinding[] = [];
   for (const failure of criticalRoiFailures) {
@@ -710,6 +1036,19 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
         ] : []
       });
     }
+  }
+  for (const failure of dynamicMaskQualityFailures) {
+    priorityFindings.push({
+      priority: priorityFindings.length + 1,
+      kind: 'excessive_dynamic_masking',
+      label: failure.label ?? failure.roiId ?? 'critical ROI',
+      message: `Excessive dynamic mask coverage in '${failure.label ?? failure.roiId}' makes the ROI quality gate untrustworthy.`,
+      artifactPaths: failure.roiId ? [
+        path.join(roiDir, `${failure.roiId}-expected.png`),
+        path.join(roiDir, `${failure.roiId}-actual.png`),
+        path.join(roiDir, `${failure.roiId}-diff.png`)
+      ] : []
+    });
   }
 
   const rankedRegions = regions.filter((region) => region.actionable !== false)
@@ -755,6 +1094,12 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
         if (failure.type === 'critical_roi_failed') {
           return `Critical ROI '${failure.label ?? failure.roiId}' failed.`;
         }
+        if (failure.type === 'excessive_dynamic_masking') {
+          return `Critical ROI '${failure.label ?? failure.roiId}' has excessive dynamic masking.`;
+        }
+        if (failure.type === 'invalid_capture') {
+          return 'Actual screenshot appears invalid or asleep; recapture before adjusting thresholds.';
+        }
         return `Critical visual assertion '${failure.assertionId}' failed.`;
       })
     ]
@@ -774,7 +1119,11 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
   }
 
   if (criticalRoiFailures.length > 0) {
-    warnings.push(`Critical region '${criticalRoiFailures[0].label}' failed local diff threshold. Do not treat global diff floor as acceptable.`);
+    const failure = criticalRoiFailures[0];
+    const structural = typeof failure.structuralRoiDiffPercent === 'number'
+      ? ` Structural ROI diff: ${(failure.structuralRoiDiffPercent * 100).toFixed(2)}%.`
+      : '';
+    warnings.push(`Critical region '${failure.label}' failed structural local diff threshold.${structural} Do not treat global diff floor as acceptable.`);
   }
 
   if (suggestedMaxDiffPercent !== null) {
@@ -789,19 +1138,25 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     });
   }
 
+  const reportStatus: DiffReport['status'] = invalidCapture.invalid
+    ? 'fail'
+    : (diffPercent <= maxDiffPercent ? 'pass' : 'fail');
+
   const agentSummary = buildAgentSummary({
-    status: diffPercent <= maxDiffPercent ? 'pass' : 'fail',
+    status: reportStatus,
     qualityStatus,
     diffPercent,
     criticalFailures: criticalRoiFailures,
     criticalAssertionFailures,
+    qualityFailures,
+    roiReports: roiCropArtifacts,
     priorityFindings,
     localHotspots,
     actionRequired
   });
 
-  return {
-    status: diffPercent <= maxDiffPercent ? "pass" : "fail",
+  const report: DiffReport = {
+    status: reportStatus,
     diffPixels,
     totalPixels,
     diffPercent,
@@ -844,4 +1199,7 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
     warnings: warnings.length ? warnings : undefined,
     vlm: vlmSummary
   };
+
+  await fs.writeFile(path.join(outputDir, 'report.json'), JSON.stringify(report, null, 2));
+  return report;
 }

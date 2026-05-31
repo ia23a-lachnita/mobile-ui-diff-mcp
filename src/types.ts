@@ -43,6 +43,14 @@ export interface BoxLike {
   height: number;
 }
 
+export interface AllowedDynamicSubregionConfig {
+  id: string;
+  label?: string;
+  coordinateSpace?: 'roiNormalized' | 'normalized' | 'expected' | 'actual';
+  box: BoxLike;
+  reason?: string;
+}
+
 export interface RegionOfInterestConfig {
   id: string;
   label: string;
@@ -52,6 +60,8 @@ export interface RegionOfInterestConfig {
   coordinateSpace?: 'normalized' | 'expected' | 'actual';
   box: BoxLike;
   maxDiffPercent?: number;
+  allowedDynamicSubregions?: AllowedDynamicSubregionConfig[];
+  allowBroadDynamicSubregions?: boolean;
 }
 
 export interface VisualAssertionConfig {
@@ -129,7 +139,7 @@ export interface VlmAvailability {
 }
 
 export interface ActionRequired {
-  type: 'vlm_unavailable';
+  type: 'vlm_unavailable' | 'invalid_capture';
   severity: 'blocking';
   message: string;
   recommendedUserPrompt: string;
@@ -161,11 +171,14 @@ export interface RunDelta {
 }
 
 export interface QualityFailure {
-  type: 'critical_roi_failed' | 'critical_visual_assertion_failed' | 'global_diff_failed';
+  type: 'critical_roi_failed' | 'critical_visual_assertion_failed' | 'global_diff_failed' | 'excessive_dynamic_masking' | 'invalid_capture';
   roiId?: string;
   assertionId?: string;
   label?: string;
   diffPercent?: number;
+  rawRoiDiffPercent?: number;
+  structuralRoiDiffPercent?: number;
+  dynamicMaskedPercentOfRoi?: number;
   maxDiffPercent?: number;
 }
 
@@ -183,6 +196,10 @@ export interface VisualAssertionResult {
   severity: 'critical' | 'high' | 'medium' | 'low';
   message: string;
   actualDiffPercent?: number;
+  metricUsed?: 'structuralRoiDiffPercent';
+  rawRoiDiffPercent?: number;
+  structuralRoiDiffPercent?: number;
+  dynamicMaskedPercentOfRoi?: number;
   maxDiffPercent: number;
 }
 
@@ -205,6 +222,16 @@ export interface RegionOfInterestReport {
   diffPixels: number;
   totalPixels: number;
   diffPercent: number;
+  rawRoiDiffPercent: number;
+  structuralRoiDiffPercent: number;
+  dynamicMaskedPercentOfRoi: number;
+  resolvedDynamicSubregions: Array<{
+    id: string;
+    label?: string;
+    reason?: string;
+    coordinateSpace: 'expected';
+    box: BoxLike;
+  }>;
   diffDensity: number;
   maxDiffPercent: number;
   intersectingRegionIds: string[];
@@ -214,11 +241,12 @@ export interface RegionOfInterestReport {
     expected: string;
     actual: string;
     diff: string;
+    structuralDiff?: string;
   };
 }
 
 export interface FloorBlocker {
-  type: 'critical_roi_failed' | 'critical_visual_assertion_failed' | 'quality_not_evaluated';
+  type: 'critical_roi_failed' | 'critical_visual_assertion_failed' | 'quality_not_evaluated' | 'quality_failed';
   roiId?: string;
   assertionId?: string;
   label?: string;
