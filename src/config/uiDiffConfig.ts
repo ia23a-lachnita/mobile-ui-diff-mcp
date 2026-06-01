@@ -61,6 +61,17 @@ export const allowedDynamicSubregionSchema = z.object({
   reason: z.string().min(1).optional()
 });
 
+export const geometryDiagnosticsSchema = z.object({
+  type: z.literal('radialChart'),
+  enabled: z.boolean(),
+  maskDynamicSubregions: z.boolean().optional(),
+  colorHints: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
+  centerToleranceNorm: z.number().positive().optional(),
+  radiusToleranceNorm: z.number().positive().optional(),
+  angleToleranceDeg: z.number().positive().optional(),
+  strokeToleranceNorm: z.number().positive().optional()
+});
+
 export const regionOfInterestSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
@@ -76,7 +87,8 @@ export const regionOfInterestSchema = z.object({
   }),
   maxDiffPercent: z.number().min(0).max(1).optional(),
   allowedDynamicSubregions: z.array(allowedDynamicSubregionSchema).optional(),
-  allowBroadDynamicSubregions: z.boolean().optional()
+  allowBroadDynamicSubregions: z.boolean().optional(),
+  geometryDiagnostics: geometryDiagnosticsSchema.optional()
 });
 
 export const visualAssertionSchema = z.object({
