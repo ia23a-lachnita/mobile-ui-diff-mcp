@@ -275,11 +275,13 @@ export interface RadialChartGeometryFinding {
     | 'ringGapMismatch'
     | 'angleMismatch'
     | 'sweepMismatch'
+    | 'missingArc'
     | 'capMismatch'
     | 'haloOrTrackMismatch'
     | 'scaleOnlyMismatch'
     | 'insufficientSignal';
   severity: GeometryFindingSeverity;
+  color?: string;
   message?: string;
   expectedNorm?: number;
   actualNorm?: number;

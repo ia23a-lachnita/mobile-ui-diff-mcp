@@ -393,16 +393,52 @@ function compareMetrics(
     });
   }
 
-  const expectedArc = expected.arcs[0];
-  const actualArc = actual.arcs.find((arc) => arc.color === expectedArc?.color) ?? actual.arcs[0];
-  if (expectedArc && actualArc) {
+  for (const expectedArc of expected.arcs) {
+    const actualArc = actual.arcs.find((arc) => arc.color === expectedArc.color);
+    if (!actualArc) {
+      findings.push({
+        kind: 'missingArc',
+        severity: 'high',
+        color: expectedArc.color,
+        message: `Expected ${expectedArc.color} arc was not detected in the actual ROI crop.`
+      });
+      continue;
+    }
+
+    const arcRadiusDelta = round(actualArc.meanRadiusNorm - expectedArc.meanRadiusNorm);
+    if (Math.abs(arcRadiusDelta) > radiusTolerance) {
+      findings.push({
+        kind: 'relativeRadiusMismatch',
+        severity: findingSeverity(arcRadiusDelta, radiusTolerance),
+        color: expectedArc.color,
+        message: `Actual ${expectedArc.color} arc radius differs by ${arcRadiusDelta} relative to ROI width.`,
+        expectedNorm: expectedArc.meanRadiusNorm,
+        actualNorm: actualArc.meanRadiusNorm,
+        deltaNorm: arcRadiusDelta
+      });
+    }
+
+    const arcStrokeDelta = round(actualArc.strokeWidthNorm - expectedArc.strokeWidthNorm);
+    if (Math.abs(arcStrokeDelta) > strokeTolerance) {
+      findings.push({
+        kind: 'strokeWidthMismatch',
+        severity: findingSeverity(arcStrokeDelta, strokeTolerance),
+        color: expectedArc.color,
+        message: `Actual ${expectedArc.color} arc stroke width differs by ${arcStrokeDelta} relative to ROI width.`,
+        expectedNorm: expectedArc.strokeWidthNorm,
+        actualNorm: actualArc.strokeWidthNorm,
+        deltaNorm: arcStrokeDelta
+      });
+    }
+
     const deltaStart = round(circularDeltaDeg(actualArc.startAngleDeg, expectedArc.startAngleDeg), 1);
     const deltaEnd = round(circularDeltaDeg(actualArc.endAngleDeg, expectedArc.endAngleDeg), 1);
     if (Math.abs(deltaStart) > angleTolerance && Math.abs(deltaEnd) > angleTolerance) {
       findings.push({
         kind: 'angleMismatch',
         severity: findingSeverity(Math.max(Math.abs(deltaStart), Math.abs(deltaEnd)), angleTolerance),
-        message: `Actual arc start/end angles differ by ${deltaStart}/${deltaEnd} degrees.`,
+        color: expectedArc.color,
+        message: `Actual ${expectedArc.color} arc start/end angles differ by ${deltaStart}/${deltaEnd} degrees.`,
         deltaStartDeg: deltaStart,
         deltaEndDeg: deltaEnd
       });
@@ -413,7 +449,8 @@ function compareMetrics(
       findings.push({
         kind: 'sweepMismatch',
         severity: findingSeverity(deltaSweep, angleTolerance),
-        message: `Actual arc sweep differs by ${deltaSweep} degrees.`,
+        color: expectedArc.color,
+        message: `Actual ${expectedArc.color} arc sweep differs by ${deltaSweep} degrees.`,
         deltaSweepDeg: deltaSweep
       });
     }
@@ -445,7 +482,8 @@ function buildAgentHint(findings: RadialChartGeometryFinding[]) {
   if (primary.kind === 'ringGapMismatch') return 'Actual ring gap differs. Inspect per-ring radius or gap formula.';
   if (primary.kind === 'angleMismatch') return 'Actual arc starts or ends at a different angle. Inspect startAngle or progress-to-angle mapping.';
   if (primary.kind === 'sweepMismatch') return 'Actual arc sweep differs. Inspect progress-to-sweep mapping before changing layout.';
-  if (primary.kind === 'scaleOnlyMismatch') return 'Absolute pixels differ while normalized geometry is close. Inspect baseline/device sizing or thresholds, not Flutter geometry.';
+  if (primary.kind === 'missingArc') return `Expected ${primary.color ?? ''} arc was not detected in the actual crop. Inspect arc color, progress value, masking, or rendering order.`;
+  if (primary.kind === 'scaleOnlyMismatch') return 'Absolute pixels differ while normalized geometry is close. Baseline/device sizing or thresholds may be involved; confirm source scale context before changing Flutter geometry.';
   return 'Radial geometry signal was insufficient. Inspect arc colors, masks, or inactive track layers.';
 }
 
@@ -566,9 +604,13 @@ export async function runRadialChartDiagnostics(input: RadialChartDiagnosticsInp
       : findings.every((finding) => finding.kind === 'scaleOnlyMismatch')
         ? 'scaleOnlyMismatch'
         : 'relativeGeometryMismatch';
+    const status = findings.some((finding) => finding.kind === 'missingArc') ? 'warning' : 'completed';
+    const missingWarnings = findings
+      .filter((finding) => finding.kind === 'missingArc')
+      .map((finding) => `Expected ${finding.color ?? 'colored'} arc was not detected in actual radial chart segmentation.`);
     return {
       type: 'radialChart',
-      status: 'completed',
+      status,
       confidence: round(Math.min(expected.confidence, actual.confidence), 2),
       metrics: {
         expected: expected.metrics,
@@ -578,7 +620,7 @@ export async function runRadialChartDiagnostics(input: RadialChartDiagnosticsInp
       verdict,
       agentHint: buildAgentHint(findings),
       artifacts,
-      warnings
+      warnings: [...warnings, ...missingWarnings]
     };
   } catch (err: any) {
     return {

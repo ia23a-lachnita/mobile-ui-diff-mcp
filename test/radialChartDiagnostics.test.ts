@@ -10,6 +10,8 @@ const width = 160;
 const height = 120;
 const roi = { x: 0, y: 0, width, height };
 const blue: [number, number, number] = [63, 91, 255];
+const cyan: [number, number, number] = [36, 212, 216];
+const green: [number, number, number] = [38, 208, 111];
 
 beforeAll(async () => {
   await fs.rm(testDir, { recursive: true, force: true });
@@ -96,6 +98,39 @@ async function createChartImage(
   return file;
 }
 
+type MultiArcOverrides = {
+  blue?: Partial<{ radius: number; stroke: number; start: number; sweep: number; omit: boolean }>;
+  cyan?: Partial<{ radius: number; stroke: number; start: number; sweep: number; omit: boolean }>;
+  green?: Partial<{ radius: number; stroke: number; start: number; sweep: number; omit: boolean }>;
+};
+
+async function createMultiArcChartImage(name: string, overrides: MultiArcOverrides = {}) {
+  const file = path.join(testDir, `${name}.png`);
+  const png = new PNG({ width, height });
+  fill(png, [255, 255, 255]);
+  const specs = [
+    { key: 'blue' as const, color: blue, radius: 50, stroke: 7, start: -90, sweep: 180 },
+    { key: 'cyan' as const, color: cyan, radius: 39, stroke: 7, start: -70, sweep: 150 },
+    { key: 'green' as const, color: green, radius: 28, stroke: 7, start: -50, sweep: 120 }
+  ];
+  for (const spec of specs) {
+    const override = overrides[spec.key] ?? {};
+    if (override.omit) continue;
+    drawArc(
+      png,
+      80,
+      60,
+      override.radius ?? spec.radius,
+      override.stroke ?? spec.stroke,
+      override.start ?? spec.start,
+      override.sweep ?? spec.sweep,
+      spec.color
+    );
+  }
+  await fs.writeFile(file, PNG.sync.write(png));
+  return file;
+}
+
 function radialRoi(geometryOverrides: Record<string, unknown> = {}, roiOverrides: Record<string, unknown> = {}) {
   return {
     id: 'macro-ring-hero',
@@ -116,6 +151,25 @@ function radialRoi(geometryOverrides: Record<string, unknown> = {}, roiOverrides
     },
     ...roiOverrides
   };
+}
+
+async function compareMultiArcCharts(name: string, expectedOverrides: MultiArcOverrides = {}, actualOverrides: MultiArcOverrides = {}) {
+  const expectedImage = await createMultiArcChartImage(`${name}-expected`, expectedOverrides);
+  const actualImage = await createMultiArcChartImage(`${name}-actual`, actualOverrides);
+  const result = await compareImages({
+    expectedImage,
+    actualImage,
+    outputDir: path.join(testDir, `out-${name}`),
+    maxDiffPercent: 1,
+    regionsOfInterest: [radialRoi({
+      colorHints: ['#3F5BFF', '#24D4D8', '#26D06F'],
+      radiusToleranceNorm: 0.02,
+      strokeToleranceNorm: 0.015,
+      angleToleranceDeg: 6
+    })]
+  } as any);
+  const roiReport = result.regionsOfInterest?.[0] as any;
+  return { result, roiReport, diagnostic: roiReport.geometryDiagnostics };
 }
 
 async function compareCharts(
@@ -202,6 +256,53 @@ describe('radial chart geometry diagnostics', () => {
 
     expect(finding).toBeTruthy();
     expect(finding.deltaSweepDeg).toBeGreaterThan(20);
+  });
+
+  it('reports angle mismatch for only the rotated green arc', async () => {
+    const { diagnostic } = await compareMultiArcCharts('green-angle', {}, {
+      green: { start: -35 }
+    });
+    const finding = diagnostic.findings.find((item: any) => item.kind === 'angleMismatch');
+
+    expect(finding).toMatchObject({ color: '#26D06F' });
+    expect(Math.abs(finding.deltaStartDeg)).toBeGreaterThanOrEqual(10);
+    expect(diagnostic.findings.some((item: any) => item.kind === 'angleMismatch' && item.color === '#3F5BFF')).toBe(false);
+    expect(diagnostic.findings.some((item: any) => item.kind === 'angleMismatch' && item.color === '#24D4D8')).toBe(false);
+  });
+
+  it('reports relative radius mismatch for only the cyan arc', async () => {
+    const { diagnostic } = await compareMultiArcCharts('cyan-radius', {}, {
+      cyan: { radius: 32 }
+    });
+    const finding = diagnostic.findings.find((item: any) => item.kind === 'relativeRadiusMismatch');
+
+    expect(finding).toMatchObject({ color: '#24D4D8' });
+    expect(finding.deltaNorm).toBeLessThan(0);
+    expect(diagnostic.findings.some((item: any) => item.kind === 'relativeRadiusMismatch' && item.color === '#3F5BFF')).toBe(false);
+    expect(diagnostic.findings.some((item: any) => item.kind === 'relativeRadiusMismatch' && item.color === '#26D06F')).toBe(false);
+  });
+
+  it('reports stroke width mismatch for only the blue arc', async () => {
+    const { diagnostic } = await compareMultiArcCharts('blue-stroke', {}, {
+      blue: { stroke: 14 }
+    });
+    const finding = diagnostic.findings.find((item: any) => item.kind === 'strokeWidthMismatch');
+
+    expect(finding).toMatchObject({ color: '#3F5BFF' });
+    expect(finding.deltaNorm).toBeGreaterThan(0);
+    expect(diagnostic.findings.some((item: any) => item.kind === 'strokeWidthMismatch' && item.color === '#24D4D8')).toBe(false);
+    expect(diagnostic.findings.some((item: any) => item.kind === 'strokeWidthMismatch' && item.color === '#26D06F')).toBe(false);
+  });
+
+  it('warns when an expected color arc is missing in the actual chart', async () => {
+    const { diagnostic } = await compareMultiArcCharts('missing-green', {}, {
+      green: { omit: true }
+    });
+    const finding = diagnostic.findings.find((item: any) => item.kind === 'missingArc');
+
+    expect(diagnostic.status).toBe('warning');
+    expect(finding).toMatchObject({ color: '#26D06F', severity: 'high' });
+    expect(diagnostic.warnings.some((warning: string) => warning.includes('#26D06F'))).toBe(true);
   });
 
   it('distinguishes small pixel-only drift from relative geometry mismatch', async () => {

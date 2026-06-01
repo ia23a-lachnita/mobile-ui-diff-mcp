@@ -526,7 +526,7 @@ Example report excerpt:
 
 Interpretation guide:
 
-- `scaleOnlyMismatch`: normalized geometry is close, so review baseline/device sizing or thresholds before changing Flutter code.
+- `scaleOnlyMismatch`: normalized geometry is close while absolute pixels differ. Baseline/device sizing or thresholds may be involved, but confirm source canvas/device scale context before ruling out Flutter geometry.
 - `relativeRadiusMismatch`: inspect ring size, canvas size, or radius formula.
 - `centerShift`: inspect alignment, padding, or chart positioning.
 - `angleMismatch` / `sweepMismatch`: inspect start angle and progress-to-sweep mapping.
@@ -534,6 +534,8 @@ Interpretation guide:
 - `insufficientSignal`: segmentation found too little arc signal; inspect color hints, dynamic masks, inactive track, or halo layers.
 
 Pixel diff tells you how many pixels changed. VLM can describe visible differences when available. Geometry diagnostics gives deterministic measurements for configured chart ROIs and is persisted in both the MCP response and `report.json`.
+
+Current radial diagnostics compare center, per-color arc radius, stroke width, start/end angle, sweep, missing arcs, and ring gap estimates. `capMismatch` and `haloOrTrackMismatch` are reserved finding names for future work; this phase does not emit them.
 
 ### Floor Detection
 
