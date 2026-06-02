@@ -497,6 +497,12 @@ function buildAgentSummary(input: {
 }
 
 export async function compareImages(input: CompareImagesInput): Promise<DiffReport> {
+  const { runPipeline } = await import('../pipeline/RunOrchestrator');
+  return runPipeline(input);
+}
+
+/** @deprecated Use compareImages (which now delegates to runPipeline internally) */
+async function _compareImagesLegacy(input: CompareImagesInput): Promise<DiffReport> {
   const pixelmatchThreshold = input.pixelmatchThreshold ?? input.threshold ?? 0.1;
   const maxDiffPercent = input.maxDiffPercent ?? 0.001;
   const maxRegions = input.maxRegions ?? 50;

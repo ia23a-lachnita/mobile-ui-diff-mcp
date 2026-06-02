@@ -405,6 +405,52 @@ export interface LocalHotspot {
   message: string;
 }
 
+export type ChangeVector =
+  | 'seed_data' | 'fixture_plan'
+  | 'ring_stroke_width' | 'ring_radius_size' | 'ring_gap'
+  | 'ring_start_angle' | 'ring_sweep_mapping' | 'ring_center_alignment'
+  | 'ring_glow_track'
+  | 'component_layout' | 'card_spacing_padding'
+  | 'text_style' | 'color_token'
+  | 'thumbnail_gradient' | 'badge_style' | 'bottom_nav_padding'
+  | 'expected_baseline' | 'roi_threshold' | 'device_profile'
+  | 'dynamic_mask' | 'none';
+
+export type ReasonCode =
+  | 'SOURCE_AND_GEOMETRY_AGREE'
+  | 'SOURCE_CONTRADICTION'
+  | 'SCALE_ONLY_MISMATCH'
+  | 'REFERENCE_CONFLICT'
+  | 'INSUFFICIENT_CONFIDENCE'
+  | 'MODEL_DISAGREEMENT'
+  | 'NON_DETERMINISTIC_CAPTURE'
+  | 'INVALID_CAPTURE'
+  | 'QUALITY_GATE_PASS'
+  | 'MASK_TOO_BROAD'
+  | 'NO_SUPPORTING_EVIDENCE'
+  | 'OUT_OF_SCOPE';
+
+export interface AllowedChangeVector {
+  vector: ChangeVector;
+  scope?: string;
+  reasonCode: ReasonCode;
+  maxChanges?: number;
+}
+
+export interface BlockedChangeVector {
+  vector: ChangeVector;
+  reasonCode: ReasonCode;
+}
+
+export interface AgentActionContract {
+  canEditApp: boolean;
+  confidence: 'high' | 'medium' | 'low' | 'none';
+  allowedChangeVectors: AllowedChangeVector[];
+  blockedChangeVectors: BlockedChangeVector[];
+  requiresUserDecision: boolean;
+  reasonSummary?: string;
+}
+
 export interface DiffReport {
   status: "pass" | "fail";
   diffPixels: number;
@@ -443,6 +489,7 @@ export interface DiffReport {
   appliedDeviceProfile?: DeviceProfile | null;
   configSuggestions?: ConfigSuggestion[];
   agentSummary?: AgentSummary;
+  agentActionContract?: AgentActionContract;
   suggestedMaxDiffPercent?: number | null;
   maxDiffPercentSuggestionBlockedBy?: string[];
   vlmPolicy?: VlmPolicy;
