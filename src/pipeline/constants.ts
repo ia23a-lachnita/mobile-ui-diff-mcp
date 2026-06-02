@@ -1,0 +1,12 @@
+export const PIXEL_DIFF_KEY = 'pixelDiff';
+export const INVALID_CAPTURE_SOURCE = 'invalidCapture';
+export const INVALID_CAPTURE_CLAIM_ID = 'invalid-capture-detected';
+export const RADIAL_GEOMETRY_SOURCE = 'radialGeometry';
+export const SCALE_ONLY_MISMATCH_VERDICT = 'scaleOnlyMismatch';
+export const ROI_QUALITY_SOURCE = 'roiQuality';
+export const CRITICAL_ROI_FAILED_TYPE = 'critical_roi_failed';
+export const CRITICAL_VISUAL_ASSERTION_FAILED_TYPE = 'critical_visual_assertion_failed';
+export const EXCESSIVE_DYNAMIC_MASKING_TYPE = 'excessive_dynamic_masking';
+export const INVALID_CAPTURE_TYPE = 'invalid_capture';
+export const VLM_UNUSABLE_MESSAGE = 'VLM analysis is required but no configured Ollama model could be loaded.';
+export const VLM_ASK_USER_UNAVAILABLE_MESSAGE = 'Start Ollama and ensure a vision model is available, or disable VLM analysis in your config, then rerun.';
