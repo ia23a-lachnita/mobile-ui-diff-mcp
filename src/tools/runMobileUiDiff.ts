@@ -7,6 +7,8 @@ import { ConfigSuggestion, DeviceProfile, DeviceSize, DiffReport, IgnoreRegion, 
 import { ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 import { runPreCaptureSteps } from './preCapture';
 import fs from 'fs/promises';
+import type { ReferenceContextConfig } from '../pipeline/ConflictResolver';
+import type { ModelJudgesConfig } from '../pipeline/judges/ModelJudgeAnalyzer';
 
 export interface RunMobileUiDiffInput {
   platform: 'android' | 'ios' | 'none';
@@ -38,6 +40,8 @@ export interface RunMobileUiDiffInput {
   visualAssertions?: VisualAssertionConfig[];
   vlmConfig?: ResolvedOllamaConfig;
   vlmPreflight?: VlmPreflightResult;
+  referenceContext?: ReferenceContextConfig;
+  modelJudges?: ModelJudgesConfig;
 }
 
 export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<DiffReport> {
@@ -93,7 +97,9 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     floorDetection: input.floorDetection,
     hotspotDetection: input.hotspotDetection,
     regionsOfInterest: input.regionsOfInterest,
-    visualAssertions: input.visualAssertions
+    visualAssertions: input.visualAssertions,
+    referenceContext: input.referenceContext,
+    modelJudges: input.modelJudges
   });
 
   if (preCaptureResults?.length) {

@@ -15,6 +15,12 @@ export interface Evidence {
   confidence: number;
   authority: 'deterministic' | 'source' | 'model' | 'user';
   measurements?: Record<string, number | string | boolean>;
+  // Structured fields for contradiction detection (replaces keyword heuristics)
+  claimType?: string;
+  expectedValue?: number | string;
+  actualValue?: number | string;
+  unit?: string;
+  proposedChangeVector?: string;
   blocked?: boolean;
   blockReason?: ReasonCode;
 }
@@ -28,8 +34,11 @@ export interface EvidenceBundle {
     geometryOverlay?: string;
   };
   deterministicFindings: string[];
+  deterministicEvidence: Evidence[];
   ocrFindings: string[];
+  ocrEvidence: Evidence[];
   referenceFacts: string[];
+  referenceEvidence: Evidence[];
 }
 
 export interface AnalyzerResult {

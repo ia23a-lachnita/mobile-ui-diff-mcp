@@ -44,8 +44,7 @@ export class ConflictResolver {
     for (const modelItem of modelEvidence) {
       for (const sourceFact of sourceFacts) {
         if (sourceFact.subject === modelItem.subject || sourceFact.subject === 'global') {
-          // Check for semantic contradiction (simple heuristic: opposing claims)
-          if (this.claimsContradict(sourceFact.claim, modelItem.claim)) {
+          if (this.claimsContradict(sourceFact, modelItem)) {
             graph.block(modelItem.claimId, 'SOURCE_CONTRADICTION');
             blockedClaimIds.push(modelItem.claimId);
             warnings.push(`Model claim '${modelItem.claimId}' blocked: contradicted by source fact '${sourceFact.claimId}'`);
@@ -59,8 +58,7 @@ export class ConflictResolver {
     for (const modelItem of allEvidence.filter((e) => e.authority === 'model' && !e.blocked)) {
       for (const detItem of deterministicEvidence) {
         if (detItem.subject === modelItem.subject) {
-          if (this.claimsContradict(detItem.claim, modelItem.claim)) {
-            // Downgrade confidence
+          if (this.claimsContradict(detItem, modelItem)) {
             modelItem.confidence = Math.max(0, modelItem.confidence * 0.5);
             downgradedClaimIds.push(modelItem.claimId);
             warnings.push(`Model claim '${modelItem.claimId}' confidence downgraded: contradicted by deterministic measurement '${detItem.claimId}'`);
@@ -100,19 +98,38 @@ export class ConflictResolver {
     };
   }
 
-  private claimsContradict(claimA: string, claimB: string): boolean {
-    const a = claimA.toLowerCase();
-    const b = claimB.toLowerCase();
+  private claimsContradict(evidenceA: Evidence, evidenceB: Evidence): boolean {
+    // Structured comparison: same claimType and subject — compare expected vs actual values
+    if (
+      evidenceA.claimType &&
+      evidenceB.claimType &&
+      evidenceA.claimType === evidenceB.claimType
+    ) {
+      if (evidenceA.expectedValue !== undefined && evidenceB.actualValue !== undefined) {
+        return String(evidenceA.expectedValue) !== String(evidenceB.actualValue);
+      }
+      if (evidenceA.actualValue !== undefined && evidenceB.expectedValue !== undefined) {
+        return String(evidenceA.actualValue) !== String(evidenceB.expectedValue);
+      }
+    }
 
-    // Simple heuristic contradiction detection
+    // Structured comparison: proposedChangeVector — 'none' vs any app change vector contradicts
+    if (evidenceA.proposedChangeVector && evidenceB.proposedChangeVector) {
+      const noChangeVectors = ['none', 'no_change'];
+      const aIsNoChange = noChangeVectors.includes(evidenceA.proposedChangeVector);
+      const bIsNoChange = noChangeVectors.includes(evidenceB.proposedChangeVector);
+      if (aIsNoChange !== bIsNoChange) return true;
+    }
+
+    // Keyword fallback for unstructured claim text
+    const a = evidenceA.claim.toLowerCase();
+    const b = evidenceB.claim.toLowerCase();
     const passKeywords = ['pass', 'within tolerance', 'no mismatch', 'valid', 'acceptable'];
     const failKeywords = ['fail', 'mismatch', 'invalid', 'differs', 'wrong', 'error'];
-
     const aIsPass = passKeywords.some((k) => a.includes(k));
     const aIsFail = failKeywords.some((k) => a.includes(k));
     const bIsPass = passKeywords.some((k) => b.includes(k));
     const bIsFail = failKeywords.some((k) => b.includes(k));
-
     return (aIsPass && bIsFail) || (aIsFail && bIsPass);
   }
 }

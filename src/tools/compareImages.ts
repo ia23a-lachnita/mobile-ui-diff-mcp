@@ -8,6 +8,8 @@ import { cropAndSave } from '../image/crops';
 import { runRadialChartDiagnostics } from '../image/radialChartDiagnostics';
 import { explainDiffUsingOllama, preflightOllama, resolveOllamaConfig, ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 import { ConfigSuggestion, DeviceProfile, IgnoreRegion, RegionReport, DiffReport, VlmSummary, VlmAnalysis, RegionOfInterestConfig, RegionOfInterestReport, QualityFailure, PriorityFinding, VisualAssertionConfig, VisualAssertionResult, FloorDetectionConfig, RunDelta, FloorBlocker, AgentSummary, HotspotDetectionConfig, LocalHotspot, VlmPolicy, VlmAvailability, ActionRequired } from '../types';
+import type { ReferenceContextConfig } from '../pipeline/ConflictResolver';
+import type { ModelJudgesConfig } from '../pipeline/judges/ModelJudgeAnalyzer';
 import fs from 'fs/promises';
 import { PNG } from 'pngjs';
 
@@ -37,6 +39,8 @@ export interface CompareImagesInput {
   hotspotDetection?: HotspotDetectionConfig;
   vlmConfig?: ResolvedOllamaConfig;
   vlmPreflight?: VlmPreflightResult;
+  referenceContext?: ReferenceContextConfig;
+  modelJudges?: ModelJudgesConfig;
 }
 
 function clamp(value: number, min: number, max: number): number {

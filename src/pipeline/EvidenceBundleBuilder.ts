@@ -9,17 +9,9 @@ export class EvidenceBundleBuilder {
 
     for (const roi of ctx.regionsOfInterest) {
       const roiEvidence = graph.getBySubject(`roi:${roi.id}`);
-      const deterministicFindings = roiEvidence
-        .filter((e) => e.authority === 'deterministic' && !e.blocked)
-        .map((e) => e.claimId);
-
-      const ocrFindings = roiEvidence
-        .filter((e) => e.source === 'textOcr' && !e.blocked)
-        .map((e) => e.claimId);
-
-      const referenceFacts = roiEvidence
-        .filter((e) => e.authority === 'source' && !e.blocked)
-        .map((e) => e.claimId);
+      const deterministicEvidenceObjects = roiEvidence.filter((e) => e.authority === 'deterministic' && !e.blocked);
+      const ocrEvidenceObjects = roiEvidence.filter((e) => e.source === 'textOcr' && !e.blocked);
+      const referenceEvidenceObjects = roiEvidence.filter((e) => e.authority === 'source' && !e.blocked);
 
       const expCrop = path.join(ctx.roiDir, `${roi.id}-expected.png`);
       const actCrop = path.join(ctx.roiDir, `${roi.id}-actual.png`);
@@ -34,15 +26,20 @@ export class EvidenceBundleBuilder {
           structuralDiff,
           geometryOverlay
         },
-        deterministicFindings,
-        ocrFindings,
-        referenceFacts
+        deterministicFindings: deterministicEvidenceObjects.map((e) => e.claimId),
+        deterministicEvidence: deterministicEvidenceObjects,
+        ocrFindings: ocrEvidenceObjects.map((e) => e.claimId),
+        ocrEvidence: ocrEvidenceObjects,
+        referenceFacts: referenceEvidenceObjects.map((e) => e.claimId),
+        referenceEvidence: referenceEvidenceObjects
       });
     }
 
     // Global bundle for evidence not tied to specific ROI
     const globalEvidence = graph.getBySubject('global');
     if (globalEvidence.length > 0) {
+      const globalDeterministic = globalEvidence.filter((e) => e.authority === 'deterministic' && !e.blocked);
+      const globalReference = globalEvidence.filter((e) => e.authority === 'source' && !e.blocked);
       bundles.push({
         roiId: 'global',
         artifacts: {
@@ -50,13 +47,12 @@ export class EvidenceBundleBuilder {
           actualCrop: path.join(ctx.outputDir, 'actual.png'),
           structuralDiff: path.join(ctx.outputDir, 'diff.png')
         },
-        deterministicFindings: globalEvidence
-          .filter((e) => e.authority === 'deterministic' && !e.blocked)
-          .map((e) => e.claimId),
+        deterministicFindings: globalDeterministic.map((e) => e.claimId),
+        deterministicEvidence: globalDeterministic,
         ocrFindings: [],
-        referenceFacts: globalEvidence
-          .filter((e) => e.authority === 'source' && !e.blocked)
-          .map((e) => e.claimId)
+        ocrEvidence: [],
+        referenceFacts: globalReference.map((e) => e.claimId),
+        referenceEvidence: globalReference
       });
     }
 

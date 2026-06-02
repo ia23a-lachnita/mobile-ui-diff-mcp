@@ -88,6 +88,8 @@ export class ModelJudgeAnalyzer {
 
     // Build primary provider
     let actionRequired: ActionRequired | undefined;
+    const primaryEvidence: Evidence[] = [];
+    const reviewerEvidence: Evidence[] = [];
 
     if (cfg.primary) {
       const provider = buildProvider(cfg.primary);
@@ -120,10 +122,7 @@ export class ModelJudgeAnalyzer {
         for (const bundle of bundles) {
           try {
             const bundleEvidence = await provider.analyze(bundle, allEvidence);
-            for (const e of bundleEvidence) {
-              evidence.push(e);
-              graph.add(e);
-            }
+            primaryEvidence.push(...bundleEvidence);
           } catch (err: any) {
             warnings.push(`ModelJudgeAnalyzer: primary provider failed for ROI '${bundle.roiId}': ${err?.message ?? String(err)}`);
           }
@@ -141,15 +140,33 @@ export class ModelJudgeAnalyzer {
         for (const bundle of bundles) {
           try {
             const bundleEvidence = await provider.analyze(bundle, allEvidence);
-            for (const e of bundleEvidence) {
-              evidence.push(e);
-              graph.add(e);
-            }
+            reviewerEvidence.push(...bundleEvidence);
           } catch (err: any) {
             warnings.push(`ModelJudgeAnalyzer: reviewer provider failed for ROI '${bundle.roiId}': ${err?.message ?? String(err)}`);
           }
         }
       }
+    }
+
+    // Enforce requireConsensusForCodeHints: block code hints from primary that reviewer doesn't corroborate
+    if (cfg.requireConsensusForCodeHints && reviewerEvidence.length > 0) {
+      for (const primaryItem of primaryEvidence) {
+        if (!primaryItem.proposedChangeVector) continue;
+        const hasConsensus = reviewerEvidence.some(
+          (r) => r.subject === primaryItem.subject && r.proposedChangeVector === primaryItem.proposedChangeVector
+        );
+        if (!hasConsensus) {
+          primaryItem.blocked = true;
+          primaryItem.blockReason = 'SOURCE_CONTRADICTION';
+          warnings.push(`ModelJudgeAnalyzer: code hint '${primaryItem.claimId}' blocked: no reviewer consensus on proposedChangeVector '${primaryItem.proposedChangeVector}'`);
+        }
+      }
+    }
+
+    // Commit all evidence to graph
+    for (const e of [...primaryEvidence, ...reviewerEvidence]) {
+      evidence.push(e);
+      graph.add(e);
     }
 
     return {
