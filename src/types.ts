@@ -497,4 +497,10 @@ export interface DiffReport {
   actionRequired?: ActionRequired | null;
   warnings?: string[];
   vlm?: VlmSummary;
+  referenceContextSummary?: {
+    factsLoaded: number;
+    sourcesLoaded: number;
+    missingFiles: string[];
+    warnings: string[];
+  };
 }

@@ -10,20 +10,46 @@ export class NvidiaProvider implements IModelJudgeProvider {
   async analyze(bundle: EvidenceBundle, allEvidence: Evidence[]): Promise<Evidence[]> {
     const evidence: Evidence[] = [];
 
-    const deterministicContext = allEvidence
-      .filter((e) => bundle.deterministicFindings.includes(e.claimId))
-      .map((e) => `- [${e.source}] ${e.claim} (confidence: ${e.confidence})`)
-      .join('\n');
+    const formatMeasurements = (m: Record<string, unknown> | undefined): string => {
+      if (!m) return '';
+      const parts: string[] = [];
+      if (m.expectedNorm !== undefined) parts.push(`expected=${m.expectedNorm}`);
+      if (m.actualNorm !== undefined) parts.push(`actual=${m.actualNorm}`);
+      if (m.deltaNorm !== undefined) parts.push(`delta=${m.deltaNorm}`);
+      if (m.verdict !== undefined) parts.push(`verdict=${m.verdict}`);
+      return parts.length ? ` [${parts.join(', ')}]` : '';
+    };
+
+    const deterministicContext = (bundle.deterministicEvidence ?? [])
+      .map((e) => `  • [${e.source}] ${e.claim} (conf:${e.confidence.toFixed(2)})${formatMeasurements(e.measurements as any)}`)
+      .join('\n') || '  (none)';
+
+    const ocrContext = (bundle.ocrEvidence ?? [])
+      .map((e) => `  • ${e.claim} (conf:${e.confidence.toFixed(2)})`)
+      .join('\n') || '  (none)';
+
+    const refContext = (bundle.referenceEvidence ?? [])
+      .map((e) => `  • [${(e.measurements as any)?.authorityLevel ?? 'ref'}] ${e.claim}`)
+      .join('\n') || '  (none)';
 
     const prompt = [
       'You are an adversarial reviewer for a mobile UI diff pipeline.',
-      'Challenge the following deterministic evidence and emit counter-evidence or confirmation.',
-      'Context:',
-      deterministicContext || '(none)',
+      'Challenge or confirm the deterministic evidence below. Emit counter-evidence or corroboration.',
       '',
       `ROI: ${bundle.roiId}`,
       '',
-      'Return JSON array with fields: claimId, subject, claim, confidence (0-1), authority="model"'
+      'DETERMINISTIC GEOMETRY/PIXEL MEASUREMENTS:',
+      deterministicContext,
+      '',
+      'OCR TEXT EVIDENCE:',
+      ocrContext,
+      '',
+      'REFERENCE SOURCE FACTS (ground truth):',
+      refContext,
+      '',
+      'Return a JSON object with key "evidence": array of items, each with:',
+      '  claimId, subject (use "roi:<roiId>"), claim, confidence (0-1), authority="model",',
+      '  optionally: proposedChangeVector, expectedValue, actualValue'
     ].join('\n');
 
     let images: string[] = [];

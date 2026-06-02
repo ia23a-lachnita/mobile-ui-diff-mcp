@@ -137,25 +137,35 @@ export class VerdictEngine {
       }
     }
 
-    // ROI quality failures suggest component layout issues
+    // Critical ROI failures with no specific geometry evidence → block broad layout vectors
     const criticalRoiFails = allEvidence.filter(
       (e) => e.source === 'roiQuality' && e.measurements?.status === 'fail' && e.measurements?.critical === true && !e.blocked
     );
     if (criticalRoiFails.length > 0 && allowedChangeVectors.length === 0) {
-      allowedChangeVectors.push({ vector: 'component_layout', reasonCode: 'QUALITY_GATE_PASS' });
+      // No specific geometry evidence to support a change vector — block broad edits
+      const broadLayoutVectors: ChangeVector[] = ['component_layout', 'card_spacing_padding'];
+      for (const vector of broadLayoutVectors) {
+        if (!blockedChangeVectors.find((b) => b.vector === vector)) {
+          blockedChangeVectors.push({ vector, reasonCode: 'NO_SUPPORTING_EVIDENCE' });
+        }
+      }
     }
 
     // Determine overall confidence
     let confidence: AgentActionContract['confidence'] = 'low';
     if (qualityStatus === 'pass' && geometryFindings.length === 0 && criticalRoiFails.length === 0) {
       confidence = 'high';
-    } else if (qualityStatus === 'fail' && allowedChangeVectors.length > 0) {
+    } else if (qualityStatus === 'fail' && allowedChangeVectors.length > 0 && criticalRoiFails.length === 0) {
       confidence = 'medium';
     } else if (qualityStatus === 'not_evaluated') {
       confidence = 'low';
     }
 
-    const canEditApp = allowedChangeVectors.length > 0 && blockedChangeVectors.length === 0 && !conflictResult.requiresUserDecision;
+    const canEditApp =
+      allowedChangeVectors.length > 0 &&
+      blockedChangeVectors.length === 0 &&
+      criticalRoiFails.length === 0 &&
+      !conflictResult.requiresUserDecision;
 
     // Deduplicate blocked vectors (remove any that are also allowed)
     const allowedVectorSet = new Set(allowedChangeVectors.map((a) => a.vector));

@@ -7,6 +7,7 @@ import { EvidenceBundleBuilder } from './EvidenceBundleBuilder';
 import { ConflictResolver } from './ConflictResolver';
 import { VerdictEngine } from './VerdictEngine';
 import { ModelJudgeAnalyzer, ModelJudgesConfig } from './judges/ModelJudgeAnalyzer';
+import { ReferenceContextAnalyzer } from './analyzers/ReferenceContextAnalyzer';
 import { IAnalyzer } from './analyzers/IAnalyzer';
 import { InvalidCaptureAnalyzer } from './analyzers/InvalidCaptureAnalyzer';
 import { PixelDiffAnalyzer, PIXEL_DIFF_KEY, PixelDiffResult } from './analyzers/PixelDiffAnalyzer';
@@ -409,6 +410,13 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     }
   }
 
+  // ---- Stage 0.5: ReferenceContextAnalyzer (load source facts before any deterministic analysis) ----
+  const referenceContextInput = input.referenceContext;
+  const refCtxAnalyzer = new ReferenceContextAnalyzer(referenceContextInput);
+  const refCtxResult = await refCtxAnalyzer.run(ctx, graph) as any;
+  warnings.push(...(refCtxResult.warnings ?? []));
+  const referenceContextSummary = refCtxResult.referenceContextSummary;
+
   // ---- Stage 1a: InvalidCaptureAnalyzer (must run first to gate everything) ----
   const invalidCaptureAnalyzer = new InvalidCaptureAnalyzer();
   const invalidCaptureResult = await invalidCaptureAnalyzer.run(ctx, graph);
@@ -422,6 +430,18 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   warnings.push(...pixelDiffResult.warnings);
   const pixelDiff = (ctx as any)[PIXEL_DIFF_KEY] as PixelDiffResult;
   if (!pixelDiff) throw new Error('PixelDiffAnalyzer did not produce results');
+
+  // ---- Stage 1b.5: Generate ROI crops so Stage 1c analyzers can read them ----
+  for (const roi of normalizedRois) {
+    const expCrop = path.join(ctx.roiDir, `${roi.id}-expected.png`);
+    const actCrop = path.join(ctx.roiDir, `${roi.id}-actual.png`);
+    const diffCrop = path.join(ctx.roiDir, `${roi.id}-diff.png`);
+    await Promise.all([
+      cropAndSave(pixelDiff.processedExpectedPath, roi.box, expCrop),
+      cropAndSave(pixelDiff.processedActualPath, roi.box, actCrop),
+      cropAndSave(pixelDiff.diffAbsPath, roi.box, diffCrop)
+    ]);
+  }
 
   // ---- Stage 1c: Remaining deterministic analyzers in parallel ----
   const remainingStage1: IAnalyzer[] = [
@@ -445,10 +465,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     const actCrop = path.join(ctx.roiDir, `${roi.id}-actual.png`);
     const diffCrop = path.join(ctx.roiDir, `${roi.id}-diff.png`);
     const structuralDiffCrop = path.join(ctx.roiDir, `${roi.id}-structural-diff.png`);
-
-    await cropAndSave(pixelDiff.processedExpectedPath, roi.box, expCrop);
-    await cropAndSave(pixelDiff.processedActualPath, roi.box, actCrop);
-    await cropAndSave(pixelDiff.diffAbsPath, roi.box, diffCrop);
+    // Basic ROI crops already written in Stage 1b.5 — only write structural diff here
 
     const resolvedDynamicSubregions = (roi.allowedDynamicSubregions ?? [])
       .map((subregion) => {
@@ -667,7 +684,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   const bundles = bundleBuilder.build(ctx, graph);
 
   // ---- Stage 2: Model judges (policy-controlled) ----
-  const modelJudgesInput = (input as any).modelJudges as ModelJudgesConfig | undefined;
+  const modelJudgesInput = input.modelJudges as ModelJudgesConfig | undefined;
   if (modelJudgesInput?.enabled) {
     const judgeAnalyzer = new ModelJudgeAnalyzer(modelJudgesInput);
     const judgeResult = await judgeAnalyzer.run(ctx, graph, bundles);
@@ -678,7 +695,6 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   }
 
   // ---- Stage 3: Conflict resolution ----
-  const referenceContextInput = (input as any).referenceContext;
   const conflictResolver = new ConflictResolver(referenceContextInput);
   const conflictResult = conflictResolver.resolve(graph);
   warnings.push(...conflictResult.warnings);
@@ -803,7 +819,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
       regionsDir: ctx.regionsDir
     },
     warnings: warnings.length ? warnings : undefined,
-    vlm: vlmSummary
+    vlm: vlmSummary,
+    ...(referenceContextSummary ? { referenceContextSummary } : {})
   };
 
   await fs.writeFile(path.join(ctx.outputDir, 'report.json'), JSON.stringify(report, null, 2));

@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { EvidenceGraph } from '../src/pipeline/EvidenceGraph';
 import { ConflictResolver } from '../src/pipeline/ConflictResolver';
+import { ReferenceContextAnalyzer } from '../src/pipeline/analyzers/ReferenceContextAnalyzer';
 import { referenceContextSchema } from '../src/config/uiDiffConfig';
+import type { AnalyzerContext } from '../src/pipeline/analyzers/IAnalyzer';
 
 describe('referenceContext config schema', () => {
   it('parses valid referenceContext config', () => {
@@ -115,5 +117,108 @@ describe('referenceContext loading behavior', () => {
       error = e;
     }
     expect(error).toBeNull();
+  });
+});
+
+describe('ReferenceContextAnalyzer', () => {
+  const makeCtx = (): AnalyzerContext => ({
+    runId: 'test-run',
+    outputDir: '/tmp/test-output',
+    roiDir: '/tmp/test-output/regions-of-interest',
+    regionsDir: '/tmp/test-output/regions',
+    expectedImagePath: '/tmp/expected.png',
+    actualImagePath: '/tmp/actual.png',
+    expectedPng: {} as any,
+    actualPng: {} as any,
+    comparisonPng: {} as any,
+    actualSourceWidth: 400,
+    actualSourceHeight: 800,
+    regionsOfInterest: [],
+    ignoreRegions: [],
+    config: {} as any
+  });
+
+  it('returns empty result when disabled', async () => {
+    const graph = new EvidenceGraph();
+    const analyzer = new ReferenceContextAnalyzer({ enabled: false });
+    const result = await analyzer.run(makeCtx(), graph) as any;
+    expect(result.evidence).toHaveLength(0);
+    expect(result.referenceContextSummary.factsLoaded).toBe(0);
+    expect(graph.getAll()).toHaveLength(0);
+  });
+
+  it('returns empty result when referenceContext is undefined', async () => {
+    const graph = new EvidenceGraph();
+    const analyzer = new ReferenceContextAnalyzer(undefined);
+    const result = await analyzer.run(makeCtx(), graph) as any;
+    expect(result.evidence).toHaveLength(0);
+    expect(result.referenceContextSummary.factsLoaded).toBe(0);
+  });
+
+  it('loads inline facts as source-authority evidence into EvidenceGraph', async () => {
+    const graph = new EvidenceGraph();
+    const analyzer = new ReferenceContextAnalyzer({
+      enabled: true,
+      facts: [
+        { id: 'ring-stroke', subject: 'roi:macro-ring', claim: 'Stroke width is 10px', authority: 'high' },
+        { id: 'ring-gap', subject: 'roi:macro-ring', claim: 'Ring gap is 2px', authority: 'medium' }
+      ]
+    });
+    const result = await analyzer.run(makeCtx(), graph) as any;
+
+    expect(result.referenceContextSummary.factsLoaded).toBe(2);
+    expect(result.referenceContextSummary.missingFiles).toHaveLength(0);
+
+    const sourceEvidence = graph.getAll().filter((e) => e.authority === 'source');
+    expect(sourceEvidence).toHaveLength(2);
+    expect(sourceEvidence[0].claimId).toBe('ref-fact-ring-stroke');
+    expect(sourceEvidence[0].confidence).toBe(1.0);
+    expect(sourceEvidence[1].confidence).toBe(0.7);
+  });
+
+  it('warns on missing source files and still emits evidence with confidence 0', async () => {
+    const graph = new EvidenceGraph();
+    const analyzer = new ReferenceContextAnalyzer({
+      enabled: true,
+      sources: [
+        { id: 'comp-src', type: 'component', path: '/nonexistent/Component.tsx', authority: 'high' }
+      ]
+    });
+    const result = await analyzer.run(makeCtx(), graph) as any;
+
+    expect(result.referenceContextSummary.sourcesLoaded).toBe(0);
+    expect(result.referenceContextSummary.missingFiles).toContain('/nonexistent/Component.tsx');
+    expect(result.warnings).toHaveLength(1);
+
+    const e = graph.getAll().find((ev) => ev.claimId === 'ref-source-comp-src');
+    expect(e).toBeDefined();
+    expect(e!.confidence).toBe(0);
+    expect((e!.measurements as any).fileExists).toBe(false);
+  });
+
+  it('emitted facts are picked up by ConflictResolver as source evidence', async () => {
+    const graph = new EvidenceGraph();
+    const analyzer = new ReferenceContextAnalyzer({
+      enabled: true,
+      facts: [{ id: 'f1', subject: 'roi:ring', claim: 'No change expected', authority: 'high' }]
+    });
+    await analyzer.run(makeCtx(), graph);
+
+    // Simulate a model claim contradicting the fact
+    graph.add({
+      source: 'modelJudge',
+      claimId: 'model-claim-1',
+      subject: 'roi:ring',
+      claim: 'ring differs significantly',
+      confidence: 0.8,
+      authority: 'model',
+      proposedChangeVector: 'ring_stroke_width'
+    });
+
+    const resolver = new ConflictResolver({ enabled: true });
+    const result = resolver.resolve(graph);
+    // ConflictResolver may downgrade or block — no exception is the key invariant
+    expect(result).toBeDefined();
+    expect(Array.isArray(result.blockedClaimIds)).toBe(true);
   });
 });

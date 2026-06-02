@@ -10,25 +10,58 @@ export class OpenRouterProvider implements IModelJudgeProvider {
   async analyze(bundle: EvidenceBundle, allEvidence: Evidence[]): Promise<Evidence[]> {
     const evidence: Evidence[] = [];
 
-    // Build context from deterministic findings
-    const deterministicContext = allEvidence
-      .filter((e) => bundle.deterministicFindings.includes(e.claimId))
-      .map((e) => `- [${e.source}] ${e.claim} (confidence: ${e.confidence})`)
-      .join('\n');
+    const formatMeasurements = (m: Record<string, unknown> | undefined): string => {
+      if (!m) return '';
+      const parts: string[] = [];
+      if (m.expectedNorm !== undefined) parts.push(`expected=${m.expectedNorm}`);
+      if (m.actualNorm !== undefined) parts.push(`actual=${m.actualNorm}`);
+      if (m.deltaNorm !== undefined) parts.push(`delta=${m.deltaNorm}`);
+      if (m.verdict !== undefined) parts.push(`verdict=${m.verdict}`);
+      if (m.status !== undefined) parts.push(`status=${m.status}`);
+      return parts.length ? ` [${parts.join(', ')}]` : '';
+    };
+
+    const deterministicContext = (bundle.deterministicEvidence ?? [])
+      .map((e) => `  • [${e.source}] ${e.claim} (conf:${e.confidence.toFixed(2)})${formatMeasurements(e.measurements as any)}`)
+      .join('\n') || '  (none)';
+
+    const ocrContext = (bundle.ocrEvidence ?? [])
+      .map((e) => `  • ${e.claim} (conf:${e.confidence.toFixed(2)})`)
+      .join('\n') || '  (none)';
+
+    const refContext = (bundle.referenceEvidence ?? [])
+      .map((e) => {
+        const snippet = (e.measurements as any)?.snippet;
+        const base = `  • [${(e.measurements as any)?.authorityLevel ?? 'ref'}] ${e.claim}`;
+        return snippet ? `${base}\n    snippet: ${snippet.slice(0, 300)}` : base;
+      })
+      .join('\n') || '  (none)';
 
     const prompt = [
       'You are a visual quality judge for a mobile UI diff pipeline.',
-      'You have been given evidence from deterministic analyzers and crop images.',
+      'You have been given structured evidence from deterministic analyzers, OCR, reference facts, and crop images.',
       'Your role is to emit structured evidence items (not final verdicts).',
-      'Context from deterministic analyzers:',
-      deterministicContext || '(none)',
+      '',
+      `ROI: ${bundle.roiId}`,
+      '',
+      'DETERMINISTIC GEOMETRY/PIXEL MEASUREMENTS:',
+      deterministicContext,
+      '',
+      'OCR TEXT EVIDENCE:',
+      ocrContext,
+      '',
+      'REFERENCE SOURCE FACTS:',
+      refContext,
       '',
       'Analyze the provided images and emit evidence about:',
-      '1. Visual mismatch type and severity (visualMismatchJudge)',
-      '2. Geometry interpretation if radial chart present (geometryInterpretationJudge)',
+      '1. Visual mismatch type and severity (source: visualMismatchJudge)',
+      '2. Geometry interpretation if radial chart is visible (source: geometryInterpretationJudge)',
+      '3. Whether the diff is consistent with the reference facts above',
       '',
-      'Return JSON array of evidence items with fields: claimId, subject, claim, confidence (0-1), authority="model"',
-      `ROI: ${bundle.roiId}`
+      'Return a JSON object with key "evidence": array of items, each with:',
+      '  claimId (string), subject (string, use "roi:<roiId>"), claim (string),',
+      '  confidence (0-1), authority="model",',
+      '  optionally: proposedChangeVector (e.g. "ring_stroke_width"), expectedValue, actualValue'
     ].join('\n');
 
     // Load images

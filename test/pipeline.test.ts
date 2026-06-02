@@ -3,6 +3,7 @@ import { EvidenceGraph } from '../src/pipeline/EvidenceGraph';
 import { EvidenceBundleBuilder } from '../src/pipeline/EvidenceBundleBuilder';
 import { Evidence } from '../src/pipeline/types';
 import { ModelJudgeAnalyzer } from '../src/pipeline/judges/ModelJudgeAnalyzer';
+import { ReferenceContextAnalyzer } from '../src/pipeline/analyzers/ReferenceContextAnalyzer';
 import { PNG } from 'pngjs';
 import path from 'path';
 import os from 'os';
@@ -184,5 +185,48 @@ describe('Stage ordering enforcement', () => {
     const result = await judge.run(ctx, graph, bundles);
     expect(result.evidence).toHaveLength(0);
     expect(result.warnings).toHaveLength(0);
+  });
+
+  it('radialGeometry evidence is present in graph before ModelJudgeAnalyzer runs (stage ordering)', async () => {
+    // Simulate the pipeline stage order:
+    // Stage 1c (RadialGeometryAnalyzer) → Stage 1.5 (EvidenceBundleBuilder) → Stage 2 (ModelJudgeAnalyzer)
+    // This test proves that if radial evidence is added before bundle-building,
+    // it will appear in bundles passed to ModelJudgeAnalyzer.
+    const graph = new EvidenceGraph();
+
+    // Simulate RadialGeometryAnalyzer output (Stage 1c)
+    graph.add({
+      source: 'radialGeometry',
+      claimId: 'radial-geometry-ring',
+      subject: 'roi:ring',
+      claim: 'Radial chart: strokeWidthMismatch',
+      confidence: 0.9,
+      authority: 'deterministic',
+      measurements: { verdict: 'strokeWidthMismatch', status: 'fail', confidence: 0.9 }
+    });
+
+    const ctx = makeContext({
+      regionsOfInterest: [{
+        id: 'ring',
+        label: 'Ring',
+        type: 'component',
+        box: { x: 0, y: 0, width: 10, height: 10 }
+      }]
+    });
+
+    // Stage 1.5: build bundles — radialGeometry is deterministic, ends up in deterministicEvidence
+    const builder = new EvidenceBundleBuilder();
+    const bundles = builder.build(ctx, graph);
+    const ringBundle = bundles.find((b) => b.roiId === 'ring')!;
+
+    expect(ringBundle).toBeDefined();
+    expect(ringBundle.deterministicEvidence.some((e) => e.source === 'radialGeometry')).toBe(true);
+
+    // Stage 2: ModelJudgeAnalyzer receives bundles WITH radial evidence already populated
+    const judge = new ModelJudgeAnalyzer({ enabled: true, policy: 'always' });
+    // policy=always but no API key → returns actionRequired, not an error
+    const result = await judge.run(ctx, graph, bundles);
+    // The key assertion: radialGeometry was available in the bundle before the judge ran
+    expect(ringBundle.deterministicFindings).toContain('radial-geometry-ring');
   });
 });
