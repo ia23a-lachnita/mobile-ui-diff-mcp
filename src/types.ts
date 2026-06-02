@@ -62,7 +62,21 @@ export interface RegionOfInterestConfig {
   maxDiffPercent?: number;
   allowedDynamicSubregions?: AllowedDynamicSubregionConfig[];
   allowBroadDynamicSubregions?: boolean;
+  geometryDiagnostics?: GeometryDiagnosticsConfig;
 }
+
+export interface RadialChartGeometryDiagnosticsConfig {
+  type: 'radialChart';
+  enabled: boolean;
+  maskDynamicSubregions?: boolean;
+  colorHints?: string[];
+  centerToleranceNorm?: number;
+  radiusToleranceNorm?: number;
+  angleToleranceDeg?: number;
+  strokeToleranceNorm?: number;
+}
+
+export type GeometryDiagnosticsConfig = RadialChartGeometryDiagnosticsConfig;
 
 export interface VisualAssertionConfig {
   id: string;
@@ -236,13 +250,93 @@ export interface RegionOfInterestReport {
   maxDiffPercent: number;
   intersectingRegionIds: string[];
   diagnostics: string[];
+  geometryDiagnostics?: RadialChartGeometryDiagnosticsResult;
   weightedScore: number;
   artifacts: {
     expected: string;
     actual: string;
     diff: string;
     structuralDiff?: string;
+    geometryOverlay?: string;
+    edgeOverlay?: string;
+    expectedArcMask?: string;
+    actualArcMask?: string;
+    polarSummary?: string;
   };
+}
+
+export type GeometryFindingSeverity = 'low' | 'medium' | 'high';
+
+export interface RadialChartGeometryFinding {
+  kind:
+    | 'centerShift'
+    | 'relativeRadiusMismatch'
+    | 'strokeWidthMismatch'
+    | 'ringGapMismatch'
+    | 'angleMismatch'
+    | 'sweepMismatch'
+    | 'missingArc'
+    | 'capMismatch'
+    | 'haloOrTrackMismatch'
+    | 'scaleOnlyMismatch'
+    | 'insufficientSignal';
+  severity: GeometryFindingSeverity;
+  color?: string;
+  message?: string;
+  expectedNorm?: number;
+  actualNorm?: number;
+  deltaNorm?: number;
+  dxNorm?: number;
+  dyNorm?: number;
+  deltaStartDeg?: number;
+  deltaEndDeg?: number;
+  deltaSweepDeg?: number;
+}
+
+export interface RadialChartArcMetrics {
+  color: string;
+  startAngleDeg: number;
+  endAngleDeg: number;
+  sweepDeg: number;
+  meanRadiusPx: number;
+  meanRadiusNorm: number;
+  strokeWidthPx: number;
+  strokeWidthNorm: number;
+}
+
+export interface RadialChartGeometryMetrics {
+  centerPx: { x: number; y: number };
+  centerNorm: { x: number; y: number };
+  outerRadiusPx: number;
+  outerRadiusNorm: number;
+  innerRadiusPx: number;
+  innerRadiusNorm: number;
+  strokeWidthPx: number;
+  strokeWidthNorm: number;
+  ringGapPx: number;
+  ringGapNorm: number;
+  arcs: RadialChartArcMetrics[];
+}
+
+export interface RadialChartGeometryDiagnosticsResult {
+  type: 'radialChart';
+  status: 'completed' | 'warning' | 'failed';
+  confidence: number;
+  metrics: {
+    expected?: RadialChartGeometryMetrics;
+    actual?: RadialChartGeometryMetrics;
+  };
+  findings: RadialChartGeometryFinding[];
+  verdict: 'geometryWithinTolerance' | 'scaleOnlyMismatch' | 'relativeGeometryMismatch' | 'insufficientSignal';
+  agentHint: string;
+  artifacts: {
+    geometryOverlay: string;
+    edgeOverlay: string;
+    expectedArcMask: string;
+    actualArcMask: string;
+    polarSummary: string;
+  };
+  warnings: string[];
 }
 
 export interface FloorBlocker {

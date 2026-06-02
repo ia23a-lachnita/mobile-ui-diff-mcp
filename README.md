@@ -457,6 +457,86 @@ ROI artifacts include both the raw `diff` crop and a `structuralDiff` crop. The 
 
 Keep subregions tight. Broad masks can hide real defects in stroke width, radius, spacing, clipping, typography, or card geometry. Critical ROIs warn when dynamic subregions cover more than 25% of the ROI, and fail the quality gate above 40% unless the ROI explicitly sets `allowBroadDynamicSubregions: true`.
 
+### Radial Chart Geometry Diagnostics
+
+Use `geometryDiagnostics` on a configured ROI when pixel diff says a radial chart differs but agents need a geometric explanation. Phase 1 supports `type: "radialChart"` only; automatic ROI discovery, OmniParser, and zero-config screen parsing are future work.
+
+```json
+{
+  "regionsOfInterest": [
+    {
+      "id": "macro-ring-hero",
+      "label": "Macro ring hero",
+      "type": "component",
+      "critical": true,
+      "coordinateSpace": "normalized",
+      "box": { "x": 0.04, "y": 0.14, "width": 0.92, "height": 0.25 },
+      "maxDiffPercent": 0.12,
+      "allowedDynamicSubregions": [
+        {
+          "id": "center-kcal-text",
+          "coordinateSpace": "roiNormalized",
+          "box": { "x": 0.38, "y": 0.30, "width": 0.24, "height": 0.22 },
+          "reason": "Dynamic kcal text"
+        }
+      ],
+      "geometryDiagnostics": {
+        "type": "radialChart",
+        "enabled": true,
+        "maskDynamicSubregions": true,
+        "colorHints": ["#3F5BFF", "#24D4D8", "#26D06F"]
+      }
+    }
+  ]
+}
+```
+
+The diagnostic segments high-saturation arc pixels inside the ROI, optionally classifies pixels by `colorHints`, estimates center/radius/stroke/arc angles, and writes:
+
+- `<roiId>-geometry-overlay.png`
+- `<roiId>-edge-overlay.png`
+- `<roiId>-arc-mask-expected.png`
+- `<roiId>-arc-mask-actual.png`
+- `<roiId>-polar-summary.json`
+
+Reports include both pixel and normalized geometry, for example `outerRadiusPx` plus `outerRadiusNorm`. Normalized values matter when a mockup is 402dp wide and a device screenshot is 360dp wide: absolute pixels can differ simply because the canvas differs, while normalized radius, center, stroke, and angles explain whether Flutter geometry actually changed.
+
+Example report excerpt:
+
+```json
+{
+  "geometryDiagnostics": {
+    "type": "radialChart",
+    "status": "completed",
+    "confidence": 0.82,
+    "verdict": "relativeGeometryMismatch",
+    "findings": [
+      {
+        "kind": "relativeRadiusMismatch",
+        "severity": "high",
+        "expectedNorm": 0.222,
+        "actualNorm": 0.197,
+        "deltaNorm": -0.025
+      }
+    ],
+    "agentHint": "Actual ring radius differs relative to ROI width. Inspect ring size or radius formula before changing center text."
+  }
+}
+```
+
+Interpretation guide:
+
+- `scaleOnlyMismatch`: normalized geometry is close while absolute pixels differ. Baseline/device sizing or thresholds may be involved, but confirm source canvas/device scale context before ruling out Flutter geometry.
+- `relativeRadiusMismatch`: inspect ring size, canvas size, or radius formula.
+- `centerShift`: inspect alignment, padding, or chart positioning.
+- `angleMismatch` / `sweepMismatch`: inspect start angle and progress-to-sweep mapping.
+- `strokeWidthMismatch` / `ringGapMismatch`: inspect `strokeWidth` and per-ring gap/radius formulas.
+- `insufficientSignal`: segmentation found too little arc signal; inspect color hints, dynamic masks, inactive track, or halo layers.
+
+Pixel diff tells you how many pixels changed. VLM can describe visible differences when available. Geometry diagnostics gives deterministic measurements for configured chart ROIs and is persisted in both the MCP response and `report.json`.
+
+Current radial diagnostics compare center, per-color arc radius, stroke width, start/end angle, sweep, missing arcs, and ring gap estimates. `capMismatch` and `haloOrTrackMismatch` are reserved finding names for future work; this phase does not emit them.
+
 ### Floor Detection
 
 - Default config: `{ "enabled": true, "deltaThreshold": 0.0001, "consecutiveRuns": 2 }`

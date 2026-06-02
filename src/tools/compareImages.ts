@@ -5,6 +5,7 @@ import { applyIgnoreRegions } from '../image/mask';
 import { createDiffErrorMask } from '../image/diff';
 import { detectRegions } from '../image/regions';
 import { cropAndSave } from '../image/crops';
+import { runRadialChartDiagnostics } from '../image/radialChartDiagnostics';
 import { explainDiffUsingOllama, preflightOllama, resolveOllamaConfig, ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 import { ConfigSuggestion, DeviceProfile, IgnoreRegion, RegionReport, DiffReport, VlmSummary, VlmAnalysis, RegionOfInterestConfig, RegionOfInterestReport, QualityFailure, PriorityFinding, VisualAssertionConfig, VisualAssertionResult, FloorDetectionConfig, RunDelta, FloorBlocker, AgentSummary, HotspotDetectionConfig, LocalHotspot, VlmPolicy, VlmAvailability, ActionRequired } from '../types';
 import fs from 'fs/promises';
@@ -811,6 +812,12 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       .filter((subregion): subregion is NonNullable<typeof subregion> => subregion !== null);
     const resolvedDynamicBoxes = resolvedDynamicSubregions.map((subregion) => subregion.box);
     await writeStructuralRoiDiffCrop(diffImage, roi.box, resolvedDynamicBoxes, structuralDiffCrop);
+    const roiDynamicBoxes = resolvedDynamicBoxes.map((box) => ({
+      x: box.x - roi.box.x,
+      y: box.y - roi.box.y,
+      width: box.width,
+      height: box.height
+    }));
     const totalPixelsInRoiRaw = Math.max(1, roi.box.width * roi.box.height);
     const roiPixelCounts = countRoiPixelsWithDynamicMask(
       mismatchMask,
@@ -866,6 +873,29 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       }
     }
 
+    let geometryDiagnostics: RegionOfInterestReport['geometryDiagnostics'];
+    if (roi.geometryDiagnostics?.type === 'radialChart' && roi.geometryDiagnostics.enabled) {
+      try {
+        geometryDiagnostics = await runRadialChartDiagnostics({
+          roiId: roi.id,
+          expectedCropPath: expCrop,
+          actualCropPath: actCrop,
+          outputDir: roiDir,
+          config: roi.geometryDiagnostics,
+          dynamicSubregions: roiDynamicBoxes
+        });
+        diagnostics.push(`Radial chart geometry diagnostics ${geometryDiagnostics.status}: ${geometryDiagnostics.verdict}. ${geometryDiagnostics.agentHint}`);
+        for (const warning of geometryDiagnostics.warnings) {
+          warnings.push(`ROI '${roi.label}' radial geometry warning: ${warning}`);
+        }
+      } catch (err: any) {
+        const warning = `ROI '${roi.label}' radial geometry diagnostics failed: ${err?.message ?? String(err)}`;
+        warnings.push(warning);
+        diagnostics.push(warning);
+      }
+    }
+    const geometryArtifacts = geometryDiagnostics?.artifacts;
+
     roiCropArtifacts.push({
       id: roi.id,
       label: roi.label,
@@ -885,12 +915,18 @@ export async function compareImages(input: CompareImagesInput): Promise<DiffRepo
       maxDiffPercent: maxDiffPercentForRoi,
       intersectingRegionIds,
       diagnostics,
+      geometryDiagnostics,
       weightedScore: structuralRoiDiffPercent * (roi.weight ?? 1),
       artifacts: {
         expected: expCrop,
         actual: actCrop,
         diff: diffCrop,
-        structuralDiff: structuralDiffCrop
+        structuralDiff: structuralDiffCrop,
+        geometryOverlay: geometryArtifacts?.geometryOverlay,
+        edgeOverlay: geometryArtifacts?.edgeOverlay,
+        expectedArcMask: geometryArtifacts?.expectedArcMask,
+        actualArcMask: geometryArtifacts?.actualArcMask,
+        polarSummary: geometryArtifacts?.polarSummary
       }
     });
   }
