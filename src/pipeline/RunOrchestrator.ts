@@ -672,6 +672,9 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     const judgeAnalyzer = new ModelJudgeAnalyzer(modelJudgesInput);
     const judgeResult = await judgeAnalyzer.run(ctx, graph, bundles);
     warnings.push(...judgeResult.warnings);
+    if (judgeResult.actionRequired && !actionRequired) {
+      actionRequired = judgeResult.actionRequired;
+    }
   }
 
   // ---- Stage 3: Conflict resolution ----

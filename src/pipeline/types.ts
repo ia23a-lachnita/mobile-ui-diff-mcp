@@ -38,4 +38,5 @@ export interface AnalyzerResult {
   evidence: Evidence[];
   warnings: string[];
   durationMs: number;
+  actionRequired?: import('../types').ActionRequired;
 }

@@ -60,14 +60,22 @@ export class VerdictEngine {
       };
     }
 
-    // Check for scale-only mismatch
+    // Check for scale-only mismatch — block ALL app code change vectors per spec Rule B
     const scaleOnly = allEvidence.find(
       (e) => e.source === 'radialGeometry' && e.measurements?.verdict === 'scaleOnlyMismatch' && !e.blocked
     );
     if (scaleOnly) {
-      blockedChangeVectors.push({ vector: 'ring_stroke_width', reasonCode: 'SCALE_ONLY_MISMATCH' });
-      blockedChangeVectors.push({ vector: 'ring_radius_size', reasonCode: 'SCALE_ONLY_MISMATCH' });
-      blockedChangeVectors.push({ vector: 'component_layout', reasonCode: 'SCALE_ONLY_MISMATCH' });
+      const appCodeVectors: ChangeVector[] = [
+        'ring_stroke_width', 'ring_radius_size', 'ring_gap',
+        'ring_start_angle', 'ring_sweep_mapping', 'ring_center_alignment', 'ring_glow_track',
+        'component_layout', 'card_spacing_padding',
+        'text_style', 'color_token',
+        'thumbnail_gradient', 'badge_style', 'bottom_nav_padding',
+        'seed_data', 'fixture_plan'
+      ];
+      for (const vector of appCodeVectors) {
+        blockedChangeVectors.push({ vector, reasonCode: 'SCALE_ONLY_MISMATCH' });
+      }
       return {
         canEditApp: false,
         confidence: 'high',
@@ -78,13 +86,25 @@ export class VerdictEngine {
       };
     }
 
-    // Check for reference conflict
+    // Check for reference conflict — block all app code change vectors per spec Rule C
     if (conflictResult.requiresUserDecision) {
+      const appCodeVectors: ChangeVector[] = [
+        'ring_stroke_width', 'ring_radius_size', 'ring_gap',
+        'ring_start_angle', 'ring_sweep_mapping', 'ring_center_alignment', 'ring_glow_track',
+        'component_layout', 'card_spacing_padding',
+        'text_style', 'color_token',
+        'thumbnail_gradient', 'badge_style', 'bottom_nav_padding',
+        'seed_data', 'fixture_plan'
+      ];
+      const refConflictBlocked: BlockedChangeVector[] = appCodeVectors.map((vector) => ({
+        vector,
+        reasonCode: 'REFERENCE_CONFLICT' as ReasonCode
+      }));
       return {
         canEditApp: false,
         confidence: 'low',
         allowedChangeVectors: [],
-        blockedChangeVectors: [{ vector: 'none', reasonCode: 'REFERENCE_CONFLICT' }],
+        blockedChangeVectors: refConflictBlocked,
         requiresUserDecision: true,
         reasonSummary: 'Reference context and mockup disagree. User must resolve before agent can act.'
       };

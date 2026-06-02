@@ -1,6 +1,7 @@
 import { AnalyzerContext } from '../analyzers/IAnalyzer';
 import { EvidenceGraph } from '../EvidenceGraph';
 import { AnalyzerResult, Evidence, EvidenceBundle } from '../types';
+import { ActionRequired } from '../../types';
 import { IModelJudgeProvider } from './IModelJudge';
 import { OpenRouterProvider } from './providers/OpenRouterProvider';
 import { NvidiaProvider } from './providers/NvidiaProvider';
@@ -86,6 +87,8 @@ export class ModelJudgeAnalyzer {
     const allEvidence = graph.getAll();
 
     // Build primary provider
+    let actionRequired: ActionRequired | undefined;
+
     if (cfg.primary) {
       const provider = buildProvider(cfg.primary);
       if (!provider) {
@@ -100,6 +103,19 @@ export class ModelJudgeAnalyzer {
           authority: 'model',
           measurements: { provider: cfg.primary.provider, missingKey: keyName }
         });
+        if (policy === 'always') {
+          actionRequired = {
+            type: 'vlm_unavailable',
+            severity: 'blocking',
+            message: `Model judge analysis is required (policy: always) but ${keyName} is not set.`,
+            recommendedUserPrompt: `Set the ${keyName} environment variable and rerun, or change modelJudges.policy to a non-required value.`,
+            suggestedFixes: [
+              `Set ${keyName} in your environment`,
+              "Change modelJudges.policy to 'on_failed_quality' to make judges optional",
+              "Set modelJudges.enabled: false to disable judges entirely"
+            ]
+          };
+        }
       } else {
         for (const bundle of bundles) {
           try {
@@ -141,7 +157,8 @@ export class ModelJudgeAnalyzer {
       stage: this.stage,
       evidence,
       warnings,
-      durationMs: Date.now() - start
+      durationMs: Date.now() - start,
+      ...(actionRequired ? { actionRequired } : {})
     };
   }
 

@@ -117,7 +117,7 @@ describe('ModelJudgeAnalyzer', () => {
     expect(result.warnings.some((w) => w.includes('policy') && w.includes('on_failed_quality'))).toBe(true);
   });
 
-  it('policy always triggers run (but skips if no API key)', async () => {
+  it('policy always + missing API key produces actionRequired', async () => {
     const savedKey = process.env.OPENROUTER_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
 
@@ -131,8 +131,12 @@ describe('ModelJudgeAnalyzer', () => {
     const bundles = makeBundles();
 
     const result = await judge.run(ctx, graph, bundles);
-    // Should have tried to run and emitted warning about missing key
+
     expect(result.warnings.length).toBeGreaterThan(0);
+    expect(result.actionRequired).toBeDefined();
+    expect(result.actionRequired?.type).toBe('vlm_unavailable');
+    expect(result.actionRequired?.severity).toBe('blocking');
+    expect(result.actionRequired?.message).toContain('OPENROUTER_API_KEY');
 
     if (savedKey) process.env.OPENROUTER_API_KEY = savedKey;
   });
