@@ -305,6 +305,19 @@ describe('radial chart geometry diagnostics', () => {
     expect(diagnostic.warnings.some((warning: string) => warning.includes('#26D06F'))).toBe(true);
   });
 
+  it('summarizes highest-severity color-specific findings in the agent hint', async () => {
+    const { diagnostic } = await compareMultiArcCharts('agent-hint-summary', {}, {
+      blue: { stroke: 14 },
+      cyan: { radius: 32 },
+      green: { omit: true }
+    });
+
+    expect(diagnostic.agentHint).toContain('#26D06F missing arc');
+    expect(diagnostic.agentHint).toContain('#3F5BFF stroke width');
+    expect(diagnostic.agentHint).toContain('#24D4D8 radius');
+    expect(diagnostic.agentHint).not.toMatch(/^Expected #26D06F arc was not detected/);
+  });
+
   it('distinguishes small pixel-only drift from relative geometry mismatch', async () => {
     const { diagnostic } = await compareCharts('scale-only', {}, { radius: 44 }, {
       radiusToleranceNorm: 0.05

@@ -474,17 +474,58 @@ function compareMetrics(
 }
 
 function buildAgentHint(findings: RadialChartGeometryFinding[]) {
-  const primary = findings[0];
-  if (!primary) return 'Radial chart normalized geometry is within configured tolerances.';
-  if (primary.kind === 'centerShift') return 'Actual ring center is shifted. Inspect chart alignment, padding, or positioning before changing unrelated card layout.';
-  if (primary.kind === 'relativeRadiusMismatch') return 'Actual ring radius differs relative to ROI width. Inspect ring size or radius formula before changing center text.';
-  if (primary.kind === 'strokeWidthMismatch') return 'Actual ring stroke width differs. Inspect strokeWidth or canvas scale handling.';
-  if (primary.kind === 'ringGapMismatch') return 'Actual ring gap differs. Inspect per-ring radius or gap formula.';
-  if (primary.kind === 'angleMismatch') return 'Actual arc starts or ends at a different angle. Inspect startAngle or progress-to-angle mapping.';
-  if (primary.kind === 'sweepMismatch') return 'Actual arc sweep differs. Inspect progress-to-sweep mapping before changing layout.';
-  if (primary.kind === 'missingArc') return `Expected ${primary.color ?? ''} arc was not detected in the actual crop. Inspect arc color, progress value, masking, or rendering order.`;
-  if (primary.kind === 'scaleOnlyMismatch') return 'Absolute pixels differ while normalized geometry is close. Baseline/device sizing or thresholds may be involved; confirm source scale context before changing Flutter geometry.';
-  return 'Radial geometry signal was insufficient. Inspect arc colors, masks, or inactive track layers.';
+  if (findings.length === 0) return 'Radial chart normalized geometry is within configured tolerances.';
+
+  const severityRank: Record<RadialChartGeometryFinding['severity'], number> = {
+    high: 3,
+    medium: 2,
+    low: 1
+  };
+  const kindRank: Record<RadialChartGeometryFinding['kind'], number> = {
+    missingArc: 9,
+    relativeRadiusMismatch: 8,
+    strokeWidthMismatch: 7,
+    ringGapMismatch: 6,
+    angleMismatch: 5,
+    sweepMismatch: 4,
+    centerShift: 3,
+    scaleOnlyMismatch: 2,
+    capMismatch: 1,
+    haloOrTrackMismatch: 1,
+    insufficientSignal: 0
+  };
+  const sorted = [...findings].sort((a, b) => {
+    const severityDelta = severityRank[b.severity] - severityRank[a.severity];
+    if (severityDelta !== 0) return severityDelta;
+    return kindRank[b.kind] - kindRank[a.kind];
+  });
+  const findingLabel = (finding: RadialChartGeometryFinding) => {
+    const subject = finding.color ? `${finding.color} ` : '';
+    if (finding.kind === 'missingArc') return `${subject}missing arc`;
+    if (finding.kind === 'relativeRadiusMismatch') return `${subject}radius`;
+    if (finding.kind === 'strokeWidthMismatch') return `${subject}stroke width`;
+    if (finding.kind === 'ringGapMismatch') return `${subject}ring gap`;
+    if (finding.kind === 'angleMismatch') return `${subject}start/end angle`;
+    if (finding.kind === 'sweepMismatch') return `${subject}sweep`;
+    if (finding.kind === 'centerShift') return 'center shift';
+    if (finding.kind === 'scaleOnlyMismatch') return 'pixel-scale drift with close normalized geometry';
+    if (finding.kind === 'capMismatch') return `${subject}cap style`;
+    if (finding.kind === 'haloOrTrackMismatch') return `${subject}halo or inactive track`;
+    return `${subject}insufficient signal`;
+  };
+  const topFindings = sorted.slice(0, 3).map(findingLabel).join('; ');
+  const topKinds = new Set(sorted.slice(0, 3).map((finding) => finding.kind));
+  const actions: string[] = [];
+  if (topKinds.has('missingArc')) actions.push('arc color/progress/rendering');
+  if (topKinds.has('relativeRadiusMismatch')) actions.push('ring size or radius formula');
+  if (topKinds.has('strokeWidthMismatch')) actions.push('strokeWidth or canvas scale');
+  if (topKinds.has('ringGapMismatch')) actions.push('per-ring gap formula');
+  if (topKinds.has('angleMismatch')) actions.push('startAngle mapping');
+  if (topKinds.has('sweepMismatch')) actions.push('progress-to-sweep mapping');
+  if (topKinds.has('centerShift')) actions.push('chart alignment or padding');
+  if (topKinds.has('scaleOnlyMismatch')) actions.push('source scale context before changing Flutter geometry');
+  if (actions.length === 0) actions.push('arc segmentation inputs and masks');
+  return `Radial chart findings by severity: ${topFindings}. Inspect ${actions.join(', ')}.`;
 }
 
 function drawCross(png: PNG, cx: number, cy: number, color: [number, number, number]) {
