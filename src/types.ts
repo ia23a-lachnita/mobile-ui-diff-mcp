@@ -153,11 +153,27 @@ export interface VlmAvailability {
 }
 
 export interface ActionRequired {
-  type: 'vlm_unavailable' | 'invalid_capture';
+  type: 'vlm_unavailable' | 'invalid_capture' | 'model_judges_unavailable' | 'model_judges_failed';
   severity: 'blocking';
   message: string;
   recommendedUserPrompt: string;
   suggestedFixes: string[];
+}
+
+export type VisualAuditStatus = 'pass' | 'fail' | 'not_run' | 'skipped_by_config' | 'unavailable' | 'error';
+export type AcceptanceStatus = 'accepted' | 'rejected' | 'incomplete' | 'metric_only';
+
+export interface VisualCaveat {
+  id: string;
+  source: string;
+  subject: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'warning';
+  blocking: boolean;
+  message: string;
+  confidence: number;
+  measurements?: Record<string, number | string | boolean>;
+  artifacts?: string[];
+  proposedChangeVector?: string;
 }
 
 export interface RunDelta {
@@ -495,6 +511,9 @@ export interface DiffReport {
   vlmPolicy?: VlmPolicy;
   vlmAvailability?: VlmAvailability;
   actionRequired?: ActionRequired | null;
+  visualAuditStatus?: VisualAuditStatus;
+  acceptanceStatus?: AcceptanceStatus;
+  visualCaveats?: VisualCaveat[];
   warnings?: string[];
   vlm?: VlmSummary;
   referenceContextSummary?: {

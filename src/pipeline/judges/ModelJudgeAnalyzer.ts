@@ -8,7 +8,10 @@ import { NvidiaProvider } from './providers/NvidiaProvider';
 
 export interface ModelJudgesConfig {
   enabled?: boolean;
-  policy?: 'disabled' | 'on_failed_quality' | 'on_failed_quality_or_uncertain_root_cause' | 'always';
+  required?: boolean;
+  explicitSkipReason?: string;
+  allowEditSuggestionsOnPass?: boolean;
+  policy?: 'disabled' | 'on_failed_quality' | 'on_failed_quality_or_uncertain_root_cause' | 'always' | 'always_audit';
   primary?: { provider: 'openrouter' | 'nvidia'; model: string };
   reviewer?: { provider: 'openrouter' | 'nvidia'; model: string };
   requireConsensusForCodeHints?: boolean;
@@ -49,18 +52,23 @@ export class ModelJudgeAnalyzer {
 
     const cfg = this.judgesConfig;
 
-    // If disabled or not configured, return immediately
     if (!cfg?.enabled) {
+      if (cfg?.enabled === false) {
+        if (cfg.explicitSkipReason) {
+          warnings.push(`Model judges disabled (explicitSkipReason: "${cfg.explicitSkipReason}"). This run is metric-only and does not prove visual parity.`);
+        } else {
+          warnings.push('Model judges disabled without explicitSkipReason. Set explicitSkipReason to confirm metric-only mode, or enable judges for visual parity.');
+        }
+      }
       return {
         analyzerName: this.name,
         stage: this.stage,
         evidence: [],
-        warnings: [],
+        warnings,
         durationMs: Date.now() - start
       };
     }
 
-    // Check policy
     const policy = cfg.policy ?? 'disabled';
     if (policy === 'disabled') {
       return {
@@ -72,7 +80,8 @@ export class ModelJudgeAnalyzer {
       };
     }
 
-    // Determine whether to actually run based on policy
+    const isRequired = cfg.required ?? true;
+
     const shouldRun = this.shouldRunForPolicy(policy, graph);
     if (!shouldRun) {
       return {
@@ -86,7 +95,6 @@ export class ModelJudgeAnalyzer {
 
     const allEvidence = graph.getAll();
 
-    // Build primary provider
     let actionRequired: ActionRequired | undefined;
     const primaryEvidence: Evidence[] = [];
     const reviewerEvidence: Evidence[] = [];
@@ -105,16 +113,16 @@ export class ModelJudgeAnalyzer {
           authority: 'model',
           measurements: { provider: cfg.primary.provider, missingKey: keyName }
         });
-        if (policy === 'always') {
+        if (isRequired || policy === 'always' || policy === 'always_audit') {
           actionRequired = {
-            type: 'vlm_unavailable',
+            type: 'model_judges_unavailable',
             severity: 'blocking',
-            message: `Model judge analysis is required (policy: always) but ${keyName} is not set.`,
+            message: `Model judge analysis is required but ${keyName} is not set.`,
             recommendedUserPrompt: `Set the ${keyName} environment variable and rerun, or change modelJudges.policy to a non-required value.`,
             suggestedFixes: [
               `Set ${keyName} in your environment`,
               "Change modelJudges.policy to 'on_failed_quality' to make judges optional",
-              "Set modelJudges.enabled: false to disable judges entirely"
+              "Set modelJudges.enabled: false with explicitSkipReason to skip judges for this run"
             ]
           };
         }
@@ -125,12 +133,24 @@ export class ModelJudgeAnalyzer {
             primaryEvidence.push(...bundleEvidence);
           } catch (err: any) {
             warnings.push(`ModelJudgeAnalyzer: primary provider failed for ROI '${bundle.roiId}': ${err?.message ?? String(err)}`);
+            if (isRequired) {
+              actionRequired = {
+                type: 'model_judges_failed',
+                severity: 'blocking',
+                message: `Model judge analysis failed: ${err?.message ?? String(err)}`,
+                recommendedUserPrompt: 'Model judge call failed. Check API key validity and provider status, then rerun.',
+                suggestedFixes: [
+                  'Verify API key is valid and not rate-limited',
+                  'Check provider status',
+                  "Set modelJudges.required: false to make failures non-blocking"
+                ]
+              };
+            }
           }
         }
       }
     }
 
-    // Build reviewer provider
     let reviewerUnavailable = false;
     if (cfg.reviewer) {
       const provider = buildProvider(cfg.reviewer);
@@ -150,14 +170,12 @@ export class ModelJudgeAnalyzer {
       }
     }
 
-    // Enforce requireConsensusForCodeHints: block code hints from primary that reviewer doesn't corroborate
     if (cfg.requireConsensusForCodeHints) {
       const allGraphEvidence = graph.getAll();
       for (const primaryItem of primaryEvidence) {
         if (!primaryItem.proposedChangeVector) continue;
 
         if (reviewerUnavailable) {
-          // Reviewer configured but unreachable — allow only if deterministic or source evidence supports the same vector
           const supportedByGroundTruth = allGraphEvidence.some(
             (e) =>
               (e.authority === 'deterministic' || e.authority === 'source') &&
@@ -183,7 +201,6 @@ export class ModelJudgeAnalyzer {
       }
     }
 
-    // Commit all evidence to graph
     for (const e of [...primaryEvidence, ...reviewerEvidence]) {
       evidence.push(e);
       graph.add(e);
@@ -203,7 +220,7 @@ export class ModelJudgeAnalyzer {
     policy: NonNullable<ModelJudgesConfig['policy']>,
     graph: EvidenceGraph
   ): boolean {
-    if (policy === 'always') return true;
+    if (policy === 'always' || policy === 'always_audit') return true;
     if (policy === 'disabled') return false;
 
     const allEvidence = graph.getAll();

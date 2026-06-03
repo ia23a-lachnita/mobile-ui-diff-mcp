@@ -11,6 +11,7 @@ import { captureIosSimulatorScreenshot } from "../tools/captureIosSimulator";
 import { calibrateAndroidDevice } from "../tools/androidDevice";
 import { discoverStableRegions } from "../tools/discoverStableRegions";
 import { checkOllamaHealth } from "../vlm/ollama";
+import { checkModelJudgesHealth } from "../tools/modelJudgesHealth";
 
 export const ignoreRegionSchema = z.object({
   x: z.number().nonnegative(),
@@ -134,7 +135,10 @@ export const referenceContextSchema = z.object({
 
 export const modelJudgesSchema = z.object({
   enabled: z.boolean().optional(),
-  policy: z.enum(['disabled', 'on_failed_quality', 'on_failed_quality_or_uncertain_root_cause', 'always']).optional(),
+  required: z.boolean().optional(),
+  explicitSkipReason: z.string().optional(),
+  allowEditSuggestionsOnPass: z.boolean().optional(),
+  policy: z.enum(['disabled', 'on_failed_quality', 'on_failed_quality_or_uncertain_root_cause', 'always', 'always_audit']).optional(),
   primary: z.object({
     provider: z.enum(['openrouter', 'nvidia']),
     model: z.string().min(1)
@@ -145,6 +149,18 @@ export const modelJudgesSchema = z.object({
   }).optional(),
   requireConsensusForCodeHints: z.boolean().optional()
 }).optional();
+
+export const modelJudgesHealthSchema = z.object({
+  primary: z.object({
+    provider: z.enum(['openrouter', 'nvidia']),
+    model: z.string().min(1)
+  }).optional(),
+  reviewer: z.object({
+    provider: z.enum(['openrouter', 'nvidia']),
+    model: z.string().min(1)
+  }).optional(),
+  deep: z.boolean().optional()
+});
 
 export const vlmConfigSchema = z.object({
   provider: z.enum(['ollama']).optional(),
@@ -892,6 +908,34 @@ export function getToolList() {
       }
     },
     {
+      name: "model_judges_health",
+      description: "Check model judge provider readiness (API keys present, providers configured). Fast check — does not call provider APIs.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          primary: {
+            type: "object",
+            description: "Primary judge provider to check.",
+            properties: {
+              provider: { type: "string", enum: ["openrouter", "nvidia"] },
+              model: { type: "string", minLength: 1 }
+            },
+            required: ["provider", "model"]
+          },
+          reviewer: {
+            type: "object",
+            description: "Reviewer judge provider to check.",
+            properties: {
+              provider: { type: "string", enum: ["openrouter", "nvidia"] },
+              model: { type: "string", minLength: 1 }
+            },
+            required: ["provider", "model"]
+          },
+          deep: { type: "boolean", description: "When true, attempt a live API call to verify key validity (slower)." }
+        }
+      }
+    },
+    {
       name: "vlm_health",
       description: "Check Ollama VLM health, installed/running models, and optionally warm a model.",
       inputSchema: {
@@ -958,6 +1002,11 @@ export function createServer() {
         case "discover_stable_regions": {
           const args = discoverStableRegionsSchema.parse(request.params.arguments);
           const result = await discoverStableRegions(args);
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+        case "model_judges_health": {
+          const args = modelJudgesHealthSchema.parse(request.params.arguments);
+          const result = await checkModelJudgesHealth(args);
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
         case "vlm_health": {

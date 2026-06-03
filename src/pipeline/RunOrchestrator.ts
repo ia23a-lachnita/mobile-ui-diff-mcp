@@ -38,7 +38,10 @@ import {
   VlmPolicy,
   IgnoreRegion,
   BoxLike,
-  AgentSummary
+  AgentSummary,
+  VisualAuditStatus,
+  AcceptanceStatus,
+  VisualCaveat
 } from '../types';
 
 // ---- helpers (ported directly from original compareImages.ts) ----
@@ -451,8 +454,12 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     new TextOcrAnalyzer(),
     new OverlapLegibilityAnalyzer()
   ];
+  const visualCaveats: VisualCaveat[] = [];
   const remainingResults = await Promise.all(remainingStage1.map((a) => a.run(ctx, graph)));
-  for (const r of remainingResults) warnings.push(...r.warnings);
+  for (const r of remainingResults) {
+    warnings.push(...r.warnings);
+    if (r.visualCaveats) visualCaveats.push(...r.visualCaveats);
+  }
 
   // ---- Inline ROI quality analysis (faithful port from original compareImages.ts) ----
   const roiCropArtifacts: RegionOfInterestReport[] = [];
@@ -685,6 +692,27 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
 
   // ---- Stage 2: Model judges (policy-controlled) ----
   const modelJudgesInput = input.modelJudges as ModelJudgesConfig | undefined;
+  const visualAuditMode = input.visualAuditMode;
+
+  // visual_parity mode requires judges — hard fail if judges not configured or explicitly skipped without reason
+  if (visualAuditMode === 'visual_parity' && !actionRequired) {
+    const judgesEnabled = modelJudgesInput?.enabled ?? false;
+    const hasExplicitSkip = modelJudgesInput?.enabled === false && !!modelJudgesInput?.explicitSkipReason;
+    if (!judgesEnabled && !hasExplicitSkip) {
+      actionRequired = {
+        type: 'model_judges_unavailable',
+        severity: 'blocking',
+        message: 'visualAuditMode is visual_parity but no model judges are configured or enabled.',
+        recommendedUserPrompt: 'Configure modelJudges with enabled:true and provider API keys, or set visualAuditMode:metric_only to opt out of judge requirement.',
+        suggestedFixes: [
+          'Add modelJudges config with enabled:true and a provider',
+          "Set visualAuditMode:'metric_only' to skip the judge requirement",
+          "Set modelJudges.enabled:false with explicitSkipReason to explicitly declare a metric-only run"
+        ]
+      };
+    }
+  }
+
   if (modelJudgesInput?.enabled) {
     const judgeAnalyzer = new ModelJudgeAnalyzer(modelJudgesInput);
     const judgeResult = await judgeAnalyzer.run(ctx, graph, bundles);
@@ -692,11 +720,41 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     if (judgeResult.actionRequired && !actionRequired) {
       actionRequired = judgeResult.actionRequired;
     }
+    if (judgeResult.visualCaveats) visualCaveats.push(...judgeResult.visualCaveats);
+  } else if (modelJudgesInput?.enabled === false && !modelJudgesInput?.explicitSkipReason) {
+    warnings.push('Model judges disabled without explicitSkipReason. Set explicitSkipReason to confirm metric-only mode, or enable judges for visual parity.');
   }
 
-  // Force fail state when required model judge is unavailable
+  // Force fail state when a blocking action is required
   if (actionRequired?.severity === 'blocking') {
     qualityStatus = 'fail';
+  }
+
+  // Compute visualAuditStatus — check actionRequired type first to avoid 'not_run' masking 'unavailable'
+  let visualAuditStatus: VisualAuditStatus | undefined;
+  let acceptanceStatus: AcceptanceStatus | undefined;
+
+  if (actionRequired?.type === 'model_judges_unavailable') {
+    visualAuditStatus = 'unavailable';
+    acceptanceStatus = 'incomplete';
+  } else if (actionRequired?.type === 'model_judges_failed') {
+    visualAuditStatus = 'error';
+    acceptanceStatus = 'rejected';
+  } else if (modelJudgesInput?.enabled === false && modelJudgesInput?.explicitSkipReason) {
+    visualAuditStatus = 'skipped_by_config';
+    acceptanceStatus = 'metric_only';
+  } else if (modelJudgesInput?.enabled) {
+    const hasBlockingCaveat = visualCaveats.some((c) => c.blocking && c.source !== 'overlapLegibility');
+    if (hasBlockingCaveat) {
+      visualAuditStatus = 'fail';
+      acceptanceStatus = 'rejected';
+    } else {
+      visualAuditStatus = 'pass';
+      acceptanceStatus = qualityStatus === 'pass' ? 'accepted' : 'rejected';
+    }
+  } else {
+    visualAuditStatus = 'not_run';
+    // acceptanceStatus left undefined when no judges configured — backward compat
   }
 
   // ---- Stage 3: Conflict resolution ----
@@ -781,11 +839,16 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     agentActionContract = { ...agentActionContract, canEditApp: false };
   }
 
-  const agentSummary = buildAgentSummary({
+  let agentSummary = buildAgentSummary({
     status: reportStatus, qualityStatus, diffPercent: pixelDiff.diffPercent,
     criticalFailures: criticalRoiFailures, criticalAssertionFailures, qualityFailures,
     roiReports: roiCropArtifacts, priorityFindings, localHotspots, actionRequired
   });
+
+  // metric_only and incomplete acceptance statuses must not authorize stopping iteration
+  if ((acceptanceStatus === 'metric_only' || acceptanceStatus === 'incomplete') && agentSummary.canStopIterating) {
+    agentSummary = { ...agentSummary, canStopIterating: false };
+  }
 
   const report: DiffReport = {
     status: reportStatus,
@@ -823,6 +886,9 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     vlmPolicy,
     vlmAvailability,
     actionRequired,
+    ...(visualAuditStatus !== undefined ? { visualAuditStatus } : {}),
+    ...(acceptanceStatus !== undefined ? { acceptanceStatus } : {}),
+    ...(visualCaveats.length > 0 ? { visualCaveats } : {}),
     artifacts: {
       expected: pixelDiff.processedExpectedPath,
       actual: pixelDiff.processedActualPath,

@@ -184,7 +184,8 @@ describe('Stage ordering enforcement', () => {
     const bundles: any[] = [];
     const result = await judge.run(ctx, graph, bundles);
     expect(result.evidence).toHaveLength(0);
-    expect(result.warnings).toHaveLength(0);
+    // disabled without explicitSkipReason emits advisory warning — no blocking ActionRequired
+    expect(result.actionRequired).toBeUndefined();
   });
 
   it('radialGeometry evidence is present in graph before ModelJudgeAnalyzer runs (stage ordering)', async () => {

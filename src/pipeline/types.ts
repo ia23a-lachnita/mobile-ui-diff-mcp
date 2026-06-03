@@ -48,4 +48,5 @@ export interface AnalyzerResult {
   warnings: string[];
   durationMs: number;
   actionRequired?: import('../types').ActionRequired;
+  visualCaveats?: import('../types').VisualCaveat[];
 }

@@ -42,6 +42,20 @@ export interface CompareImagesInput {
   vlmPreflight?: VlmPreflightResult;
   referenceContext?: ReferenceContextConfig;
   modelJudges?: ModelJudgesConfig;
+  visualAuditMode?: 'visual_parity' | 'metric_only';
+  overlapLegibility?: {
+    enabled?: boolean;
+    regions?: Array<{
+      id: string;
+      label?: string;
+      coordinateSpace?: 'roiNormalized' | 'normalized' | 'expected' | 'actual';
+      box: { x: number; y: number; width: number; height: number };
+      avoidColors?: string[];
+      minClearancePx?: number;
+      maxOverlapPercent?: number;
+      severity?: 'critical' | 'high' | 'medium' | 'low' | 'warning';
+    }>;
+  };
 }
 
 function clamp(value: number, min: number, max: number): number {
