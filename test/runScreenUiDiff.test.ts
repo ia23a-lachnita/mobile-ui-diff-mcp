@@ -442,4 +442,48 @@ describe('runScreenUiDiff', () => {
 
     expect(run.status).toBe('pass');
   });
+
+  it('resolves referenceContext source paths relative to config file directory', async () => {
+    const refDir = path.join(testDir, 'refpath-fixtures');
+    const sourceDir = path.join(refDir, 'src', 'components');
+    const refConfigPath = path.join(refDir, 'ui-diff.config.json');
+    const refOutputDir = path.join(refDir, 'runs');
+
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceDir, 'Ring.tsx'),
+      'export default function Ring() { return null; }',
+      'utf-8'
+    );
+
+    await fs.writeFile(refConfigPath, JSON.stringify({
+      screens: {
+        ring: {
+          platform: 'none',
+          expectedImage: expectedPath,
+          outputDir: refOutputDir,
+          referenceContext: {
+            enabled: true,
+            sources: [
+              { id: 'ring-src', type: 'source', path: 'src/components/Ring.tsx', authority: 'high' }
+            ]
+          }
+        }
+      }
+    }, null, 2));
+
+    try {
+      const run = await runScreenUiDiff({
+        screen: 'ring',
+        configPath: refConfigPath,
+        actualImage: actualIdentical,
+        runName: 'run-001'
+      });
+      // The source file should have been found — no missing-file warnings from referenceContext
+      const refWarnings = (run.warnings ?? []).filter((w) => w.includes('Ring.tsx'));
+      expect(refWarnings).toHaveLength(0);
+    } finally {
+      await fs.rm(refDir, { recursive: true, force: true });
+    }
+  });
 });

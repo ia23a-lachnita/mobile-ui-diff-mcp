@@ -246,6 +246,7 @@ async function findPreviousRunReport(baseOutputDir: string, currentRunName: stri
 
 export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunScreenUiDiffReport> {
   const { config, configPath } = await loadUiDiffConfig(input.configPath);
+  const configDir = path.dirname(configPath);
   const screenConfig = config.screens[input.screen];
 
   if (!screenConfig) {
@@ -383,6 +384,7 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     expectedImage: merged.expectedImage,
     actualImage: input.actualImage,
     outputDir: runOutputDir,
+    configDir,
     pixelmatchThreshold: merged.pixelmatchThreshold,
     maxDiffPercent: merged.maxDiffPercent,
     maxRegions: merged.maxRegions,

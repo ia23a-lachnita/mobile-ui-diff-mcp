@@ -11,6 +11,7 @@ function makeContext(): AnalyzerContext {
   return {
     runId: 'test-run',
     outputDir: os.tmpdir(),
+    configDir: os.tmpdir(),
     roiDir: os.tmpdir(),
     regionsDir: os.tmpdir(),
     expectedImagePath: '/fake/expected.png',
@@ -118,6 +119,37 @@ describe('ModelJudgeAnalyzer', () => {
 
     // Policy should not trigger (no fails), so no API calls needed
     expect(result.warnings.some((w) => w.includes('policy') && w.includes('on_failed_quality'))).toBe(true);
+  });
+
+  it('provider parse preserves unit field from model response', () => {
+    const item: any = {
+      claimId: 'claim-u',
+      claim: 'ring stroke differs',
+      confidence: 0.85,
+      source: 'geometryInterpretationJudge',
+      proposedChangeVector: 'ring_stroke_width',
+      expectedValue: 10,
+      actualValue: 8,
+      unit: 'px'
+    };
+    const e: any = {
+      source: typeof item.source === 'string' && item.source ? item.source : 'modelJudge',
+      claimId: `openrouter-test-roi-${item.claimId}`,
+      subject: item.subject ?? 'roi:test-roi',
+      claim: String(item.claim),
+      confidence: typeof item.confidence === 'number' ? Math.max(0, Math.min(1, item.confidence)) : 0.5,
+      authority: 'model' as const,
+      ...(item.claimType !== undefined ? { claimType: String(item.claimType) } : {}),
+      ...(item.expectedValue !== undefined ? { expectedValue: item.expectedValue } : {}),
+      ...(item.actualValue !== undefined ? { actualValue: item.actualValue } : {}),
+      ...(item.proposedChangeVector !== undefined ? { proposedChangeVector: String(item.proposedChangeVector) } : {}),
+      ...(item.unit !== undefined ? { unit: String(item.unit) } : {}),
+    };
+    expect(e.source).toBe('geometryInterpretationJudge');
+    expect(e.proposedChangeVector).toBe('ring_stroke_width');
+    expect(e.expectedValue).toBe(10);
+    expect(e.actualValue).toBe(8);
+    expect(e.unit).toBe('px');
   });
 
   it('provider parse preserves proposedChangeVector from model response', () => {

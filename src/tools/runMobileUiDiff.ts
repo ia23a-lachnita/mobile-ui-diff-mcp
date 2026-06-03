@@ -15,6 +15,7 @@ export interface RunMobileUiDiffInput {
   expectedImage: string;
   actualImage?: string;
   outputDir: string;
+  configDir?: string;
   threshold?: number;
   pixelmatchThreshold?: number;
   maxDiffPercent?: number;
@@ -76,6 +77,7 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     expectedImage: input.expectedImage,
     actualImage: actualImagePath,
     outputDir: input.outputDir,
+    configDir: input.configDir,
     threshold: input.threshold,
     pixelmatchThreshold: input.pixelmatchThreshold,
     maxDiffPercent: input.maxDiffPercent,

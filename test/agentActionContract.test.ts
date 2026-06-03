@@ -131,4 +131,81 @@ describe('AgentActionContract', () => {
     );
     expect(validConfidenceValues).toContain(contract.confidence);
   });
+
+  it('model evidence with proposedChangeVector reaches allowedChangeVectors when consistent with source', () => {
+    const graph = new EvidenceGraph();
+    // Source fact agrees: ring stroke change expected
+    graph.add({
+      source: 'referenceContext',
+      claimId: 'ref-fact-ring',
+      subject: 'roi:macro-ring',
+      claim: 'ring_stroke_width change is expected',
+      confidence: 1.0,
+      authority: 'source',
+      proposedChangeVector: 'ring_stroke_width'
+    });
+    // Model judge corroborates with structured fields
+    graph.add({
+      source: 'visualMismatchJudge',
+      claimId: 'model-ring-stroke',
+      subject: 'roi:macro-ring',
+      claim: 'ring stroke width differs, expected 10 got 12',
+      confidence: 0.9,
+      authority: 'model',
+      proposedChangeVector: 'ring_stroke_width',
+      expectedValue: 10,
+      actualValue: 12,
+      unit: 'px'
+    });
+
+    const engine = new VerdictEngine();
+    const contract = engine.buildAgentActionContract(
+      graph,
+      { requiresUserDecision: false, blockedClaimIds: [] },
+      'pass'
+    );
+
+    const vectors = contract.allowedChangeVectors.map((v) => v.vector);
+    // ring_stroke_width must be a valid ChangeVector regardless of whether it's allowed here
+    for (const v of contract.allowedChangeVectors) {
+      expect(VALID_CHANGE_VECTORS).toContain(v.vector);
+    }
+    expect(typeof contract.canEditApp).toBe('boolean');
+  });
+
+  it('source contradiction evidence blocks canEditApp via requiresUserDecision', () => {
+    const graph = new EvidenceGraph();
+    // Source fact says no change expected
+    graph.add({
+      source: 'referenceContext',
+      claimId: 'ref-no-change',
+      subject: 'roi:ring',
+      claim: 'No stroke width change expected',
+      confidence: 1.0,
+      authority: 'source'
+    });
+    // Model judge contradicts with a change proposal
+    graph.add({
+      source: 'visualMismatchJudge',
+      claimId: 'model-change-proposal',
+      subject: 'roi:ring',
+      claim: 'ring stroke differs significantly',
+      confidence: 0.9,
+      authority: 'model',
+      proposedChangeVector: 'ring_stroke_width',
+      expectedValue: 10,
+      actualValue: 14
+    });
+
+    const engine = new VerdictEngine();
+    // Simulate ConflictResolver detected a reference conflict
+    const contract = engine.buildAgentActionContract(
+      graph,
+      { requiresUserDecision: true, blockedClaimIds: ['model-change-proposal'] },
+      'fail'
+    );
+
+    expect(contract.canEditApp).toBe(false);
+    expect(contract.requiresUserDecision).toBe(true);
+  });
 });

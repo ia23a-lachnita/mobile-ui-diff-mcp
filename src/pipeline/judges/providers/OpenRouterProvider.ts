@@ -144,6 +144,7 @@ export class OpenRouterProvider implements IModelJudgeProvider {
           ...(item.expectedValue !== undefined ? { expectedValue: item.expectedValue as number | string } : {}),
           ...(item.actualValue !== undefined ? { actualValue: item.actualValue as number | string } : {}),
           ...(item.proposedChangeVector !== undefined ? { proposedChangeVector: String(item.proposedChangeVector) } : {}),
+          ...(item.unit !== undefined ? { unit: String(item.unit) } : {}),
           measurements: item.measurements
         });
       }
