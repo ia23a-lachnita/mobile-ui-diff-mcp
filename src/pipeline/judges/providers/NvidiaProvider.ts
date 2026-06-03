@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import { IModelJudgeProvider } from '../IModelJudge';
 import { Evidence, EvidenceBundle } from '../../types';
+import { VALID_CHANGE_VECTORS } from '../../constants';
 
 export class NvidiaProvider implements IModelJudgeProvider {
   readonly providerName = 'nvidia';
@@ -129,7 +130,7 @@ export class NvidiaProvider implements IModelJudgeProvider {
           ...(item.claimType !== undefined ? { claimType: String(item.claimType) } : {}),
           ...(item.expectedValue !== undefined ? { expectedValue: item.expectedValue as number | string } : {}),
           ...(item.actualValue !== undefined ? { actualValue: item.actualValue as number | string } : {}),
-          ...(item.proposedChangeVector !== undefined ? { proposedChangeVector: String(item.proposedChangeVector) } : {}),
+          ...(item.proposedChangeVector !== undefined && VALID_CHANGE_VECTORS.has(String(item.proposedChangeVector)) ? { proposedChangeVector: String(item.proposedChangeVector) } : {}),
           ...(item.unit !== undefined ? { unit: String(item.unit) } : {}),
           measurements: item.measurements
         });

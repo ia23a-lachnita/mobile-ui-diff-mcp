@@ -161,22 +161,24 @@ export class VerdictEngine {
       confidence = 'low';
     }
 
-    const canEditApp =
-      allowedChangeVectors.length > 0 &&
-      blockedChangeVectors.length === 0 &&
-      !conflictResult.requiresUserDecision;
+    // blocked wins — sanitize allowed by removing any vector that also appears in blocked
+    const blockedVectorSet = new Set(blockedChangeVectors.map((b) => b.vector));
+    const finalAllowedVectors = allowedChangeVectors.filter((a) => !blockedVectorSet.has(a.vector));
 
-    // Deduplicate blocked vectors (remove any that are also allowed)
-    const allowedVectorSet = new Set(allowedChangeVectors.map((a) => a.vector));
-    const finalBlockedVectors = blockedChangeVectors.filter((b) => !allowedVectorSet.has(b.vector));
+    // canEditApp is true when at least one narrow allowed vector remains after sanitization;
+    // unrelated blocked vectors do NOT prevent a narrow allowed edit.
+    // confidence === 'none' is already handled by the INVALID_CAPTURE early return above.
+    const canEditApp =
+      finalAllowedVectors.length > 0 &&
+      !conflictResult.requiresUserDecision;
 
     return {
       canEditApp,
       confidence,
-      allowedChangeVectors,
-      blockedChangeVectors: finalBlockedVectors,
+      allowedChangeVectors: finalAllowedVectors,
+      blockedChangeVectors,
       requiresUserDecision: conflictResult.requiresUserDecision,
-      reasonSummary: this.buildReasonSummary(qualityStatus, allowedChangeVectors, finalBlockedVectors, conflictResult)
+      reasonSummary: this.buildReasonSummary(qualityStatus, finalAllowedVectors, blockedChangeVectors, conflictResult)
     };
   }
 
