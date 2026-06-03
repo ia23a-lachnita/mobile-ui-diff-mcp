@@ -139,4 +139,34 @@ describe('ConflictResolver', () => {
     expect(result.blockedClaimIds).toHaveLength(0);
     expect(result.requiresUserDecision).toBe(false);
   });
+
+  it('source contradiction blocks model-proposed app change vector', () => {
+    const graph = new EvidenceGraph();
+    // Source fact: no change expected
+    graph.add({
+      source: 'referenceContext',
+      claimId: 'ref-fact-no-change',
+      subject: 'roi:ring',
+      claim: 'Ring stroke matches reference: no change needed',
+      confidence: 1.0,
+      authority: 'source',
+      proposedChangeVector: 'none',
+      claimType: 'visual_match'
+    });
+    // Model claim: contradicts source by proposing an app change
+    graph.add({
+      source: 'modelJudge',
+      claimId: 'model-claim-ring-stroke',
+      subject: 'roi:ring',
+      claim: 'Ring stroke differs from reference, needs update',
+      confidence: 0.8,
+      authority: 'model',
+      proposedChangeVector: 'ring_stroke_width',
+      claimType: 'visual_match'
+    });
+
+    const resolver = new ConflictResolver();
+    const result = resolver.resolve(graph);
+    expect(result.blockedClaimIds).toContain('model-claim-ring-stroke');
+  });
 });

@@ -671,7 +671,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   if (isInvalidCapture) qualityWarnings.push('Actual screenshot appears invalid or asleep. Recapture before trusting ROI, VLM, or quality analysis.');
   if (actionRequired?.type === 'vlm_unavailable') qualityWarnings.push('VLM analysis was requested but unavailable. Ask the user whether to continue without semantic analysis.');
 
-  const qualityStatus: 'pass' | 'fail' | 'not_evaluated' = isInvalidCapture
+  let qualityStatus: 'pass' | 'fail' | 'not_evaluated' = isInvalidCapture
     ? 'fail'
     : !hasQualityEvaluationConfig
     ? 'not_evaluated'
@@ -692,6 +692,11 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     if (judgeResult.actionRequired && !actionRequired) {
       actionRequired = judgeResult.actionRequired;
     }
+  }
+
+  // Force fail state when required model judge is unavailable
+  if (actionRequired?.severity === 'blocking') {
+    qualityStatus = 'fail';
   }
 
   // ---- Stage 3: Conflict resolution ----
@@ -765,11 +770,17 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   // ---- Stage 4: Verdict ----
   const reportStatus: DiffReport['status'] = isInvalidCapture ? 'fail' : pixelDiff.diffPercent <= maxDiffPercent ? 'pass' : 'fail';
   const verdictEngine = new VerdictEngine();
-  const agentActionContract = verdictEngine.buildAgentActionContract(
+  let agentActionContract = verdictEngine.buildAgentActionContract(
     graph,
     { requiresUserDecision: conflictResult.requiresUserDecision, blockedClaimIds: conflictResult.blockedClaimIds },
     qualityStatus
   );
+
+  // Ensure canEditApp is false when a blocking action is required
+  if (actionRequired?.severity === 'blocking' && agentActionContract.canEditApp) {
+    agentActionContract = { ...agentActionContract, canEditApp: false };
+  }
+
   const agentSummary = buildAgentSummary({
     status: reportStatus, qualityStatus, diffPercent: pixelDiff.diffPercent,
     criticalFailures: criticalRoiFailures, criticalAssertionFailures, qualityFailures,

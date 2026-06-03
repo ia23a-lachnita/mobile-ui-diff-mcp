@@ -7,11 +7,14 @@ export class EvidenceBundleBuilder {
   build(ctx: AnalyzerContext, graph: EvidenceGraph): EvidenceBundle[] {
     const bundles: EvidenceBundle[] = [];
 
+    const globalSourceEvidence = graph.getBySubject('global').filter((e) => e.authority === 'source' && !e.blocked);
+
     for (const roi of ctx.regionsOfInterest) {
       const roiEvidence = graph.getBySubject(`roi:${roi.id}`);
       const deterministicEvidenceObjects = roiEvidence.filter((e) => e.authority === 'deterministic' && !e.blocked);
       const ocrEvidenceObjects = roiEvidence.filter((e) => e.source === 'textOcr' && !e.blocked);
-      const referenceEvidenceObjects = roiEvidence.filter((e) => e.authority === 'source' && !e.blocked);
+      const roiReferenceEvidence = roiEvidence.filter((e) => e.authority === 'source' && !e.blocked);
+      const referenceEvidenceObjects = [...roiReferenceEvidence, ...globalSourceEvidence];
 
       const expCrop = path.join(ctx.roiDir, `${roi.id}-expected.png`);
       const actCrop = path.join(ctx.roiDir, `${roi.id}-actual.png`);

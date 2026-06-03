@@ -120,12 +120,16 @@ export class NvidiaProvider implements IModelJudgeProvider {
       for (const item of items) {
         if (!item.claimId || !item.claim) continue;
         evidence.push({
-          source: 'modelJudge',
+          source: typeof item.source === 'string' && item.source ? item.source : 'modelJudge',
           claimId: `nvidia-${bundle.roiId}-${item.claimId}`,
           subject: item.subject ?? `roi:${bundle.roiId}`,
           claim: String(item.claim),
           confidence: typeof item.confidence === 'number' ? Math.max(0, Math.min(1, item.confidence)) : 0.5,
           authority: 'model' as const,
+          ...(item.claimType !== undefined ? { claimType: String(item.claimType) } : {}),
+          ...(item.expectedValue !== undefined ? { expectedValue: item.expectedValue as number | string } : {}),
+          ...(item.actualValue !== undefined ? { actualValue: item.actualValue as number | string } : {}),
+          ...(item.proposedChangeVector !== undefined ? { proposedChangeVector: String(item.proposedChangeVector) } : {}),
           measurements: item.measurements
         });
       }
