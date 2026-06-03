@@ -15,6 +15,12 @@ export interface ReferenceContextConfig {
     subject: string;
     claim: string;
     authority?: 'high' | 'medium' | 'low';
+    claimType?: string;
+    expectedValue?: number | string;
+    actualValue?: number | string;
+    unit?: string;
+    proposedChangeVector?: string;
+    blocksChangeVectors?: string[];
   }>;
 }
 

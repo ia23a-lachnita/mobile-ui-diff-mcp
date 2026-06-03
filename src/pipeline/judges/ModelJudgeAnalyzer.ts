@@ -131,11 +131,13 @@ export class ModelJudgeAnalyzer {
     }
 
     // Build reviewer provider
+    let reviewerUnavailable = false;
     if (cfg.reviewer) {
       const provider = buildProvider(cfg.reviewer);
       if (!provider) {
         const keyName = cfg.reviewer.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'NVIDIA_API_KEY';
         warnings.push(`ModelJudgeAnalyzer: reviewer provider '${cfg.reviewer.provider}' requires ${keyName} env var`);
+        reviewerUnavailable = true;
       } else {
         for (const bundle of bundles) {
           try {
@@ -149,16 +151,34 @@ export class ModelJudgeAnalyzer {
     }
 
     // Enforce requireConsensusForCodeHints: block code hints from primary that reviewer doesn't corroborate
-    if (cfg.requireConsensusForCodeHints && reviewerEvidence.length > 0) {
+    if (cfg.requireConsensusForCodeHints) {
+      const allGraphEvidence = graph.getAll();
       for (const primaryItem of primaryEvidence) {
         if (!primaryItem.proposedChangeVector) continue;
-        const hasConsensus = reviewerEvidence.some(
-          (r) => r.subject === primaryItem.subject && r.proposedChangeVector === primaryItem.proposedChangeVector
-        );
-        if (!hasConsensus) {
-          primaryItem.blocked = true;
-          primaryItem.blockReason = 'SOURCE_CONTRADICTION';
-          warnings.push(`ModelJudgeAnalyzer: code hint '${primaryItem.claimId}' blocked: no reviewer consensus on proposedChangeVector '${primaryItem.proposedChangeVector}'`);
+
+        if (reviewerUnavailable) {
+          // Reviewer configured but unreachable — allow only if deterministic or source evidence supports the same vector
+          const supportedByGroundTruth = allGraphEvidence.some(
+            (e) =>
+              (e.authority === 'deterministic' || e.authority === 'source') &&
+              !e.blocked &&
+              (e.proposedChangeVector === primaryItem.proposedChangeVector ||
+                e.subject === primaryItem.subject)
+          );
+          if (!supportedByGroundTruth) {
+            primaryItem.blocked = true;
+            primaryItem.blockReason = 'INSUFFICIENT_CONFIDENCE';
+            warnings.push(`ModelJudgeAnalyzer: code hint '${primaryItem.claimId}' blocked: reviewer unavailable and no deterministic/source evidence supports vector '${primaryItem.proposedChangeVector}'`);
+          }
+        } else if (reviewerEvidence.length > 0) {
+          const hasConsensus = reviewerEvidence.some(
+            (r) => r.subject === primaryItem.subject && r.proposedChangeVector === primaryItem.proposedChangeVector
+          );
+          if (!hasConsensus) {
+            primaryItem.blocked = true;
+            primaryItem.blockReason = 'SOURCE_CONTRADICTION';
+            warnings.push(`ModelJudgeAnalyzer: code hint '${primaryItem.claimId}' blocked: no reviewer consensus on proposedChangeVector '${primaryItem.proposedChangeVector}'`);
+          }
         }
       }
     }

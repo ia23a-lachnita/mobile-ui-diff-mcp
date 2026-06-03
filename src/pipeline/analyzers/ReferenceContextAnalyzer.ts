@@ -47,7 +47,16 @@ export class ReferenceContextAnalyzer implements IAnalyzer {
         claim: fact.claim,
         confidence,
         authority: 'source',
-        measurements: { factId: fact.id, authorityLevel }
+        measurements: {
+          factId: fact.id,
+          authorityLevel,
+          ...(fact.blocksChangeVectors ? { blocksChangeVectors: fact.blocksChangeVectors.join(',') } : {})
+        },
+        ...(fact.claimType !== undefined ? { claimType: fact.claimType } : {}),
+        ...(fact.expectedValue !== undefined ? { expectedValue: fact.expectedValue } : {}),
+        ...(fact.actualValue !== undefined ? { actualValue: fact.actualValue } : {}),
+        ...(fact.unit !== undefined ? { unit: fact.unit } : {}),
+        ...(fact.proposedChangeVector !== undefined ? { proposedChangeVector: fact.proposedChangeVector } : {})
       };
       evidence.push(e);
       graph.add(e);
@@ -59,7 +68,7 @@ export class ReferenceContextAnalyzer implements IAnalyzer {
     for (const source of sources) {
       const resolvedPath = path.isAbsolute(source.path)
         ? source.path
-        : path.resolve(ctx.outputDir, '..', source.path);
+        : path.resolve(ctx.configDir, source.path);
 
       let snippet = '';
       let fileExists = false;

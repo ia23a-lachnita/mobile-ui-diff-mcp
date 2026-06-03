@@ -164,7 +164,6 @@ export class VerdictEngine {
     const canEditApp =
       allowedChangeVectors.length > 0 &&
       blockedChangeVectors.length === 0 &&
-      criticalRoiFails.length === 0 &&
       !conflictResult.requiresUserDecision;
 
     // Deduplicate blocked vectors (remove any that are also allowed)
@@ -191,7 +190,7 @@ export class VerdictEngine {
       centerShift: 'ring_center_alignment',
       haloOrTrackMismatch: 'ring_glow_track',
       capMismatch: 'ring_stroke_width',
-      missingArc: 'component_layout',
+      missingArc: 'ring_sweep_mapping',
       scaleOnlyMismatch: 'device_profile'
     };
     return map[kind] ?? null;

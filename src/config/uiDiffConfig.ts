@@ -139,7 +139,13 @@ export const referenceFactSchema = z.object({
   id: z.string().min(1),
   subject: z.string().min(1),
   claim: z.string().min(1),
-  authority: z.enum(['high', 'medium', 'low']).default('high')
+  authority: z.enum(['high', 'medium', 'low']).default('high'),
+  claimType: z.string().optional(),
+  expectedValue: z.union([z.number(), z.string()]).optional(),
+  actualValue: z.union([z.number(), z.string()]).optional(),
+  unit: z.string().optional(),
+  proposedChangeVector: z.string().optional(),
+  blocksChangeVectors: z.array(z.string()).optional()
 });
 
 export const referenceContextSchema = z.object({

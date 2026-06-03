@@ -114,6 +114,7 @@ export class ArtifactBuilder {
     return {
       runId,
       outputDir,
+      configDir: input.configDir ?? process.cwd(),
       roiDir,
       regionsDir,
       expectedImagePath: expectedAbsPath,

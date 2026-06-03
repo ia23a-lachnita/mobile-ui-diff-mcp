@@ -7,6 +7,7 @@ import { EvidenceGraph } from '../EvidenceGraph';
 export interface AnalyzerContext {
   runId: string;
   outputDir: string;
+  configDir: string;
   roiDir: string;
   regionsDir: string;
   expectedImagePath: string;

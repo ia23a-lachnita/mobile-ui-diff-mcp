@@ -17,6 +17,7 @@ export interface CompareImagesInput {
   expectedImage: string;
   actualImage: string;
   outputDir: string;
+  configDir?: string;
   threshold?: number;
   pixelmatchThreshold?: number;
   maxDiffPercent?: number;

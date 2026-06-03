@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { EvidenceGraph } from '../src/pipeline/EvidenceGraph';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
 import { ConflictResolver } from '../src/pipeline/ConflictResolver';
 import { ReferenceContextAnalyzer } from '../src/pipeline/analyzers/ReferenceContextAnalyzer';
 import { referenceContextSchema } from '../src/config/uiDiffConfig';
@@ -121,9 +124,10 @@ describe('referenceContext loading behavior', () => {
 });
 
 describe('ReferenceContextAnalyzer', () => {
-  const makeCtx = (): AnalyzerContext => ({
+  const makeCtx = (overrides?: Partial<AnalyzerContext>): AnalyzerContext => ({
     runId: 'test-run',
     outputDir: '/tmp/test-output',
+    configDir: '/tmp/test-project',
     roiDir: '/tmp/test-output/regions-of-interest',
     regionsDir: '/tmp/test-output/regions',
     expectedImagePath: '/tmp/expected.png',
@@ -135,7 +139,8 @@ describe('ReferenceContextAnalyzer', () => {
     actualSourceHeight: 800,
     regionsOfInterest: [],
     ignoreRegions: [],
-    config: {} as any
+    config: {} as any,
+    ...overrides
   });
 
   it('returns empty result when disabled', async () => {
@@ -194,6 +199,34 @@ describe('ReferenceContextAnalyzer', () => {
     expect(e).toBeDefined();
     expect(e!.confidence).toBe(0);
     expect((e!.measurements as any).fileExists).toBe(false);
+  });
+
+  it('resolves relative source path from configDir, not outputDir', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'refctx-'));
+    const mockupDir = path.join(tmpDir, 'docs', 'mockups', 'source');
+    await fs.mkdir(mockupDir, { recursive: true });
+    const mockupFile = path.join(mockupDir, 'Today.jsx');
+    await fs.writeFile(mockupFile, 'export default function Today() { return <View />; }', 'utf-8');
+
+    try {
+      const graph = new EvidenceGraph();
+      const analyzer = new ReferenceContextAnalyzer({
+        enabled: true,
+        sources: [{ id: 'today-jsx', type: 'source', path: 'docs/mockups/source/Today.jsx', authority: 'high' }]
+      });
+      const ctx = makeCtx({ configDir: tmpDir, outputDir: path.join(tmpDir, 'output') });
+      const result = await analyzer.run(ctx, graph) as any;
+
+      expect(result.referenceContextSummary.sourcesLoaded).toBe(1);
+      expect(result.referenceContextSummary.missingFiles).toHaveLength(0);
+      const e = graph.getAll().find((ev) => ev.claimId === 'ref-source-today-jsx');
+      expect(e).toBeDefined();
+      expect(e!.confidence).toBe(1.0);
+      expect((e!.measurements as any).fileExists).toBe(true);
+      expect((e!.measurements as any).snippet).toContain('Today');
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it('emitted facts are picked up by ConflictResolver as source evidence', async () => {
