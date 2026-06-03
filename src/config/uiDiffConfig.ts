@@ -127,6 +127,53 @@ export const vlmConfigSchema = z.object({
   timeoutMs: z.number().int().positive().optional()
 }).optional();
 
+export const referenceSourceSchema = z.object({
+  id: z.string().min(1),
+  type: z.enum(['source', 'html', 'tokens', 'fixture', 'notes', 'screenshot']),
+  path: z.string().min(1),
+  authority: z.enum(['high', 'medium', 'low']).default('high'),
+  description: z.string().optional()
+});
+
+export const referenceFactSchema = z.object({
+  id: z.string().min(1),
+  subject: z.string().min(1),
+  claim: z.string().min(1),
+  authority: z.enum(['high', 'medium', 'low']).default('high'),
+  claimType: z.string().optional(),
+  expectedValue: z.union([z.number(), z.string()]).optional(),
+  actualValue: z.union([z.number(), z.string()]).optional(),
+  unit: z.string().optional(),
+  proposedChangeVector: z.string().optional(),
+  blocksChangeVectors: z.array(z.string()).optional()
+});
+
+export const referenceContextSchema = z.object({
+  enabled: z.boolean().default(false),
+  sources: z.array(referenceSourceSchema).optional(),
+  facts: z.array(referenceFactSchema).optional()
+}).optional();
+
+export const modelJudgesProviderSchema = z.object({
+  provider: z.enum(['openrouter', 'nvidia']),
+  model: z.string().min(1)
+});
+
+export const modelJudgesPolicySchema = z.enum([
+  'disabled',
+  'on_failed_quality',
+  'on_failed_quality_or_uncertain_root_cause',
+  'always'
+]);
+
+export const modelJudgesSchema = z.object({
+  enabled: z.boolean().default(false),
+  policy: modelJudgesPolicySchema.optional(),
+  primary: modelJudgesProviderSchema.optional(),
+  reviewer: modelJudgesProviderSchema.optional(),
+  requireConsensusForCodeHints: z.boolean().optional()
+}).optional();
+
 export const uiDiffScreenSchema = z.object({
   platform: z.enum(['android', 'ios', 'none']),
   expectedImage: z.string().min(1),
@@ -153,7 +200,9 @@ export const uiDiffScreenSchema = z.object({
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
   hotspotDetection: hotspotDetectionSchema.optional(),
-  vlm: vlmConfigSchema
+  vlm: vlmConfigSchema,
+  referenceContext: referenceContextSchema,
+  modelJudges: modelJudgesSchema
 });
 
 export const uiDiffConfigSchema = z.object({

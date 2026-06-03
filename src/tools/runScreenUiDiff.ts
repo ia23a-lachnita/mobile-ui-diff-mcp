@@ -6,6 +6,8 @@ import { resolveAbsolutePath } from '../utils/fs';
 import { runMobileUiDiff } from './runMobileUiDiff';
 import { preflightOllama, resolveOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 import { buildAutoMasksFromDeviceProfile, getAndroidDeviceInfo, matchDeviceProfile } from './androidDevice';
+import type { ReferenceContextConfig } from '../pipeline/ConflictResolver';
+import type { ModelJudgesConfig } from '../pipeline/judges/ModelJudgeAnalyzer';
 
 export interface RunScreenUiDiffInput {
   screen: string;
@@ -33,6 +35,8 @@ export interface RunScreenUiDiffInput {
   visualAssertions?: VisualAssertionConfig[];
   floorDetection?: FloorDetectionConfig;
   hotspotDetection?: HotspotDetectionConfig;
+  referenceContext?: ReferenceContextConfig;
+  modelJudges?: ModelJudgesConfig;
 }
 
 export interface RunScreenUiDiffDelta {
@@ -242,6 +246,7 @@ async function findPreviousRunReport(baseOutputDir: string, currentRunName: stri
 
 export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunScreenUiDiffReport> {
   const { config, configPath } = await loadUiDiffConfig(input.configPath);
+  const configDir = path.dirname(configPath);
   const screenConfig = config.screens[input.screen];
 
   if (!screenConfig) {
@@ -273,7 +278,9 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     regionsOfInterest: input.regionsOfInterest ?? screenConfig.regionsOfInterest,
     visualAssertions: input.visualAssertions ?? screenConfig.visualAssertions,
     floorDetection: input.floorDetection ?? screenConfig.floorDetection,
-    hotspotDetection: input.hotspotDetection ?? screenConfig.hotspotDetection
+    hotspotDetection: input.hotspotDetection ?? screenConfig.hotspotDetection,
+    referenceContext: input.referenceContext ?? screenConfig.referenceContext,
+    modelJudges: input.modelJudges ?? screenConfig.modelJudges
   };
 
   const includeVlmAnalysis = merged.includeVlmAnalysis ?? false;
@@ -377,6 +384,7 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     expectedImage: merged.expectedImage,
     actualImage: input.actualImage,
     outputDir: runOutputDir,
+    configDir,
     pixelmatchThreshold: merged.pixelmatchThreshold,
     maxDiffPercent: merged.maxDiffPercent,
     maxRegions: merged.maxRegions,
@@ -400,7 +408,9 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     floorDetection: merged.floorDetection,
     hotspotDetection: merged.hotspotDetection,
     regionsOfInterest: merged.regionsOfInterest,
-    visualAssertions: merged.visualAssertions
+    visualAssertions: merged.visualAssertions,
+    referenceContext: merged.referenceContext,
+    modelJudges: merged.modelJudges
   });
 
   const reportPath = path.join(resolvedRunOutputDir, 'report.json');

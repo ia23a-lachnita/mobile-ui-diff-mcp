@@ -8,6 +8,8 @@ import { cropAndSave } from '../image/crops';
 import { runRadialChartDiagnostics } from '../image/radialChartDiagnostics';
 import { explainDiffUsingOllama, preflightOllama, resolveOllamaConfig, ResolvedOllamaConfig, VlmPreflightResult } from '../vlm/ollama';
 import { ConfigSuggestion, DeviceProfile, IgnoreRegion, RegionReport, DiffReport, VlmSummary, VlmAnalysis, RegionOfInterestConfig, RegionOfInterestReport, QualityFailure, PriorityFinding, VisualAssertionConfig, VisualAssertionResult, FloorDetectionConfig, RunDelta, FloorBlocker, AgentSummary, HotspotDetectionConfig, LocalHotspot, VlmPolicy, VlmAvailability, ActionRequired } from '../types';
+import type { ReferenceContextConfig } from '../pipeline/ConflictResolver';
+import type { ModelJudgesConfig } from '../pipeline/judges/ModelJudgeAnalyzer';
 import fs from 'fs/promises';
 import { PNG } from 'pngjs';
 
@@ -15,6 +17,7 @@ export interface CompareImagesInput {
   expectedImage: string;
   actualImage: string;
   outputDir: string;
+  configDir?: string;
   threshold?: number;
   pixelmatchThreshold?: number;
   maxDiffPercent?: number;
@@ -37,6 +40,8 @@ export interface CompareImagesInput {
   hotspotDetection?: HotspotDetectionConfig;
   vlmConfig?: ResolvedOllamaConfig;
   vlmPreflight?: VlmPreflightResult;
+  referenceContext?: ReferenceContextConfig;
+  modelJudges?: ModelJudgesConfig;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -497,6 +502,12 @@ function buildAgentSummary(input: {
 }
 
 export async function compareImages(input: CompareImagesInput): Promise<DiffReport> {
+  const { runPipeline } = await import('../pipeline/RunOrchestrator');
+  return runPipeline(input);
+}
+
+/** @deprecated Use compareImages (which now delegates to runPipeline internally) */
+async function _compareImagesLegacy(input: CompareImagesInput): Promise<DiffReport> {
   const pixelmatchThreshold = input.pixelmatchThreshold ?? input.threshold ?? 0.1;
   const maxDiffPercent = input.maxDiffPercent ?? 0.001;
   const maxRegions = input.maxRegions ?? 50;

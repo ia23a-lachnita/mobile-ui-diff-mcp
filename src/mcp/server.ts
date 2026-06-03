@@ -115,6 +115,37 @@ export const appContentBoundsSchema = z.object({
 
 export const vlmPolicySchema = z.enum(['disabled', 'optional', 'required', 'ask_user']);
 
+export const referenceContextSchema = z.object({
+  enabled: z.boolean().optional(),
+  sources: z.array(z.object({
+    id: z.string().min(1),
+    type: z.string().min(1),
+    path: z.string().min(1),
+    authority: z.enum(['high', 'medium', 'low']).optional(),
+    description: z.string().optional()
+  })).optional(),
+  facts: z.array(z.object({
+    id: z.string().min(1),
+    subject: z.string().min(1),
+    claim: z.string().min(1),
+    authority: z.enum(['high', 'medium', 'low']).optional()
+  })).optional()
+}).optional();
+
+export const modelJudgesSchema = z.object({
+  enabled: z.boolean().optional(),
+  policy: z.enum(['disabled', 'on_failed_quality', 'on_failed_quality_or_uncertain_root_cause', 'always']).optional(),
+  primary: z.object({
+    provider: z.enum(['openrouter', 'nvidia']),
+    model: z.string().min(1)
+  }).optional(),
+  reviewer: z.object({
+    provider: z.enum(['openrouter', 'nvidia']),
+    model: z.string().min(1)
+  }).optional(),
+  requireConsensusForCodeHints: z.boolean().optional()
+}).optional();
+
 export const vlmConfigSchema = z.object({
   provider: z.enum(['ollama']).optional(),
   baseUrl: z.string().min(1).optional(),
@@ -147,7 +178,9 @@ export const compareImagesSchema = z.object({
   floorDetection: floorDetectionSchema.optional(),
   hotspotDetection: hotspotDetectionSchema.optional(),
   previousReport: z.any().optional(),
-  runDelta: z.any().optional()
+  runDelta: z.any().optional(),
+  referenceContext: referenceContextSchema,
+  modelJudges: modelJudgesSchema
 }).strict();
 
 export const captureAndroidSchema = z.object({
@@ -195,7 +228,9 @@ export const runMobileUiDiffSchema = z.object({
   floorDetection: floorDetectionSchema.optional(),
   hotspotDetection: hotspotDetectionSchema.optional(),
   previousReport: z.any().optional(),
-  runDelta: z.any().optional()
+  runDelta: z.any().optional(),
+  referenceContext: referenceContextSchema,
+  modelJudges: modelJudgesSchema
 });
 
 export const runScreenUiDiffSchema = z.object({
@@ -223,7 +258,9 @@ export const runScreenUiDiffSchema = z.object({
   regionsOfInterest: z.array(regionOfInterestSchema).optional(),
   visualAssertions: z.array(visualAssertionSchema).optional(),
   floorDetection: floorDetectionSchema.optional(),
-  hotspotDetection: hotspotDetectionSchema.optional()
+  hotspotDetection: hotspotDetectionSchema.optional(),
+  referenceContext: referenceContextSchema,
+  modelJudges: modelJudgesSchema
 });
 
 export const vlmHealthSchema = z.object({
