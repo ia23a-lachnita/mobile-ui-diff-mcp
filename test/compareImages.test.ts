@@ -489,7 +489,8 @@ describe('compareImages and Schemas', () => {
         maxRegions: 1,
         maxVlmRegions: 1,
         includeVlmAnalysis: true,
-        vlmPolicy: 'optional'
+        vlmPolicy: 'optional',
+        visualAuditMode: 'metric_only'
       });
 
       expect(result.vlmPolicy).toBe('optional');
@@ -823,6 +824,7 @@ describe('compareImages and Schemas', () => {
       actualImage: path.join(testDir, 'shifted.png'),
       outputDir: path.join(testDir, 'out-floor-waiting'),
       maxDiffPercent: 0.0001,
+      visualAuditMode: 'metric_only',
       floorDetection: { enabled: true, deltaThreshold: 0.0001, consecutiveRuns: 2 },
       regionsOfInterest: [
         {
@@ -849,6 +851,7 @@ describe('compareImages and Schemas', () => {
       actualImage: path.join(testDir, 'shifted.png'),
       outputDir: path.join(testDir, 'out-floor-stable'),
       maxDiffPercent: 0.0001,
+      visualAuditMode: 'metric_only',
       floorDetection: { enabled: true, deltaThreshold: 0.0001, consecutiveRuns: 2 },
       regionsOfInterest: [
         {
@@ -902,7 +905,8 @@ describe('compareImages and Schemas', () => {
       expectedImage: path.join(testDir, 'base.png'),
       actualImage: path.join(testDir, 'shifted.png'),
       outputDir: path.join(testDir, 'out-no-quality-gates'),
-      maxDiffPercent: 1.0
+      maxDiffPercent: 1.0,
+      visualAuditMode: 'metric_only'
     });
 
     expect(result.status).toBe('pass');
@@ -925,7 +929,8 @@ describe('compareImages and Schemas', () => {
       expectedImage: expectedHotspot,
       actualImage: actualHotspot,
       outputDir: path.join(testDir, 'out-hotspots'),
-      maxDiffPercent: 1.0
+      maxDiffPercent: 1.0,
+      visualAuditMode: 'metric_only'
     });
 
     expect(result.status).toBe('pass');
@@ -958,6 +963,7 @@ describe('compareImages and Schemas', () => {
       actualImage: path.join(testDir, 'shifted.png'),
       outputDir: path.join(testDir, 'out-floor-not-evaluated'),
       maxDiffPercent: 0.0001,
+      visualAuditMode: 'metric_only',
       previousReport,
       floorDetection: {
         enabled: true,
@@ -981,6 +987,7 @@ describe('compareImages and Schemas', () => {
       expectedImage: path.join(testDir, 'base.png'),
       actualImage: path.join(testDir, 'identical.png'),
       outputDir: path.join(testDir, 'out-quality-pass'),
+      visualAuditMode: 'metric_only',
       regionsOfInterest: [
         {
           id: 'macro-ring',
@@ -1015,13 +1022,15 @@ describe('compareImages and Schemas', () => {
       expectedImage: path.join(testDir, 'base.png'),
       actualImage: path.join(testDir, 'shifted.png'),
       outputDir: path.join(testDir, 'out-global-fail-compat'),
-      maxDiffPercent: 0.0001
+      maxDiffPercent: 0.0001,
+      visualAuditMode: 'metric_only'
     });
     const passing = await compareImages({
       expectedImage: path.join(testDir, 'base.png'),
       actualImage: path.join(testDir, 'shifted.png'),
       outputDir: path.join(testDir, 'out-global-pass-compat'),
-      maxDiffPercent: 1.0
+      maxDiffPercent: 1.0,
+      visualAuditMode: 'metric_only'
     });
 
     expect(failing.status).toBe('fail');
@@ -1039,6 +1048,7 @@ describe('compareImages and Schemas', () => {
       expectedImage: expectedToday,
       actualImage: actualToday,
       outputDir: path.join(testDir, 'out-today-run-010'),
+      visualAuditMode: 'metric_only',
       pixelmatchThreshold: 0.1,
       maxDiffPercent: 0.14,
       regionsOfInterest: [
@@ -1155,6 +1165,7 @@ describe('compareImages and Schemas', () => {
       actualImage: actualToday,
       outputDir: path.join(testDir, 'out-today-dynamic-structural-pass'),
       maxDiffPercent: 1.0,
+      visualAuditMode: 'metric_only',
       regionsOfInterest: [
         {
           id: 'macro-ring',
@@ -1260,6 +1271,7 @@ describe('compareImages and Schemas', () => {
       actualImage: actual,
       outputDir: path.join(testDir, 'out-broad-mask'),
       maxDiffPercent: 1.0,
+      visualAuditMode: 'metric_only',
       regionsOfInterest: [
         {
           id: 'critical-card',
@@ -1325,6 +1337,7 @@ describe('compareImages and Schemas', () => {
       actualImage: actualToday,
       outputDir: path.join(testDir, 'out-today-structural-defect'),
       maxDiffPercent: 1.0,
+      visualAuditMode: 'metric_only',
       regionsOfInterest: [
         {
           id: 'macro-ring',
@@ -1402,6 +1415,7 @@ describe('compareImages and Schemas', () => {
       actualImage: actual,
       outputDir: path.join(testDir, `out-dynamic-space-${coordinateSpace}`),
       maxDiffPercent: 1.0,
+      visualAuditMode: 'metric_only',
       regionsOfInterest: [
         {
           id: 'roi',
@@ -1486,6 +1500,7 @@ describe('compareImages and Schemas', () => {
       expectedImage: expected,
       actualImage: actual,
       outputDir: path.join(testDir, 'out-dark-valid'),
+      visualAuditMode: 'metric_only',
       regionsOfInterest: [
         {
           id: 'dark-card',
@@ -1516,6 +1531,7 @@ describe('compareImages and Schemas', () => {
       actualImage: actual,
       outputDir: path.join(testDir, 'out-non-critical-roi-warning'),
       maxDiffPercent: 1.0,
+      visualAuditMode: 'metric_only',
       regionsOfInterest: [
         {
           id: 'secondary-card',
@@ -1546,6 +1562,7 @@ describe('compareImages and Schemas', () => {
       actualImage: actual,
       outputDir: path.join(testDir, 'out-non-critical-broad-mask'),
       maxDiffPercent: 1.0,
+      visualAuditMode: 'metric_only',
       regionsOfInterest: [
         {
           id: 'secondary-data-card',
@@ -1628,5 +1645,83 @@ describe('compareImages and Schemas', () => {
     } as any);
 
     expect(result.warnings).toContain("Auto mask overlaps critical ROI 'Header'. Review autoIgnore settings before accepting this run.");
+  });
+});
+
+describe('visualAuditMode enforcement and overlapLegibility integration', () => {
+  const dir = path.join(__dirname, 'fixtures-visual-audit');
+
+  beforeAll(async () => {
+    await fs.mkdir(dir, { recursive: true });
+    await createTestImage(path.join(dir, 'white.png'), (_png) => {});
+    await createTestImage(path.join(dir, 'black-rect.png'), (png) => {
+      drawRect(png, 10, 10, 20, 20, [0, 0, 0]);
+    });
+  });
+
+  afterAll(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('visual_parity mode with judges disabled and no explicitSkipReason produces blocking actionRequired', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(dir, 'white.png'),
+      actualImage: path.join(dir, 'white.png'),
+      outputDir: path.join(dir, 'out-vp-block'),
+      visualAuditMode: 'visual_parity',
+      modelJudges: { enabled: false }
+    } as any);
+    expect(result.actionRequired?.type).toBe('model_judges_unavailable');
+    expect(result.actionRequired?.severity).toBe('blocking');
+    expect(result.agentActionContract?.canEditApp).toBe(false);
+  });
+
+  it('omitting visualAuditMode and modelJudges hard-fails with blocking model_judges_unavailable', async () => {
+    // Default visualAuditMode is 'visual_parity' — absent modelJudges must block, not just warn.
+    const result = await compareImages({
+      expectedImage: path.join(dir, 'white.png'),
+      actualImage: path.join(dir, 'white.png'),
+      outputDir: path.join(dir, 'out-default-absent')
+    } as any);
+    expect(result.actionRequired?.type).toBe('model_judges_unavailable');
+    expect(result.actionRequired?.severity).toBe('blocking');
+    expect(result.visualAuditStatus).toBe('unavailable');
+    expect(result.acceptanceStatus).toBe('incomplete');
+    expect(result.agentActionContract?.canEditApp).toBe(false);
+    expect(result.agentSummary?.canStopIterating).toBe(false);
+  });
+
+  it('metric_only mode with explicitSkipReason proceeds without judge blocking', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(dir, 'white.png'),
+      actualImage: path.join(dir, 'white.png'),
+      outputDir: path.join(dir, 'out-metric-only'),
+      visualAuditMode: 'metric_only',
+      modelJudges: { enabled: false, explicitSkipReason: 'metric-only intentional' }
+    } as any);
+    expect(result.actionRequired?.type).not.toBe('model_judges_unavailable');
+  });
+
+  it('overlapLegibility config in compareImages input emits visualCaveats when avoid-color pixels detected', async () => {
+    // black-rect.png has black (0,0,0) pixels at (10,10) covering 20x20 pixels on 100x100 image
+    const result = await compareImages({
+      expectedImage: path.join(dir, 'white.png'),
+      actualImage: path.join(dir, 'black-rect.png'),
+      outputDir: path.join(dir, 'out-overlap'),
+      overlapLegibility: {
+        enabled: true,
+        regions: [{
+          id: 'black-zone',
+          label: 'black rect area',
+          box: { x: 10, y: 10, width: 20, height: 20 },
+          avoidColors: ['#000000'],
+          maxOverlapPercent: 0.01,
+          severity: 'high'
+        }]
+      }
+    } as any);
+    expect(result.visualCaveats).toBeDefined();
+    expect(result.visualCaveats!.length).toBeGreaterThan(0);
+    expect(result.visualCaveats![0].source).toBe('overlapLegibility');
   });
 });

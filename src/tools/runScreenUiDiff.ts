@@ -8,6 +8,7 @@ import { preflightOllama, resolveOllamaConfig, VlmPreflightResult } from '../vlm
 import { buildAutoMasksFromDeviceProfile, getAndroidDeviceInfo, matchDeviceProfile } from './androidDevice';
 import type { ReferenceContextConfig } from '../pipeline/ConflictResolver';
 import type { ModelJudgesConfig } from '../pipeline/judges/ModelJudgeAnalyzer';
+import type { CompareImagesInput } from './compareImages';
 
 export interface RunScreenUiDiffInput {
   screen: string;
@@ -37,6 +38,8 @@ export interface RunScreenUiDiffInput {
   hotspotDetection?: HotspotDetectionConfig;
   referenceContext?: ReferenceContextConfig;
   modelJudges?: ModelJudgesConfig;
+  visualAuditMode?: 'visual_parity' | 'metric_only';
+  overlapLegibility?: CompareImagesInput['overlapLegibility'];
 }
 
 export interface RunScreenUiDiffDelta {
@@ -280,7 +283,9 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     floorDetection: input.floorDetection ?? screenConfig.floorDetection,
     hotspotDetection: input.hotspotDetection ?? screenConfig.hotspotDetection,
     referenceContext: input.referenceContext ?? screenConfig.referenceContext,
-    modelJudges: input.modelJudges ?? screenConfig.modelJudges
+    modelJudges: input.modelJudges ?? screenConfig.modelJudges,
+    visualAuditMode: input.visualAuditMode ?? screenConfig.visualAuditMode,
+    overlapLegibility: input.overlapLegibility ?? screenConfig.overlapLegibility
   };
 
   const includeVlmAnalysis = merged.includeVlmAnalysis ?? false;
@@ -410,7 +415,9 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     regionsOfInterest: merged.regionsOfInterest,
     visualAssertions: merged.visualAssertions,
     referenceContext: merged.referenceContext,
-    modelJudges: merged.modelJudges
+    modelJudges: merged.modelJudges,
+    visualAuditMode: merged.visualAuditMode,
+    overlapLegibility: merged.overlapLegibility
   });
 
   const reportPath = path.join(resolvedRunOutputDir, 'report.json');

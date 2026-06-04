@@ -436,4 +436,48 @@ describe('AgentActionContract', () => {
     // component_layout should NOT be in blockedChangeVectors (suppressed by geometry evidence)
     expect(contract.blockedChangeVectors.map((v) => v.vector)).not.toContain('component_layout');
   });
+
+  it('Rule 6: passing screen clears allowedChangeVectors when allowEditSuggestionsOnPass is false/unset', () => {
+    const graph = new EvidenceGraph();
+    graph.add({
+      source: 'radialGeometry',
+      claimId: 'radial-finding-ring-strokeWidthMismatch',
+      subject: 'roi:ring',
+      claim: 'strokeWidthMismatch detected',
+      confidence: 0.9,
+      authority: 'deterministic',
+      measurements: { kind: 'strokeWidthMismatch', severity: 'medium' }
+    });
+    const engine = new VerdictEngine();
+    const contract = engine.buildAgentActionContract(
+      graph,
+      { requiresUserDecision: false, blockedClaimIds: [] },
+      'pass'
+      // allowEditSuggestionsOnPass not set — defaults to false
+    );
+    expect(contract.allowedChangeVectors).toHaveLength(0);
+    expect(contract.canEditApp).toBe(false);
+  });
+
+  it('Rule 6: passing screen permits allowedChangeVectors when allowEditSuggestionsOnPass is true', () => {
+    const graph = new EvidenceGraph();
+    graph.add({
+      source: 'radialGeometry',
+      claimId: 'radial-finding-ring-strokeWidthMismatch',
+      subject: 'roi:ring',
+      claim: 'strokeWidthMismatch detected',
+      confidence: 0.9,
+      authority: 'deterministic',
+      measurements: { kind: 'strokeWidthMismatch', severity: 'medium' }
+    });
+    const engine = new VerdictEngine();
+    const contract = engine.buildAgentActionContract(
+      graph,
+      { requiresUserDecision: false, blockedClaimIds: [] },
+      'pass',
+      true // allowEditSuggestionsOnPass
+    );
+    expect(contract.allowedChangeVectors.length).toBeGreaterThan(0);
+    expect(contract.canEditApp).toBe(true);
+  });
 });

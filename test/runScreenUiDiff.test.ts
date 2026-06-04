@@ -197,6 +197,7 @@ describe('runScreenUiDiff', () => {
           expectedImage: dynamicExpected,
           outputDir: dynamicOutputDir,
           maxDiffPercent: 1,
+          visualAuditMode: 'metric_only',
           regionsOfInterest: [
             {
               id: 'macro-ring',

@@ -163,15 +163,41 @@ export const modelJudgesPolicySchema = z.enum([
   'disabled',
   'on_failed_quality',
   'on_failed_quality_or_uncertain_root_cause',
-  'always'
+  'always',
+  'always_audit'
 ]);
 
 export const modelJudgesSchema = z.object({
   enabled: z.boolean().default(false),
+  required: z.boolean().optional(),
+  explicitSkipReason: z.string().optional(),
+  allowEditSuggestionsOnPass: z.boolean().optional(),
   policy: modelJudgesPolicySchema.optional(),
   primary: modelJudgesProviderSchema.optional(),
   reviewer: modelJudgesProviderSchema.optional(),
   requireConsensusForCodeHints: z.boolean().optional()
+}).optional();
+
+export const overlapLegibilityRegionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().optional(),
+  coordinateSpace: z.enum(['roiNormalized', 'normalized', 'expected', 'actual']).optional(),
+  roiId: z.string().optional(),
+  box: z.object({
+    x: z.number(),
+    y: z.number(),
+    width: z.number().positive(),
+    height: z.number().positive()
+  }),
+  avoidColors: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
+  minClearancePx: z.number().nonnegative().optional(),
+  maxOverlapPercent: z.number().min(0).max(1).optional(),
+  severity: z.enum(['critical', 'high', 'medium', 'low', 'warning']).optional()
+});
+
+export const overlapLegibilitySchema = z.object({
+  enabled: z.boolean().optional(),
+  regions: z.array(overlapLegibilityRegionSchema).optional()
 }).optional();
 
 export const uiDiffScreenSchema = z.object({
@@ -202,7 +228,9 @@ export const uiDiffScreenSchema = z.object({
   hotspotDetection: hotspotDetectionSchema.optional(),
   vlm: vlmConfigSchema,
   referenceContext: referenceContextSchema,
-  modelJudges: modelJudgesSchema
+  modelJudges: modelJudgesSchema,
+  visualAuditMode: z.enum(['visual_parity', 'metric_only']).optional(),
+  overlapLegibility: overlapLegibilitySchema
 });
 
 export const uiDiffConfigSchema = z.object({

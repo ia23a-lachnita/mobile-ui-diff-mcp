@@ -47,7 +47,7 @@ function makeBundles(): EvidenceBundle[] {
 }
 
 describe('ModelJudgeAnalyzer', () => {
-  it('disabled model judges do not require API key and return empty', async () => {
+  it('disabled model judges do not require API key and return empty evidence', async () => {
     const judge = new ModelJudgeAnalyzer({ enabled: false });
     const ctx = makeContext();
     const graph = new EvidenceGraph();
@@ -56,7 +56,8 @@ describe('ModelJudgeAnalyzer', () => {
     const result = await judge.run(ctx, graph, bundles);
 
     expect(result.evidence).toHaveLength(0);
-    expect(result.warnings).toHaveLength(0);
+    // disabled without explicitSkipReason emits an advisory warning (no API key required)
+    expect(result.warnings.some((w) => w.includes('explicitSkipReason'))).toBe(true);
     expect(result.stage).toBe('stage2_model');
   });
 
@@ -196,7 +197,7 @@ describe('ModelJudgeAnalyzer', () => {
 
       expect(result.actionRequired).toBeDefined();
       expect(result.actionRequired?.severity).toBe('blocking');
-      expect(result.actionRequired?.type).toBe('vlm_unavailable');
+      expect(result.actionRequired?.type).toBe('model_judges_unavailable');
     } finally {
       if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
     }
@@ -219,10 +220,65 @@ describe('ModelJudgeAnalyzer', () => {
 
     expect(result.warnings.length).toBeGreaterThan(0);
     expect(result.actionRequired).toBeDefined();
-    expect(result.actionRequired?.type).toBe('vlm_unavailable');
+    expect(result.actionRequired?.type).toBe('model_judges_unavailable');
     expect(result.actionRequired?.severity).toBe('blocking');
     expect(result.actionRequired?.message).toContain('OPENROUTER_API_KEY');
 
     if (savedKey) process.env.OPENROUTER_API_KEY = savedKey;
+  });
+
+  it('enabled:true with no required field defaults required to true', async () => {
+    const savedKey = process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    try {
+      const judge = new ModelJudgeAnalyzer({
+        enabled: true,
+        policy: 'always',
+        primary: { provider: 'openrouter', model: 'test-model' }
+        // required not set — should default to true
+      });
+      const result = await judge.run(makeContext(), new EvidenceGraph(), makeBundles());
+      // Missing key + required defaults true → model_judges_unavailable
+      expect(result.actionRequired?.type).toBe('model_judges_unavailable');
+    } finally {
+      if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
+    }
+  });
+
+  it('disabled with explicitSkipReason emits metric-only advisory warning', async () => {
+    const judge = new ModelJudgeAnalyzer({
+      enabled: false,
+      explicitSkipReason: 'CI run — API keys not available'
+    });
+    const result = await judge.run(makeContext(), new EvidenceGraph(), makeBundles());
+    expect(result.evidence).toHaveLength(0);
+    expect(result.actionRequired).toBeUndefined();
+    expect(result.warnings.some((w) => w.includes('metric-only'))).toBe(true);
+  });
+
+  it('disabled without explicitSkipReason emits ambiguity warning', async () => {
+    const judge = new ModelJudgeAnalyzer({ enabled: false });
+    const result = await judge.run(makeContext(), new EvidenceGraph(), makeBundles());
+    expect(result.evidence).toHaveLength(0);
+    expect(result.warnings.some((w) => w.includes('explicitSkipReason'))).toBe(true);
+  });
+
+  it('always_audit policy treated same as always — runs unconditionally', async () => {
+    const savedKey = process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    try {
+      const judge = new ModelJudgeAnalyzer({
+        enabled: true,
+        policy: 'always_audit',
+        primary: { provider: 'openrouter', model: 'test-model' }
+      });
+      const graph = new EvidenceGraph();
+      // No ROI quality evidence in graph — policy 'always_audit' should still run
+      const result = await judge.run(makeContext(), graph, makeBundles());
+      // It ran (tried to call provider) and found missing key
+      expect(result.actionRequired?.type).toBe('model_judges_unavailable');
+    } finally {
+      if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
+    }
   });
 });
