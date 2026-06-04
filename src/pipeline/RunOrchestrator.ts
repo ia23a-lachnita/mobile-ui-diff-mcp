@@ -714,7 +714,17 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         ]
       };
     } else if (!judgesConfigured) {
-      warnings.push('visualAuditMode is visual_parity but no model judges are configured. Add modelJudges config for full visual parity, or set visualAuditMode:metric_only to explicitly opt out.');
+      actionRequired = {
+        type: 'model_judges_unavailable',
+        severity: 'blocking',
+        message: 'visualAuditMode is visual_parity but no model judges are configured.',
+        recommendedUserPrompt: 'Configure modelJudges with enabled:true and provider API keys, or set visualAuditMode:metric_only to opt out of judge requirement.',
+        suggestedFixes: [
+          'Add modelJudges config with enabled:true and a provider',
+          "Set visualAuditMode:'metric_only' to skip the judge requirement",
+          "Set modelJudges.enabled:false with explicitSkipReason to explicitly declare a metric-only run"
+        ]
+      };
     }
   }
 
