@@ -150,6 +150,28 @@ export const modelJudgesSchema = z.object({
   requireConsensusForCodeHints: z.boolean().optional()
 }).optional();
 
+export const overlapLegibilityRegionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().optional(),
+  coordinateSpace: z.enum(['roiNormalized', 'normalized', 'expected', 'actual']).optional(),
+  roiId: z.string().optional(),
+  box: z.object({
+    x: z.number(),
+    y: z.number(),
+    width: z.number().positive(),
+    height: z.number().positive()
+  }),
+  avoidColors: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
+  minClearancePx: z.number().nonnegative().optional(),
+  maxOverlapPercent: z.number().min(0).max(1).optional(),
+  severity: z.enum(['critical', 'high', 'medium', 'low', 'warning']).optional()
+});
+
+export const overlapLegibilitySchema = z.object({
+  enabled: z.boolean().optional(),
+  regions: z.array(overlapLegibilityRegionSchema).optional()
+}).optional();
+
 export const modelJudgesHealthSchema = z.object({
   primary: z.object({
     provider: z.enum(['openrouter', 'nvidia']),
@@ -159,6 +181,8 @@ export const modelJudgesHealthSchema = z.object({
     provider: z.enum(['openrouter', 'nvidia']),
     model: z.string().min(1)
   }).optional(),
+  screen: z.string().min(1).optional(),
+  configPath: z.string().min(1).optional(),
   deep: z.boolean().optional()
 });
 
@@ -196,7 +220,9 @@ export const compareImagesSchema = z.object({
   previousReport: z.any().optional(),
   runDelta: z.any().optional(),
   referenceContext: referenceContextSchema,
-  modelJudges: modelJudgesSchema
+  modelJudges: modelJudgesSchema,
+  visualAuditMode: z.enum(['visual_parity', 'metric_only']).optional(),
+  overlapLegibility: overlapLegibilitySchema
 }).strict();
 
 export const captureAndroidSchema = z.object({
@@ -246,7 +272,9 @@ export const runMobileUiDiffSchema = z.object({
   previousReport: z.any().optional(),
   runDelta: z.any().optional(),
   referenceContext: referenceContextSchema,
-  modelJudges: modelJudgesSchema
+  modelJudges: modelJudgesSchema,
+  visualAuditMode: z.enum(['visual_parity', 'metric_only']).optional(),
+  overlapLegibility: overlapLegibilitySchema
 });
 
 export const runScreenUiDiffSchema = z.object({
@@ -276,7 +304,9 @@ export const runScreenUiDiffSchema = z.object({
   floorDetection: floorDetectionSchema.optional(),
   hotspotDetection: hotspotDetectionSchema.optional(),
   referenceContext: referenceContextSchema,
-  modelJudges: modelJudgesSchema
+  modelJudges: modelJudgesSchema,
+  visualAuditMode: z.enum(['visual_parity', 'metric_only']).optional(),
+  overlapLegibility: overlapLegibilitySchema
 });
 
 export const vlmHealthSchema = z.object({
@@ -425,6 +455,32 @@ export function getToolList() {
               maxHotspots: { type: "integer", minimum: 1, maximum: 50, default: 3 },
               minAreaPercent: { type: "number", minimum: 0, maximum: 1, default: 0.02 },
               minDiffDensity: { type: "number", minimum: 0, maximum: 1, default: 0.10 }
+            }
+          },
+          visualAuditMode: { type: "string", enum: ["visual_parity", "metric_only"], description: "Audit mode. 'visual_parity' (default) requires model judges to confirm visual correctness. 'metric_only' relies solely on pixel metrics." },
+          overlapLegibility: {
+            type: "object",
+            description: "Detect text-graphics proximity violations — e.g., a pill label overlapping a ring arc.",
+            properties: {
+              enabled: { type: "boolean" },
+              regions: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string", minLength: 1 },
+                    label: { type: "string" },
+                    coordinateSpace: { type: "string", enum: ["roiNormalized", "normalized", "expected", "actual"], description: "roiNormalized is relative to the parent ROI specified by roiId." },
+                    roiId: { type: "string", description: "Required when coordinateSpace is roiNormalized." },
+                    box: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number", exclusiveMinimum: 0 }, height: { type: "number", exclusiveMinimum: 0 } }, required: ["x", "y", "width", "height"] },
+                    avoidColors: { type: "array", items: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" }, description: "Hex colors (e.g. #1FCC74) that must not appear in or near this region." },
+                    minClearancePx: { type: "number", minimum: 0, description: "Minimum pixel clearance from box boundary to avoid-color pixels." },
+                    maxOverlapPercent: { type: "number", minimum: 0, maximum: 1, description: "Maximum fraction of the region allowed to match avoid-colors. Default: 0.05." },
+                    severity: { type: "string", enum: ["critical", "high", "medium", "low", "warning"] }
+                  },
+                  required: ["id", "box"]
+                }
+              }
             }
           }
         },
@@ -664,7 +720,9 @@ export function getToolList() {
               minAreaPercent: { type: "number", minimum: 0, maximum: 1, default: 0.02 },
               minDiffDensity: { type: "number", minimum: 0, maximum: 1, default: 0.10 }
             }
-          }
+          },
+          visualAuditMode: { type: "string", enum: ["visual_parity", "metric_only"], description: "Audit mode. 'visual_parity' (default) requires model judges. 'metric_only' uses pixel metrics only." },
+          overlapLegibility: { type: "object", description: "Detect text-graphics proximity violations. See compare_images for full schema." }
         },
         required: ["platform", "expectedImage", "outputDir"]
       }

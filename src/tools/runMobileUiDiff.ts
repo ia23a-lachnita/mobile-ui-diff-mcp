@@ -9,6 +9,7 @@ import { runPreCaptureSteps } from './preCapture';
 import fs from 'fs/promises';
 import type { ReferenceContextConfig } from '../pipeline/ConflictResolver';
 import type { ModelJudgesConfig } from '../pipeline/judges/ModelJudgeAnalyzer';
+import type { CompareImagesInput } from './compareImages';
 
 export interface RunMobileUiDiffInput {
   platform: 'android' | 'ios' | 'none';
@@ -43,6 +44,8 @@ export interface RunMobileUiDiffInput {
   vlmPreflight?: VlmPreflightResult;
   referenceContext?: ReferenceContextConfig;
   modelJudges?: ModelJudgesConfig;
+  visualAuditMode?: 'visual_parity' | 'metric_only';
+  overlapLegibility?: CompareImagesInput['overlapLegibility'];
 }
 
 export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<DiffReport> {
@@ -101,7 +104,9 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     regionsOfInterest: input.regionsOfInterest,
     visualAssertions: input.visualAssertions,
     referenceContext: input.referenceContext,
-    modelJudges: input.modelJudges
+    modelJudges: input.modelJudges,
+    visualAuditMode: input.visualAuditMode,
+    overlapLegibility: input.overlapLegibility
   });
 
   if (preCaptureResults?.length) {

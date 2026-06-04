@@ -49,6 +49,7 @@ export interface CompareImagesInput {
       id: string;
       label?: string;
       coordinateSpace?: 'roiNormalized' | 'normalized' | 'expected' | 'actual';
+      roiId?: string;
       box: { x: number; y: number; width: number; height: number };
       avoidColors?: string[];
       minClearancePx?: number;

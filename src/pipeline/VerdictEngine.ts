@@ -39,7 +39,8 @@ export class VerdictEngine {
   buildAgentActionContract(
     graph: EvidenceGraph,
     conflictResult: { requiresUserDecision: boolean; blockedClaimIds: string[] },
-    qualityStatus: 'pass' | 'fail' | 'not_evaluated'
+    qualityStatus: 'pass' | 'fail' | 'not_evaluated',
+    allowEditSuggestionsOnPass?: boolean
   ): AgentActionContract {
     const allEvidence = graph.getAll();
     const allowedChangeVectors: AllowedChangeVector[] = [];
@@ -163,7 +164,13 @@ export class VerdictEngine {
 
     // blocked wins — sanitize allowed by removing any vector that also appears in blocked
     const blockedVectorSet = new Set(blockedChangeVectors.map((b) => b.vector));
-    const finalAllowedVectors = allowedChangeVectors.filter((a) => !blockedVectorSet.has(a.vector));
+    let finalAllowedVectors = allowedChangeVectors.filter((a) => !blockedVectorSet.has(a.vector));
+
+    // Rule 6: passing screens block app edit suggestions unless allowEditSuggestionsOnPass is true.
+    // Geometry findings on a passing screen become informational only.
+    if (qualityStatus === 'pass' && !allowEditSuggestionsOnPass) {
+      finalAllowedVectors = [];
+    }
 
     // canEditApp is true when at least one narrow allowed vector remains after sanitization;
     // unrelated blocked vectors do NOT prevent a narrow allowed edit.

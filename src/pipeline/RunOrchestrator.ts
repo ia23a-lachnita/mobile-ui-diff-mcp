@@ -692,17 +692,20 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
 
   // ---- Stage 2: Model judges (policy-controlled) ----
   const modelJudgesInput = input.modelJudges as ModelJudgesConfig | undefined;
-  const visualAuditMode = input.visualAuditMode;
+  const visualAuditMode = input.visualAuditMode ?? 'visual_parity';
 
-  // visual_parity mode requires judges — hard fail if judges not configured or explicitly skipped without reason
+  // visual_parity mode requires judges — hard fail if judges explicitly disabled without reason,
+  // or if judges are configured (enabled) but missing API keys (handled in ModelJudgeAnalyzer).
+  // When modelJudges is completely absent (undefined), just warn — backward compat.
   if (visualAuditMode === 'visual_parity' && !actionRequired) {
     const judgesEnabled = modelJudgesInput?.enabled ?? false;
     const hasExplicitSkip = modelJudgesInput?.enabled === false && !!modelJudgesInput?.explicitSkipReason;
-    if (!judgesEnabled && !hasExplicitSkip) {
+    const judgesConfigured = modelJudgesInput !== undefined;
+    if (judgesConfigured && !judgesEnabled && !hasExplicitSkip) {
       actionRequired = {
         type: 'model_judges_unavailable',
         severity: 'blocking',
-        message: 'visualAuditMode is visual_parity but no model judges are configured or enabled.',
+        message: 'visualAuditMode is visual_parity but model judges are disabled without an explicitSkipReason.',
         recommendedUserPrompt: 'Configure modelJudges with enabled:true and provider API keys, or set visualAuditMode:metric_only to opt out of judge requirement.',
         suggestedFixes: [
           'Add modelJudges config with enabled:true and a provider',
@@ -710,6 +713,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
           "Set modelJudges.enabled:false with explicitSkipReason to explicitly declare a metric-only run"
         ]
       };
+    } else if (!judgesConfigured) {
+      warnings.push('visualAuditMode is visual_parity but no model judges are configured. Add modelJudges config for full visual parity, or set visualAuditMode:metric_only to explicitly opt out.');
     }
   }
 
@@ -831,7 +836,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   let agentActionContract = verdictEngine.buildAgentActionContract(
     graph,
     { requiresUserDecision: conflictResult.requiresUserDecision, blockedClaimIds: conflictResult.blockedClaimIds },
-    qualityStatus
+    qualityStatus,
+    modelJudgesInput?.allowEditSuggestionsOnPass
   );
 
   // Ensure canEditApp is false when a blocking action is required
