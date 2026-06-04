@@ -694,9 +694,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   const modelJudgesInput = input.modelJudges as ModelJudgesConfig | undefined;
   const visualAuditMode = input.visualAuditMode ?? 'visual_parity';
 
-  // visual_parity mode requires judges — hard fail if judges explicitly disabled without reason,
-  // or if judges are configured (enabled) but missing API keys (handled in ModelJudgeAnalyzer).
-  // When modelJudges is completely absent (undefined), just warn — backward compat.
+  // visual_parity mode requires judges — hard fail when judges are disabled without explicitSkipReason,
+  // when modelJudges is completely absent, or when enabled but missing API keys (handled in ModelJudgeAnalyzer).
   if (visualAuditMode === 'visual_parity' && !actionRequired) {
     const judgesEnabled = modelJudgesInput?.enabled ?? false;
     const hasExplicitSkip = modelJudgesInput?.enabled === false && !!modelJudgesInput?.explicitSkipReason;

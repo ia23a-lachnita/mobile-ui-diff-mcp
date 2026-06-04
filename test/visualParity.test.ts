@@ -338,6 +338,82 @@ describe('ModelJudgeAnalyzer — visual_parity loophole coverage', () => {
   });
 });
 
+describe('model_judges_health — disabledWithoutSkip detection', () => {
+  it('willFailHard when visual_parity + modelJudges present but enabled omitted (defaults false) + no explicitSkipReason', async () => {
+    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mj-health-disabled-'));
+    const configPath = path.join(configDir, 'ui-diff.config.json');
+    await fs.writeFile(configPath, JSON.stringify({
+      screens: {
+        today: {
+          platform: 'none',
+          expectedImage: '/fake/today.png',
+          outputDir: os.tmpdir(),
+          modelJudges: {
+            primary: { provider: 'openrouter', model: 'test-model' }
+            // enabled omitted — defaults to false
+          }
+        }
+      }
+    }));
+    try {
+      const result = await checkModelJudgesHealth({ screen: 'today', configPath });
+      expect(result.effectivePolicy).toBeDefined();
+      expect(result.effectivePolicy!.willFailHard).toBe(true);
+      expect(result.warnings.some((w) => w.includes('explicitSkipReason'))).toBe(true);
+    } finally {
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
+  });
+
+  it('willFailHard when visual_parity + enabled:false + no explicitSkipReason', async () => {
+    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mj-health-disabled2-'));
+    const configPath = path.join(configDir, 'ui-diff.config.json');
+    await fs.writeFile(configPath, JSON.stringify({
+      screens: {
+        today: {
+          platform: 'none',
+          expectedImage: '/fake/today.png',
+          outputDir: os.tmpdir(),
+          modelJudges: { enabled: false }
+        }
+      }
+    }));
+    try {
+      const result = await checkModelJudgesHealth({ screen: 'today', configPath });
+      expect(result.effectivePolicy).toBeDefined();
+      expect(result.effectivePolicy!.enabled).toBe(false);
+      expect(result.effectivePolicy!.willFailHard).toBe(true);
+      expect(result.warnings.some((w) => w.includes('explicitSkipReason'))).toBe(true);
+    } finally {
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
+  });
+
+  it('willFailHard false when visual_parity + enabled:false + explicitSkipReason set', async () => {
+    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mj-health-skip-'));
+    const configPath = path.join(configDir, 'ui-diff.config.json');
+    await fs.writeFile(configPath, JSON.stringify({
+      screens: {
+        today: {
+          platform: 'none',
+          expectedImage: '/fake/today.png',
+          outputDir: os.tmpdir(),
+          modelJudges: { enabled: false, explicitSkipReason: 'CI run — no API keys' }
+        }
+      }
+    }));
+    try {
+      const result = await checkModelJudgesHealth({ screen: 'today', configPath });
+      expect(result.effectivePolicy).toBeDefined();
+      expect(result.effectivePolicy!.enabled).toBe(false);
+      expect(result.effectivePolicy!.willFailHard).toBe(false);
+      expect(result.effectivePolicy!.explicitSkipReason).toBe('CI run — no API keys');
+    } finally {
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('model_judges_health — willFailHard for enabled:true/no-primary', () => {
   it('willFailHard is true when enabled:true but no primary provider in visual_parity screen', async () => {
     const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mj-health-noprimary-'));

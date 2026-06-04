@@ -83,6 +83,7 @@ export async function checkModelJudgesHealth(input: ModelJudgesHealthInput): Pro
 
         const isVisualParity = (screen.visualAuditMode ?? 'visual_parity') !== 'metric_only';
         const noPrimaryConfigured = enabled && !mj?.primary;
+        const disabledWithoutSkip = isVisualParity && mj !== undefined && !enabled && !mj?.explicitSkipReason;
         effectivePolicy = {
           visualAuditMode: screen.visualAuditMode,
           enabled,
@@ -93,9 +94,16 @@ export async function checkModelJudgesHealth(input: ModelJudgesHealthInput): Pro
           willFailHard:
             (enabled && required && missingKeys.length > 0) ||
             (isVisualParity && mj === undefined) ||
-            (isVisualParity && noPrimaryConfigured),
+            (isVisualParity && noPrimaryConfigured) ||
+            disabledWithoutSkip,
           missingKeys
         };
+        if (disabledWithoutSkip) {
+          warnings.push(
+            'visual_parity mode requires model judges or an explicit skip reason. ' +
+            'Judges are disabled without explicitSkipReason — RunOrchestrator will block with model_judges_unavailable.'
+          );
+        }
       }
     } catch (err: any) {
       warnings.push(`Could not load config: ${err?.message ?? String(err)}`);
