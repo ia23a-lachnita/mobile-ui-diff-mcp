@@ -747,11 +747,6 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     warnings.push('Model judges disabled without explicitSkipReason. Set explicitSkipReason to confirm metric-only mode, or enable judges for visual parity.');
   }
 
-  // Force fail state when a blocking action is required
-  if (actionRequired?.severity === 'blocking') {
-    qualityStatus = 'fail';
-  }
-
   // Compute visualAuditStatus — check actionRequired type first to avoid 'not_run' masking 'unavailable'
   let visualAuditStatus: VisualAuditStatus | undefined;
   let acceptanceStatus: AcceptanceStatus | undefined;
