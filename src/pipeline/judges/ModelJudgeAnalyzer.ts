@@ -1,10 +1,14 @@
 import { AnalyzerContext } from '../analyzers/IAnalyzer';
 import { EvidenceGraph } from '../EvidenceGraph';
-import { AnalyzerResult, Evidence, EvidenceBundle } from '../types';
+import { AnalyzerResult, Evidence, EvidenceBundle, JudgeProviderError } from '../types';
 import { ActionRequired } from '../../types';
 import { IModelJudgeProvider } from './IModelJudge';
 import { OpenRouterProvider } from './providers/OpenRouterProvider';
 import { NvidiaProvider } from './providers/NvidiaProvider';
+
+function isProviderErrorEvidence(e: Evidence): boolean {
+  return !!(e.measurements?.error) || /-(error|parse-error)-/.test(e.claimId);
+}
 
 export interface ModelJudgesConfig {
   enabled?: boolean;
@@ -68,7 +72,8 @@ export class ModelJudgeAnalyzer {
         stage: this.stage,
         evidence: [],
         warnings,
-        durationMs: Date.now() - start
+        durationMs: Date.now() - start,
+        judgeHadSuccessfulResults: false
       };
     }
 
@@ -82,6 +87,7 @@ export class ModelJudgeAnalyzer {
         evidence: [],
         warnings: [],
         durationMs: Date.now() - start,
+        judgeHadSuccessfulResults: false,
         actionRequired: {
           type: 'model_judges_unavailable' as const,
           severity: 'blocking' as const,
@@ -102,7 +108,8 @@ export class ModelJudgeAnalyzer {
         stage: this.stage,
         evidence: [],
         warnings: [],
-        durationMs: Date.now() - start
+        durationMs: Date.now() - start,
+        judgeHadSuccessfulResults: false
       };
     }
 
@@ -115,7 +122,8 @@ export class ModelJudgeAnalyzer {
         stage: this.stage,
         evidence: [],
         warnings: [`ModelJudgeAnalyzer: policy '${policy}' did not trigger execution`],
-        durationMs: Date.now() - start
+        durationMs: Date.now() - start,
+        judgeHadSuccessfulResults: false
       };
     }
 
@@ -124,21 +132,15 @@ export class ModelJudgeAnalyzer {
     let actionRequired: ActionRequired | undefined;
     const primaryEvidence: Evidence[] = [];
     const reviewerEvidence: Evidence[] = [];
+    const judgeProviderErrors: JudgeProviderError[] = [];
+    let primaryHadSuccess = false;
+    let reviewerHadSuccess = false;
 
     if (cfg.primary) {
       const provider = buildProvider(cfg.primary);
       if (!provider) {
         const keyName = cfg.primary.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'NVIDIA_API_KEY';
         warnings.push(`ModelJudgeAnalyzer: primary provider '${cfg.primary.provider}' requires ${keyName} env var`);
-        evidence.push({
-          source: 'modelJudge',
-          claimId: 'model-judge-missing-api-key',
-          subject: 'global',
-          claim: `Model judge '${cfg.primary.provider}' skipped: missing API key (${keyName})`,
-          confidence: 0,
-          authority: 'model',
-          measurements: { provider: cfg.primary.provider, missingKey: keyName }
-        });
         if (isRequired || policy === 'always' || policy === 'always_audit') {
           actionRequired = {
             type: 'model_judges_unavailable',
@@ -156,23 +158,50 @@ export class ModelJudgeAnalyzer {
         for (const bundle of bundles) {
           try {
             const bundleEvidence = await provider.analyze(bundle, allEvidence);
-            primaryEvidence.push(...bundleEvidence);
-          } catch (err: any) {
-            warnings.push(`ModelJudgeAnalyzer: primary provider failed for ROI '${bundle.roiId}': ${err?.message ?? String(err)}`);
-            if (isRequired) {
-              actionRequired = {
-                type: 'model_judges_failed',
-                severity: 'blocking',
-                message: `Model judge analysis failed: ${err?.message ?? String(err)}`,
-                recommendedUserPrompt: 'Model judge call failed. Check API key validity and provider status, then rerun.',
-                suggestedFixes: [
-                  'Verify API key is valid and not rate-limited',
-                  'Check provider status',
-                  "Set modelJudges.required: false to make failures non-blocking"
-                ]
-              };
+            // Separate execution errors from real visual evidence
+            for (const item of bundleEvidence) {
+              if (isProviderErrorEvidence(item)) {
+                judgeProviderErrors.push({
+                  source: 'modelJudgeRuntime',
+                  kind: 'provider_error',
+                  provider: cfg.primary.provider,
+                  model: cfg.primary.model,
+                  roiId: bundle.roiId,
+                  blocking: isRequired,
+                  message: String(item.measurements?.error ?? item.claim)
+                });
+                warnings.push(`ModelJudgeAnalyzer: primary provider returned error for ROI '${bundle.roiId}': ${item.measurements?.error ?? item.claim}`);
+              } else {
+                primaryEvidence.push(item);
+                primaryHadSuccess = true;
+              }
             }
+          } catch (err: any) {
+            judgeProviderErrors.push({
+              source: 'modelJudgeRuntime',
+              kind: 'provider_error',
+              provider: cfg.primary.provider,
+              model: cfg.primary.model,
+              roiId: bundle.roiId,
+              blocking: isRequired,
+              message: err?.message ?? String(err)
+            });
+            warnings.push(`ModelJudgeAnalyzer: primary provider failed for ROI '${bundle.roiId}': ${err?.message ?? String(err)}`);
           }
+        }
+        // If required and we got no successful results (all errors), mark as failed
+        if (isRequired && !primaryHadSuccess && judgeProviderErrors.some((e) => e.provider === cfg.primary!.provider)) {
+          actionRequired = {
+            type: 'model_judges_failed',
+            severity: 'blocking',
+            message: `Required model judge '${cfg.primary.provider}' returned only errors. Check API key validity, provider status, and model compatibility.`,
+            recommendedUserPrompt: 'Model judge calls failed. Check API key validity and provider status, then rerun.',
+            suggestedFixes: [
+              'Verify API key is valid and not rate-limited',
+              'Check provider status and model compatibility (run model_judges_health with deep:true)',
+              "Set modelJudges.required: false to make failures non-blocking"
+            ]
+          };
         }
       }
     }
@@ -188,13 +217,41 @@ export class ModelJudgeAnalyzer {
         for (const bundle of bundles) {
           try {
             const bundleEvidence = await provider.analyze(bundle, allEvidence);
-            reviewerEvidence.push(...bundleEvidence);
+            for (const item of bundleEvidence) {
+              if (isProviderErrorEvidence(item)) {
+                judgeProviderErrors.push({
+                  source: 'modelJudgeRuntime',
+                  kind: 'provider_error',
+                  provider: cfg.reviewer.provider,
+                  model: cfg.reviewer.model,
+                  roiId: bundle.roiId,
+                  blocking: false,
+                  message: String(item.measurements?.error ?? item.claim)
+                });
+                warnings.push(`ModelJudgeAnalyzer: reviewer provider returned error for ROI '${bundle.roiId}': ${item.measurements?.error ?? item.claim}`);
+                reviewerUnavailable = true;
+              } else {
+                reviewerEvidence.push(item);
+                reviewerHadSuccess = true;
+              }
+            }
           } catch (err: any) {
+            judgeProviderErrors.push({
+              source: 'modelJudgeRuntime',
+              kind: 'provider_error',
+              provider: cfg.reviewer.provider,
+              model: cfg.reviewer.model,
+              roiId: bundle.roiId,
+              blocking: false,
+              message: err?.message ?? String(err)
+            });
             warnings.push(`ModelJudgeAnalyzer: reviewer provider failed for ROI '${bundle.roiId}': ${err?.message ?? String(err)}`);
+            reviewerUnavailable = true;
           }
         }
       }
     }
+    void reviewerHadSuccess;
 
     if (cfg.requireConsensusForCodeHints) {
       const allGraphEvidence = graph.getAll();
@@ -232,13 +289,17 @@ export class ModelJudgeAnalyzer {
       graph.add(e);
     }
 
+    const judgeHadSuccessfulResults = primaryHadSuccess;
+
     return {
       analyzerName: this.name,
       stage: this.stage,
       evidence,
       warnings,
       durationMs: Date.now() - start,
-      ...(actionRequired ? { actionRequired } : {})
+      ...(actionRequired ? { actionRequired } : {}),
+      ...(judgeProviderErrors.length > 0 ? { judgeProviderErrors } : {}),
+      judgeHadSuccessfulResults
     };
   }
 

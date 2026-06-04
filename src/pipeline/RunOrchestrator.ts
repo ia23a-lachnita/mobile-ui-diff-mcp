@@ -727,14 +727,22 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     }
   }
 
+  let judgeHadSuccessfulResults: boolean | undefined;
   if (modelJudgesInput?.enabled) {
     const judgeAnalyzer = new ModelJudgeAnalyzer(modelJudgesInput, visualAuditMode);
     const judgeResult = await judgeAnalyzer.run(ctx, graph, bundles);
     warnings.push(...judgeResult.warnings);
+    judgeHadSuccessfulResults = judgeResult.judgeHadSuccessfulResults;
+    // Provider errors are separate from visual evidence — they must not be treated as visual claims.
+    // If required judges had only errors and no successful results, judgeResult.actionRequired is already set.
     if (judgeResult.actionRequired && !actionRequired) {
       actionRequired = judgeResult.actionRequired;
     }
     if (judgeResult.visualCaveats) visualCaveats.push(...judgeResult.visualCaveats);
+    // Log provider errors as warnings so they appear in the report
+    for (const pe of judgeResult.judgeProviderErrors ?? []) {
+      warnings.push(`Judge provider error [${pe.provider}/${pe.roiId}]: ${pe.message}`);
+    }
   } else if (modelJudgesInput?.enabled === false && !modelJudgesInput?.explicitSkipReason) {
     warnings.push('Model judges disabled without explicitSkipReason. Set explicitSkipReason to confirm metric-only mode, or enable judges for visual parity.');
   }
@@ -758,13 +766,38 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     visualAuditStatus = 'skipped_by_config';
     acceptanceStatus = 'metric_only';
   } else if (modelJudgesInput?.enabled) {
-    const hasBlockingCaveat = visualCaveats.some((c) => c.blocking && c.source !== 'overlapLegibility');
-    if (hasBlockingCaveat) {
-      visualAuditStatus = 'fail';
+    // Required judges that ran but produced zero successful results must not pass.
+    const isRequired = (modelJudgesInput as any).required !== false;
+    if (isRequired && judgeHadSuccessfulResults === false) {
+      visualAuditStatus = 'error';
       acceptanceStatus = 'rejected';
+      if (!actionRequired) {
+        actionRequired = {
+          type: 'model_judges_failed',
+          severity: 'blocking',
+          message: 'Required model judges ran but produced no successful results. All judge outputs were errors.',
+          recommendedUserPrompt: 'All model judge calls failed. Check provider status, API key validity, and model compatibility.',
+          suggestedFixes: [
+            'Run model_judges_health with deep:true to test provider connectivity',
+            'Verify API keys are valid and not rate-limited',
+            "Set modelJudges.required: false to make failures non-blocking"
+          ]
+        };
+      }
     } else {
-      visualAuditStatus = 'pass';
-      acceptanceStatus = qualityStatus === 'pass' ? 'accepted' : 'rejected';
+      const hasBlockingCaveat = visualCaveats.some((c) => c.blocking && c.source !== 'overlapLegibility');
+      const hasNonBlockingCaveat = visualCaveats.some((c) => !c.blocking);
+      if (hasBlockingCaveat) {
+        visualAuditStatus = 'fail';
+        acceptanceStatus = 'rejected';
+      } else if (hasNonBlockingCaveat) {
+        // Judges ran successfully, no blocking issues, but non-blocking caveats exist
+        visualAuditStatus = 'pass_with_caveats';
+        acceptanceStatus = qualityStatus === 'pass' ? 'accepted' : 'rejected';
+      } else {
+        visualAuditStatus = 'pass';
+        acceptanceStatus = qualityStatus === 'pass' ? 'accepted' : 'rejected';
+      }
     }
   } else {
     visualAuditStatus = 'not_run';

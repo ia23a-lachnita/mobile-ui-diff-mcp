@@ -160,7 +160,7 @@ export interface ActionRequired {
   suggestedFixes: string[];
 }
 
-export type VisualAuditStatus = 'pass' | 'fail' | 'not_run' | 'skipped_by_config' | 'unavailable' | 'error';
+export type VisualAuditStatus = 'pass' | 'pass_with_caveats' | 'fail' | 'not_run' | 'skipped_by_config' | 'unavailable' | 'error';
 export type AcceptanceStatus = 'accepted' | 'rejected' | 'incomplete' | 'metric_only';
 
 export interface VisualCaveat {
