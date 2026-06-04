@@ -780,7 +780,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         };
       }
     } else {
-      const hasBlockingCaveat = visualCaveats.some((c) => c.blocking && c.source !== 'overlapLegibility');
+      const hasBlockingCaveat = visualCaveats.some((c) => c.blocking);
       const hasNonBlockingCaveat = visualCaveats.some((c) => !c.blocking);
       if (hasBlockingCaveat) {
         visualAuditStatus = 'fail';
