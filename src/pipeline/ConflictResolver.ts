@@ -59,12 +59,15 @@ export class ConflictResolver {
       }
     }
 
-    // Rule 2: Model finding contradicted by deterministic measurement → downgrade confidence
+    // Rule 2: Model finding contradicted by deterministic measurement → downgrade confidence.
+    // Only applies when there is a structured contradiction (same claimType or proposedChangeVector
+    // conflict). Keyword fallback is NOT used here — a deterministic ROI pass does not contradict
+    // a model visual-caveat claim that merely observes style issues or crowding.
     const deterministicEvidence = allEvidence.filter((e) => e.authority === 'deterministic' && !e.blocked);
     for (const modelItem of allEvidence.filter((e) => e.authority === 'model' && !e.blocked)) {
       for (const detItem of deterministicEvidence) {
         if (detItem.subject === modelItem.subject) {
-          if (this.claimsContradict(detItem, modelItem)) {
+          if (this.claimsContradictStructured(detItem, modelItem)) {
             modelItem.confidence = Math.max(0, modelItem.confidence * 0.5);
             downgradedClaimIds.push(modelItem.claimId);
             warnings.push(`Model claim '${modelItem.claimId}' confidence downgraded: contradicted by deterministic measurement '${detItem.claimId}'`);
@@ -102,6 +105,30 @@ export class ConflictResolver {
       requiresUserDecision,
       warnings
     };
+  }
+
+  // Structured-only contradiction: same claimType + mismatched values, or proposedChangeVector conflict.
+  // Does NOT fall back to keyword matching — used for Rule 2 to avoid false downgrades of visual caveats.
+  private claimsContradictStructured(evidenceA: Evidence, evidenceB: Evidence): boolean {
+    if (
+      evidenceA.claimType &&
+      evidenceB.claimType &&
+      evidenceA.claimType === evidenceB.claimType
+    ) {
+      if (evidenceA.expectedValue !== undefined && evidenceB.actualValue !== undefined) {
+        return String(evidenceA.expectedValue) !== String(evidenceB.actualValue);
+      }
+      if (evidenceA.actualValue !== undefined && evidenceB.expectedValue !== undefined) {
+        return String(evidenceA.actualValue) !== String(evidenceB.expectedValue);
+      }
+    }
+    if (evidenceA.proposedChangeVector && evidenceB.proposedChangeVector) {
+      const noChangeVectors = ['none', 'no_change'];
+      const aIsNoChange = noChangeVectors.includes(evidenceA.proposedChangeVector);
+      const bIsNoChange = noChangeVectors.includes(evidenceB.proposedChangeVector);
+      if (aIsNoChange !== bIsNoChange) return true;
+    }
+    return false;
   }
 
   private claimsContradict(evidenceA: Evidence, evidenceB: Evidence): boolean {

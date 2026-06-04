@@ -1724,4 +1724,88 @@ describe('visualAuditMode enforcement and overlapLegibility integration', () => 
     expect(result.visualCaveats!.length).toBeGreaterThan(0);
     expect(result.visualCaveats![0].source).toBe('overlapLegibility');
   });
+
+  // Helper config: judges enabled but won't block (policy=on_failed_quality, quality passes, required:false).
+  // This lets the caveat-check branch run so we can verify overlapLegibility affects visualAuditStatus.
+  const nonBlockingJudgesConfig = {
+    enabled: true,
+    required: false,
+    policy: 'on_failed_quality' as const,
+    primary: { provider: 'openrouter' as const, model: 'test-model' }
+  };
+
+  it('overlapLegibility high severity → visualAuditStatus fail, acceptanceStatus rejected', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(dir, 'white.png'),
+      actualImage: path.join(dir, 'black-rect.png'),
+      outputDir: path.join(dir, 'out-overlap-high-fail'),
+      modelJudges: nonBlockingJudgesConfig,
+      overlapLegibility: {
+        enabled: true,
+        regions: [{
+          id: 'black-zone-high',
+          label: 'black rect high severity',
+          box: { x: 10, y: 10, width: 20, height: 20 },
+          avoidColors: ['#000000'],
+          maxOverlapPercent: 0.01,
+          severity: 'high'
+        }]
+      }
+    } as any);
+
+    const blockingCaveat = (result.visualCaveats ?? []).find((c) => c.source === 'overlapLegibility' && c.blocking);
+    expect(blockingCaveat).toBeDefined();
+    expect(result.visualAuditStatus).toBe('fail');
+    expect(result.acceptanceStatus).toBe('rejected');
+  });
+
+  it('overlapLegibility warning severity → visualAuditStatus pass_with_caveats', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(dir, 'white.png'),
+      actualImage: path.join(dir, 'black-rect.png'),
+      outputDir: path.join(dir, 'out-overlap-warning-caveats'),
+      modelJudges: nonBlockingJudgesConfig,
+      overlapLegibility: {
+        enabled: true,
+        regions: [{
+          id: 'black-zone-warn',
+          label: 'black rect warning severity',
+          box: { x: 10, y: 10, width: 20, height: 20 },
+          avoidColors: ['#000000'],
+          maxOverlapPercent: 0.01,
+          severity: 'warning'
+        }]
+      }
+    } as any);
+
+    const nonBlockingCaveat = (result.visualCaveats ?? []).find((c) => c.source === 'overlapLegibility' && !c.blocking);
+    expect(nonBlockingCaveat).toBeDefined();
+    expect(result.visualAuditStatus).toBe('pass_with_caveats');
+  });
+
+  it('passing ROI gates + blocking overlapLegibility caveat must not return plain pass', async () => {
+    // White images pass all ROI quality checks; the only issue is the overlap caveat.
+    // visualAuditStatus must be fail (not pass) due to the blocking caveat.
+    const result = await compareImages({
+      expectedImage: path.join(dir, 'white.png'),
+      actualImage: path.join(dir, 'black-rect.png'),
+      outputDir: path.join(dir, 'out-overlap-no-plain-pass'),
+      modelJudges: nonBlockingJudgesConfig,
+      overlapLegibility: {
+        enabled: true,
+        regions: [{
+          id: 'black-zone-critical',
+          label: 'critical overlap zone',
+          box: { x: 10, y: 10, width: 20, height: 20 },
+          avoidColors: ['#000000'],
+          maxOverlapPercent: 0.01,
+          severity: 'critical'
+        }]
+      }
+    } as any);
+
+    expect(result.visualAuditStatus).not.toBe('pass');
+    expect(result.visualAuditStatus).toBe('fail');
+    expect(result.acceptanceStatus).toBe('rejected');
+  });
 });

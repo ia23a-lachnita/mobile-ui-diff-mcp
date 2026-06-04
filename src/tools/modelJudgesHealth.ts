@@ -13,7 +13,8 @@ export interface ProviderHealthResult {
   model: string;
   apiKeyPresent: boolean;
   envVar: string;
-  status: 'ready' | 'missing_key' | 'unknown';
+  status: 'ready' | 'missing_key' | 'unknown' | 'call_ok' | 'call_failed';
+  deepCheckError?: string;
 }
 
 export interface EffectivePolicyReport {
@@ -50,6 +51,36 @@ function checkProvider(cfg: { provider: 'openrouter' | 'nvidia'; model: string }
     envVar,
     status: apiKeyPresent ? 'ready' : 'missing_key'
   };
+}
+
+async function deepCheckProvider(cfg: { provider: 'openrouter' | 'nvidia'; model: string }): Promise<Pick<ProviderHealthResult, 'status' | 'deepCheckError'>> {
+  const envVar = providerEnvVar(cfg.provider);
+  const apiKey = process.env[envVar] ?? '';
+  if (!apiKey) return { status: 'missing_key' };
+
+  const url = cfg.provider === 'openrouter'
+    ? 'https://openrouter.ai/api/v1/chat/completions'
+    : 'https://integrate.api.nvidia.com/v1/chat/completions';
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: cfg.model,
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 1
+      })
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      return { status: 'call_failed', deepCheckError: `HTTP ${response.status}: ${text.slice(0, 200)}` };
+    }
+    return { status: 'call_ok' };
+  } catch (err: any) {
+    return { status: 'call_failed', deepCheckError: err?.message ?? String(err) };
+  }
 }
 
 export async function checkModelJudgesHealth(input: ModelJudgesHealthInput): Promise<ModelJudgesHealthResult> {
@@ -126,8 +157,29 @@ export async function checkModelJudgesHealth(input: ModelJudgesHealthInput): Pro
     }
   }
 
+  // Deep mode: make a minimal test call to each ready provider to validate model/API compatibility
+  if (input.deep) {
+    const toDeepCheck: Array<{ cfg: { provider: 'openrouter' | 'nvidia'; model: string }; result: ProviderHealthResult }> = [];
+    if (primaryResult?.status === 'ready' && (input.primary ?? (primaryResult ? { provider: primaryResult.provider, model: primaryResult.model } : undefined))) {
+      const cfg = input.primary ?? { provider: primaryResult.provider, model: primaryResult.model };
+      toDeepCheck.push({ cfg, result: primaryResult });
+    }
+    if (reviewerResult?.status === 'ready' && (input.reviewer ?? (reviewerResult ? { provider: reviewerResult.provider, model: reviewerResult.model } : undefined))) {
+      const cfg = input.reviewer ?? { provider: reviewerResult.provider, model: reviewerResult.model };
+      toDeepCheck.push({ cfg, result: reviewerResult });
+    }
+    for (const { cfg, result } of toDeepCheck) {
+      const deepResult = await deepCheckProvider(cfg);
+      result.status = deepResult.status;
+      if (deepResult.deepCheckError) {
+        result.deepCheckError = deepResult.deepCheckError;
+        warnings.push(`Deep check failed for ${cfg.provider}/${cfg.model}: ${deepResult.deepCheckError}`);
+      }
+    }
+  }
+
   const allConfigured = [primaryResult, reviewerResult].filter(Boolean) as ProviderHealthResult[];
-  const allReady = allConfigured.every((r) => r.status === 'ready');
+  const allReady = allConfigured.every((r) => r.status === 'ready' || r.status === 'call_ok');
   const noneConfigured = allConfigured.length === 0;
 
   let status: ModelJudgesHealthResult['status'];
@@ -141,11 +193,12 @@ export async function checkModelJudgesHealth(input: ModelJudgesHealthInput): Pro
     message = 'No providers configured. Pass primary and/or reviewer to check readiness, or pass screen and configPath to load from config.';
   } else if (allReady) {
     status = 'ok';
-    message = `All ${allConfigured.length} configured provider(s) ready.`;
+    message = `All ${allConfigured.length} configured provider(s) ready${input.deep ? ' (deep call verified)' : ''}.`;
   } else {
-    const missingCount = allConfigured.filter((r) => r.status !== 'ready').length;
-    status = missingCount === allConfigured.length ? 'unavailable' : 'degraded';
-    message = `${missingCount} of ${allConfigured.length} provider(s) missing API keys.`;
+    const failedCount = allConfigured.filter((r) => r.status !== 'ready' && r.status !== 'call_ok').length;
+    status = failedCount === allConfigured.length ? 'unavailable' : 'degraded';
+    const reason = allConfigured.some((r) => r.status === 'call_failed') ? 'API call failed' : 'missing API keys';
+    message = `${failedCount} of ${allConfigured.length} provider(s) failed (${reason}).`;
   }
 
   return {

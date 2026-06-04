@@ -41,6 +41,16 @@ export interface EvidenceBundle {
   referenceEvidence: Evidence[];
 }
 
+export interface JudgeProviderError {
+  source: 'modelJudgeRuntime';
+  kind: 'provider_error';
+  provider: string;
+  model?: string;
+  roiId: string;
+  blocking: boolean;
+  message: string;
+}
+
 export interface AnalyzerResult {
   analyzerName: string;
   stage: AnalyzerStage;
@@ -49,4 +59,6 @@ export interface AnalyzerResult {
   durationMs: number;
   actionRequired?: import('../types').ActionRequired;
   visualCaveats?: import('../types').VisualCaveat[];
+  judgeProviderErrors?: JudgeProviderError[];
+  judgeHadSuccessfulResults?: boolean;
 }
