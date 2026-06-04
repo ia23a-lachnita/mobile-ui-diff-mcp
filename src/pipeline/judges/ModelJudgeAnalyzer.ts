@@ -17,7 +17,7 @@ function evidenceToVisualCaveat(e: Evidence): VisualCaveat {
   else severity = 'low';
   return {
     id: e.claimId,
-    source: 'modelJudge',
+    source: e.source,
     subject: e.subject,
     severity,
     blocking: e.confidence >= 0.8,
@@ -300,6 +300,20 @@ export class ModelJudgeAnalyzer {
       }
     }
 
+    // Reviewer ran without errors but produced no usable evidence — treat as failure in consensus mode.
+    if (cfg.requireConsensusForCodeHints && cfg.reviewer && !reviewerUnavailable && !reviewerHadSuccess && !actionRequired) {
+      actionRequired = {
+        type: 'model_judges_failed',
+        severity: 'blocking',
+        message: `Reviewer judge '${cfg.reviewer.provider}' is required for consensus (requireConsensusForCodeHints:true) but produced no usable evidence.`,
+        recommendedUserPrompt: `Check reviewer model configuration and provider status, then rerun. Or set requireConsensusForCodeHints:false to make reviewer optional.`,
+        suggestedFixes: [
+          'Verify reviewer model is configured correctly and returns valid evidence',
+          "Set requireConsensusForCodeHints:false to make reviewer optional"
+        ]
+      };
+    }
+
     if (cfg.requireConsensusForCodeHints) {
       const allGraphEvidence = graph.getAll();
       for (const primaryItem of primaryEvidence) {
@@ -327,6 +341,11 @@ export class ModelJudgeAnalyzer {
             primaryItem.blockReason = 'SOURCE_CONTRADICTION';
             warnings.push(`ModelJudgeAnalyzer: code hint '${primaryItem.claimId}' blocked: no reviewer consensus on proposedChangeVector '${primaryItem.proposedChangeVector}'`);
           }
+        } else if (cfg.reviewer) {
+          // Reviewer ran but returned empty evidence — cannot confirm any code hints.
+          primaryItem.blocked = true;
+          primaryItem.blockReason = 'MODEL_DISAGREEMENT';
+          warnings.push(`ModelJudgeAnalyzer: code hint '${primaryItem.claimId}' blocked: reviewer returned no evidence for vector '${primaryItem.proposedChangeVector}'`);
         }
       }
     }

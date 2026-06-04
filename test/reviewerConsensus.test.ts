@@ -213,7 +213,7 @@ describe('Model judge findings surfaced as visualCaveats (Blocker 2)', () => {
     const caveat = result.visualCaveats![0];
     expect(caveat.blocking).toBe(true);
     expect(caveat.severity).toBe('high');
-    expect(caveat.source).toBe('modelJudge');
+    expect(caveat.source).toBe('visualMismatchJudge');
     expect(caveat.message).toBe('Ring stroke width mismatch detected');
     expect(caveat.confidence).toBe(0.9);
   });
@@ -401,5 +401,105 @@ describe('Model judge findings surfaced as visualCaveats (Blocker 2)', () => {
     const result = await judge.run(makeContext(), new EvidenceGraph(), makeBundles());
 
     expect(result.visualCaveats ?? []).toHaveLength(0);
+  });
+
+  it('evidence source is preserved on visualCaveat (not hardcoded to modelJudge)', async () => {
+    mockPrimaryAnalyze.mockResolvedValue([{
+      source: 'geometryInterpretationJudge',
+      claimId: 'openrouter-test-roi-geom-src',
+      subject: 'roi:test-roi',
+      claim: 'Geometry mismatch detected',
+      confidence: 0.85,
+      authority: 'model' as const
+    }]);
+
+    const judge = new ModelJudgeAnalyzer({
+      enabled: true,
+      policy: 'always_audit',
+      primary: { provider: 'openrouter', model: 'primary-model' }
+    }, 'visual_parity');
+
+    const result = await judge.run(makeContext(), new EvidenceGraph(), makeBundles());
+
+    expect(result.visualCaveats).toBeDefined();
+    expect(result.visualCaveats![0].source).toBe('geometryInterpretationJudge');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Blocker: Reviewer returns empty evidence in consensus mode
+// ---------------------------------------------------------------------------
+describe('Reviewer returns empty evidence in consensus mode', () => {
+  it('primary success + reviewer returns [] + requireConsensusForCodeHints true → model_judges_failed', async () => {
+    mockPrimaryAnalyze.mockResolvedValue(primarySuccessEvidence);
+    mockReviewerAnalyze.mockResolvedValue([]); // succeeds but empty
+
+    const judge = new ModelJudgeAnalyzer({
+      enabled: true,
+      policy: 'always_audit',
+      primary: { provider: 'openrouter', model: 'primary-model' },
+      reviewer: { provider: 'nvidia', model: 'reviewer-model' },
+      requireConsensusForCodeHints: true
+    }, 'visual_parity');
+
+    const result = await judge.run(makeContext(), new EvidenceGraph(), makeBundles());
+
+    expect(result.actionRequired).toBeDefined();
+    expect(result.actionRequired?.type).toBe('model_judges_failed');
+    expect(result.actionRequired?.severity).toBe('blocking');
+    expect(result.actionRequired?.message).toMatch(/no usable evidence/);
+    expect(result.judgeHadSuccessfulResults).toBe(true);
+  });
+
+  it('primary proposedChangeVector + reviewer returns [] → code hint blocked with MODEL_DISAGREEMENT', async () => {
+    mockPrimaryAnalyze.mockResolvedValue([{
+      source: 'visualMismatchJudge',
+      claimId: 'openrouter-test-roi-vector',
+      subject: 'roi:test-roi',
+      claim: 'Ring radius needs fix',
+      confidence: 0.9,
+      authority: 'model' as const,
+      proposedChangeVector: 'ring_outer_radius'
+    }]);
+    mockReviewerAnalyze.mockResolvedValue([]);
+
+    const judge = new ModelJudgeAnalyzer({
+      enabled: true,
+      policy: 'always_audit',
+      primary: { provider: 'openrouter', model: 'primary-model' },
+      reviewer: { provider: 'nvidia', model: 'reviewer-model' },
+      requireConsensusForCodeHints: true
+    }, 'visual_parity');
+
+    const result = await judge.run(makeContext(), new EvidenceGraph(), makeBundles());
+
+    // The proposedChangeVector hint must be blocked
+    const allEvidence = result.evidence;
+    const vectorItem = allEvidence.find((e) => e.proposedChangeVector === 'ring_outer_radius');
+    expect(vectorItem).toBeDefined();
+    expect(vectorItem?.blocked).toBe(true);
+    expect(vectorItem?.blockReason).toBe('MODEL_DISAGREEMENT');
+    // Blocked evidence must not surface as a visualCaveat
+    const caveats = (result.visualCaveats ?? []).filter((c) => c.proposedChangeVector === 'ring_outer_radius');
+    expect(caveats).toHaveLength(0);
+  });
+
+  it('reviewer returns [] with requireConsensusForCodeHints false → warning only, no actionRequired', async () => {
+    mockPrimaryAnalyze.mockResolvedValue(primarySuccessEvidence);
+    mockReviewerAnalyze.mockResolvedValue([]);
+
+    const judge = new ModelJudgeAnalyzer({
+      enabled: true,
+      policy: 'always_audit',
+      primary: { provider: 'openrouter', model: 'primary-model' },
+      reviewer: { provider: 'nvidia', model: 'reviewer-model' },
+      requireConsensusForCodeHints: false
+    }, 'visual_parity');
+
+    const result = await judge.run(makeContext(), new EvidenceGraph(), makeBundles());
+
+    expect(result.actionRequired).toBeUndefined();
+    // Primary evidence still surfaces as caveats since consensus not required
+    expect(result.judgeHadSuccessfulResults).toBe(true);
   });
 });
