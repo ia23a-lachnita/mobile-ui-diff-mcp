@@ -28,7 +28,7 @@ export interface EffectivePolicyReport {
 }
 
 export interface ModelJudgesHealthResult {
-  status: 'ok' | 'degraded' | 'unavailable';
+  status: 'ok' | 'degraded' | 'unavailable' | 'metric_only';
   primary?: ProviderHealthResult;
   reviewer?: ProviderHealthResult;
   effectivePolicy?: EffectivePolicyReport;
@@ -57,6 +57,7 @@ export async function checkModelJudgesHealth(input: ModelJudgesHealthInput): Pro
   let primaryResult: ProviderHealthResult | undefined;
   let reviewerResult: ProviderHealthResult | undefined;
   let effectivePolicy: EffectivePolicyReport | undefined;
+  let isExplicitSkip = false;
 
   if (input.screen) {
     try {
@@ -84,6 +85,7 @@ export async function checkModelJudgesHealth(input: ModelJudgesHealthInput): Pro
         const isVisualParity = (screen.visualAuditMode ?? 'visual_parity') !== 'metric_only';
         const noPrimaryConfigured = enabled && !mj?.primary;
         const disabledWithoutSkip = isVisualParity && mj !== undefined && !enabled && !mj?.explicitSkipReason;
+        isExplicitSkip = mj !== undefined && !enabled && !!mj?.explicitSkipReason;
         effectivePolicy = {
           visualAuditMode: screen.visualAuditMode,
           enabled,
@@ -131,7 +133,10 @@ export async function checkModelJudgesHealth(input: ModelJudgesHealthInput): Pro
   let status: ModelJudgesHealthResult['status'];
   let message: string;
 
-  if (noneConfigured) {
+  if (isExplicitSkip) {
+    status = 'metric_only';
+    message = `Model judges explicitly disabled (${effectivePolicy!.explicitSkipReason}). Run is metric-only, not full visual parity.`;
+  } else if (noneConfigured) {
     status = 'unavailable';
     message = 'No providers configured. Pass primary and/or reviewer to check readiness, or pass screen and configPath to load from config.';
   } else if (allReady) {

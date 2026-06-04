@@ -408,6 +408,9 @@ describe('model_judges_health — disabledWithoutSkip detection', () => {
       expect(result.effectivePolicy!.enabled).toBe(false);
       expect(result.effectivePolicy!.willFailHard).toBe(false);
       expect(result.effectivePolicy!.explicitSkipReason).toBe('CI run — no API keys');
+      expect(result.status).toBe('metric_only');
+      expect(result.message).toMatch(/metric-only/i);
+      expect(result.message).toMatch(/not full visual parity/i);
     } finally {
       await fs.rm(configDir, { recursive: true, force: true });
     }
