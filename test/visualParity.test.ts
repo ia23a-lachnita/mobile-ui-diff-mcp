@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { PNG } from 'pngjs';
+import fs from 'fs/promises';
+import path from 'path';
 import os from 'os';
 import { getToolList } from '../src/mcp/server';
 import { checkModelJudgesHealth } from '../src/tools/modelJudgesHealth';
@@ -99,6 +101,36 @@ describe('model_judges_health MCP tool', () => {
       if (savedOR !== undefined) process.env.OPENROUTER_API_KEY = savedOR;
       else delete process.env.OPENROUTER_API_KEY;
       if (savedNV !== undefined) process.env.NVIDIA_API_KEY = savedNV;
+    }
+  });
+
+  it('loads screen config from file and reports willFailHard when provider key is missing', async () => {
+    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mj-health-'));
+    const configPath = path.join(configDir, 'ui-diff.config.json');
+    await fs.writeFile(configPath, JSON.stringify({
+      screens: {
+        today: {
+          platform: 'none',
+          expectedImage: '/fake/today.png',
+          outputDir: os.tmpdir(),
+          modelJudges: {
+            enabled: true,
+            primary: { provider: 'openrouter', model: 'test-model' }
+          }
+        }
+      }
+    }));
+    const savedKey = process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    try {
+      const result = await checkModelJudgesHealth({ screen: 'today', configPath });
+      expect(result.effectivePolicy).toBeDefined();
+      expect(result.effectivePolicy!.enabled).toBe(true);
+      expect(result.effectivePolicy!.willFailHard).toBe(true);
+      expect(result.effectivePolicy!.missingKeys.length).toBeGreaterThan(0);
+    } finally {
+      if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
+      await fs.rm(configDir, { recursive: true, force: true });
     }
   });
 });

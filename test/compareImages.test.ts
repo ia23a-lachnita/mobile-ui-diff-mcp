@@ -1630,3 +1630,66 @@ describe('compareImages and Schemas', () => {
     expect(result.warnings).toContain("Auto mask overlaps critical ROI 'Header'. Review autoIgnore settings before accepting this run.");
   });
 });
+
+describe('visualAuditMode enforcement and overlapLegibility integration', () => {
+  const dir = path.join(__dirname, 'fixtures-visual-audit');
+
+  beforeAll(async () => {
+    await fs.mkdir(dir, { recursive: true });
+    await createTestImage(path.join(dir, 'white.png'), (_png) => {});
+    await createTestImage(path.join(dir, 'black-rect.png'), (png) => {
+      drawRect(png, 10, 10, 20, 20, [0, 0, 0]);
+    });
+  });
+
+  afterAll(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('visual_parity mode with judges disabled and no explicitSkipReason produces blocking actionRequired', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(dir, 'white.png'),
+      actualImage: path.join(dir, 'white.png'),
+      outputDir: path.join(dir, 'out-vp-block'),
+      visualAuditMode: 'visual_parity',
+      modelJudges: { enabled: false }
+    } as any);
+    expect(result.actionRequired?.type).toBe('model_judges_unavailable');
+    expect(result.actionRequired?.severity).toBe('blocking');
+    expect(result.agentActionContract?.canEditApp).toBe(false);
+  });
+
+  it('metric_only mode with explicitSkipReason proceeds without judge blocking', async () => {
+    const result = await compareImages({
+      expectedImage: path.join(dir, 'white.png'),
+      actualImage: path.join(dir, 'white.png'),
+      outputDir: path.join(dir, 'out-metric-only'),
+      visualAuditMode: 'metric_only',
+      modelJudges: { enabled: false, explicitSkipReason: 'metric-only intentional' }
+    } as any);
+    expect(result.actionRequired?.type).not.toBe('model_judges_unavailable');
+  });
+
+  it('overlapLegibility config in compareImages input emits visualCaveats when avoid-color pixels detected', async () => {
+    // black-rect.png has black (0,0,0) pixels at (10,10) covering 20x20 pixels on 100x100 image
+    const result = await compareImages({
+      expectedImage: path.join(dir, 'white.png'),
+      actualImage: path.join(dir, 'black-rect.png'),
+      outputDir: path.join(dir, 'out-overlap'),
+      overlapLegibility: {
+        enabled: true,
+        regions: [{
+          id: 'black-zone',
+          label: 'black rect area',
+          box: { x: 10, y: 10, width: 20, height: 20 },
+          avoidColors: ['#000000'],
+          maxOverlapPercent: 0.01,
+          severity: 'high'
+        }]
+      }
+    } as any);
+    expect(result.visualCaveats).toBeDefined();
+    expect(result.visualCaveats!.length).toBeGreaterThan(0);
+    expect(result.visualCaveats![0].source).toBe('overlapLegibility');
+  });
+});
