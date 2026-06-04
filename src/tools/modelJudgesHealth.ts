@@ -82,14 +82,18 @@ export async function checkModelJudgesHealth(input: ModelJudgesHealthInput): Pro
         }
 
         const isVisualParity = (screen.visualAuditMode ?? 'visual_parity') !== 'metric_only';
+        const noPrimaryConfigured = enabled && !mj?.primary;
         effectivePolicy = {
           visualAuditMode: screen.visualAuditMode,
           enabled,
           required,
-          policy: mj?.policy,
+          policy: mj?.policy ?? (isVisualParity && enabled ? 'always_audit' : undefined),
           explicitSkipReason: mj?.explicitSkipReason,
           allowEditSuggestionsOnPass: mj?.allowEditSuggestionsOnPass ?? false,
-          willFailHard: (enabled && required && missingKeys.length > 0) || (isVisualParity && mj === undefined),
+          willFailHard:
+            (enabled && required && missingKeys.length > 0) ||
+            (isVisualParity && mj === undefined) ||
+            (isVisualParity && noPrimaryConfigured),
           missingKeys
         };
       }

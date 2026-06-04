@@ -35,7 +35,10 @@ export class ModelJudgeAnalyzer {
   readonly name = 'ModelJudgeAnalyzer';
   readonly stage = 'stage2_model' as const;
 
-  constructor(private readonly judgesConfig?: ModelJudgesConfig) {}
+  constructor(
+    private readonly judgesConfig?: ModelJudgesConfig,
+    private readonly visualAuditMode: 'visual_parity' | 'metric_only' = 'visual_parity'
+  ) {}
 
   /**
    * CRITICAL: bundles parameter is required — proves Stage 1.5 (EvidenceBundleBuilder) has run.
@@ -69,7 +72,30 @@ export class ModelJudgeAnalyzer {
       };
     }
 
-    const policy = cfg.policy ?? 'disabled';
+    const isVisualParity = this.visualAuditMode !== 'metric_only';
+
+    // In visual_parity mode, enabled:true with no primary provider is a hard failure.
+    if (isVisualParity && !cfg.primary) {
+      return {
+        analyzerName: this.name,
+        stage: this.stage,
+        evidence: [],
+        warnings: [],
+        durationMs: Date.now() - start,
+        actionRequired: {
+          type: 'model_judges_unavailable' as const,
+          severity: 'blocking' as const,
+          message: 'modelJudges.enabled is true but no primary provider is configured.',
+          recommendedUserPrompt: 'Add a modelJudges.primary provider with a valid API key, or set visualAuditMode:metric_only to opt out of the judge requirement.',
+          suggestedFixes: [
+            "Add modelJudges.primary with provider and model fields",
+            "Set visualAuditMode:'metric_only' to skip the judge requirement"
+          ]
+        }
+      };
+    }
+
+    const policy = cfg.policy ?? (isVisualParity ? 'always_audit' : 'disabled');
     if (policy === 'disabled') {
       return {
         analyzerName: this.name,

@@ -5,6 +5,7 @@ import path from 'path';
 import os from 'os';
 import { getToolList } from '../src/mcp/server';
 import { checkModelJudgesHealth } from '../src/tools/modelJudgesHealth';
+import { ModelJudgeAnalyzer } from '../src/pipeline/judges/ModelJudgeAnalyzer';
 import { OverlapLegibilityAnalyzer } from '../src/pipeline/analyzers/OverlapLegibilityAnalyzer';
 import { EvidenceGraph } from '../src/pipeline/EvidenceGraph';
 import { AnalyzerContext } from '../src/pipeline/analyzers/IAnalyzer';
@@ -281,5 +282,111 @@ describe('OverlapLegibilityAnalyzer', () => {
 
     const result = await new OverlapLegibilityAnalyzer().run(ctx, new EvidenceGraph());
     expect(result.visualCaveats).toHaveLength(0);
+  });
+});
+
+describe('ModelJudgeAnalyzer — visual_parity loophole coverage', () => {
+  it('hard-fails when enabled:true but no primary provider configured', async () => {
+    const ctx = makeContext();
+    const graph = new EvidenceGraph();
+    const analyzer = new ModelJudgeAnalyzer({ enabled: true }, 'visual_parity');
+    const result = await analyzer.run(ctx, graph, []);
+    expect(result.actionRequired).toBeDefined();
+    expect(result.actionRequired!.type).toBe('model_judges_unavailable');
+    expect(result.actionRequired!.severity).toBe('blocking');
+  });
+
+  it('does not hard-fail for enabled:true/no-primary in metric_only mode', async () => {
+    const ctx = makeContext();
+    const graph = new EvidenceGraph();
+    const analyzer = new ModelJudgeAnalyzer({ enabled: true }, 'metric_only');
+    const result = await analyzer.run(ctx, graph, []);
+    expect(result.actionRequired).toBeUndefined();
+  });
+
+  it('defaults policy to always_audit in visual_parity mode — missing API key triggers blocking fail', async () => {
+    const savedKey = process.env.OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    try {
+      const ctx = makeContext();
+      const graph = new EvidenceGraph();
+      // policy intentionally omitted — should default to always_audit in visual_parity mode
+      const analyzer = new ModelJudgeAnalyzer(
+        { enabled: true, primary: { provider: 'openrouter', model: 'test-model' } },
+        'visual_parity'
+      );
+      const result = await analyzer.run(ctx, graph, []);
+      expect(result.actionRequired).toBeDefined();
+      expect(result.actionRequired!.type).toBe('model_judges_unavailable');
+      expect(result.actionRequired!.severity).toBe('blocking');
+    } finally {
+      if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
+      else delete process.env.OPENROUTER_API_KEY;
+    }
+  });
+
+  it('skips silently when policy omitted in metric_only mode (disabled default)', async () => {
+    const ctx = makeContext();
+    const graph = new EvidenceGraph();
+    const analyzer = new ModelJudgeAnalyzer(
+      { enabled: true, primary: { provider: 'openrouter', model: 'test-model' } },
+      'metric_only'
+    );
+    const result = await analyzer.run(ctx, graph, []);
+    expect(result.actionRequired).toBeUndefined();
+    expect(result.evidence).toEqual([]);
+  });
+});
+
+describe('model_judges_health — willFailHard for enabled:true/no-primary', () => {
+  it('willFailHard is true when enabled:true but no primary provider in visual_parity screen', async () => {
+    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mj-health-noprimary-'));
+    const configPath = path.join(configDir, 'ui-diff.config.json');
+    await fs.writeFile(configPath, JSON.stringify({
+      screens: {
+        today: {
+          platform: 'none',
+          expectedImage: '/fake/expected.png',
+          outputDir: os.tmpdir(),
+          modelJudges: { enabled: true }
+          // no primary — the loophole
+        }
+      }
+    }));
+    try {
+      const result = await checkModelJudgesHealth({ screen: 'today', configPath });
+      expect(result.effectivePolicy).toBeDefined();
+      expect(result.effectivePolicy!.enabled).toBe(true);
+      expect(result.effectivePolicy!.willFailHard).toBe(true);
+    } finally {
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
+  });
+
+  it('effectivePolicy.policy defaults to always_audit when enabled:true and policy omitted in visual_parity', async () => {
+    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mj-health-policy-'));
+    const configPath = path.join(configDir, 'ui-diff.config.json');
+    const savedKey = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = 'sk-test-key';
+    await fs.writeFile(configPath, JSON.stringify({
+      screens: {
+        today: {
+          platform: 'none',
+          expectedImage: '/fake/expected.png',
+          outputDir: os.tmpdir(),
+          modelJudges: { enabled: true, primary: { provider: 'openrouter', model: 'test-model' } }
+          // policy omitted — should report always_audit
+        }
+      }
+    }));
+    try {
+      const result = await checkModelJudgesHealth({ screen: 'today', configPath });
+      expect(result.effectivePolicy).toBeDefined();
+      expect(result.effectivePolicy!.policy).toBe('always_audit');
+    } finally {
+      if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
+      else delete process.env.OPENROUTER_API_KEY;
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
   });
 });
