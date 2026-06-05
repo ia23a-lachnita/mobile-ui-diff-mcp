@@ -1,4 +1,5 @@
 import { loadUiDiffConfig } from '../config/uiDiffConfig';
+import { EVIDENCE_JSON_SCHEMA } from '../pipeline/judges/providers/evidenceSchema';
 
 export interface ModelJudgesHealthInput {
   primary?: { provider: 'openrouter' | 'nvidia'; model: string };
@@ -55,16 +56,7 @@ function checkProvider(cfg: { provider: 'openrouter' | 'nvidia'; model: string }
   };
 }
 
-const HEALTH_CHECK_SCHEMA = {
-  name: 'health_check',
-  strict: true,
-  schema: {
-    type: 'object',
-    properties: { ok: { type: 'boolean' } },
-    required: ['ok'],
-    additionalProperties: false
-  }
-};
+const EVIDENCE_REQUIRED_FIELDS = ['claimId', 'subject', 'polarity', 'claim', 'confidence', 'severity', 'blocking'];
 
 async function deepCheckProvider(cfg: { provider: 'openrouter' | 'nvidia'; model: string }): Promise<Pick<ProviderHealthResult, 'status' | 'deepCheckError' | 'structuredOutputSupported' | 'schemaCheckStatus'>> {
   const envVar = providerEnvVar(cfg.provider);
@@ -75,8 +67,16 @@ async function deepCheckProvider(cfg: { provider: 'openrouter' | 'nvidia'; model
     ? 'https://openrouter.ai/api/v1/chat/completions'
     : 'https://integrate.api.nvidia.com/v1/chat/completions';
 
-  // Send a minimal schema-constrained request to verify structured output support
-  const body = { model: cfg.model, messages: [{ role: 'user', content: 'Reply with {"ok":true}' }], max_tokens: 20, response_format: { type: 'json_schema', json_schema: HEALTH_CHECK_SCHEMA } };
+  // Send a minimal request using the real evidence schema to verify structured output support
+  const body = {
+    model: cfg.model,
+    messages: [{
+      role: 'user',
+      content: 'Health check. Return one evidence item: claimId "health", subject "system", polarity "match", claim "provider healthy", confidence 1.0, severity "info", blocking false.'
+    }],
+    max_tokens: 200,
+    response_format: { type: 'json_schema', json_schema: EVIDENCE_JSON_SCHEMA }
+  };
 
   try {
     const response = await fetch(url, {
@@ -101,11 +101,12 @@ async function deepCheckProvider(cfg: { provider: 'openrouter' | 'nvidia'; model
     const content: string = data?.choices?.[0]?.message?.content ?? '';
     try {
       const parsed = JSON.parse(content);
-      const structuredOutputSupported = typeof parsed?.ok === 'boolean';
+      const items: any[] = Array.isArray(parsed?.evidence) ? parsed.evidence : [];
+      const valid = items.length > 0 && EVIDENCE_REQUIRED_FIELDS.every((f) => f in items[0]);
       return {
         status: 'call_ok',
-        structuredOutputSupported,
-        schemaCheckStatus: structuredOutputSupported ? 'ok' : 'unparseable'
+        structuredOutputSupported: valid,
+        schemaCheckStatus: valid ? 'ok' : 'unparseable'
       };
     } catch {
       return { status: 'call_ok', structuredOutputSupported: false, schemaCheckStatus: 'unparseable' };
@@ -216,10 +217,13 @@ export async function checkModelJudgesHealth(input: ModelJudgesHealthInput): Pro
   }
 
   const allConfigured = [primaryResult, reviewerResult].filter(Boolean) as ProviderHealthResult[];
+
+  const isSchemaFailed = (r: ProviderHealthResult): boolean =>
+    !!(input.deep && r.status === 'call_ok' && r.schemaCheckStatus && r.schemaCheckStatus !== 'ok');
+
   const allReady = allConfigured.every((r) => {
     if (r.status !== 'ready' && r.status !== 'call_ok') return false;
-    // In deep mode, call_ok with unparseable schema means structured output is broken
-    if (input.deep && r.schemaCheckStatus !== undefined && r.schemaCheckStatus !== 'ok') return false;
+    if (isSchemaFailed(r)) return false;
     return true;
   });
   const noneConfigured = allConfigured.length === 0;
@@ -237,10 +241,18 @@ export async function checkModelJudgesHealth(input: ModelJudgesHealthInput): Pro
     status = 'ok';
     message = `All ${allConfigured.length} configured provider(s) ready${input.deep ? ' (deep call verified)' : ''}.`;
   } else {
-    const failedCount = allConfigured.filter((r) => r.status !== 'ready' && r.status !== 'call_ok').length;
+    const failedCount = allConfigured.filter(
+      (r) => (r.status !== 'ready' && r.status !== 'call_ok') || isSchemaFailed(r)
+    ).length;
     status = failedCount === allConfigured.length ? 'unavailable' : 'degraded';
-    const reason = allConfigured.some((r) => r.status === 'call_failed') ? 'API call failed' : 'missing API keys';
-    message = `${failedCount} of ${allConfigured.length} provider(s) failed (${reason}).`;
+    const schemaFailures = allConfigured.filter(isSchemaFailed);
+    if (schemaFailures.length > 0) {
+      const names = schemaFailures.map((r) => `${r.provider}/${r.model}`).join(', ');
+      message = `${failedCount} of ${allConfigured.length} provider(s) failed: structured output schema check failed for ${names}.`;
+    } else {
+      const reason = allConfigured.some((r) => r.status === 'call_failed') ? 'API call failed' : 'missing API keys';
+      message = `${failedCount} of ${allConfigured.length} provider(s) failed (${reason}).`;
+    }
   }
 
   return {

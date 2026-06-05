@@ -182,3 +182,84 @@ describe('model_judges_health deep check result shape', () => {
     expect(result.status).toBeDefined();
   });
 });
+
+// ---- 6. deep health validates EVIDENCE_JSON_SCHEMA, not the old health_check schema ----
+
+describe('model_judges_health deep check — evidence schema validation', () => {
+  const mockFetch = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch);
+    mockFetch.mockClear();
+    process.env.OPENROUTER_API_KEY = 'test-key';
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.OPENROUTER_API_KEY;
+  });
+
+  function makeApiResponse(content: string) {
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: async () => ({ choices: [{ message: { content } }] }),
+      text: async () => content
+    });
+  }
+
+  it('request uses EVIDENCE_JSON_SCHEMA, not the old health_check schema', async () => {
+    const validBody = JSON.stringify({ evidence: [{ claimId: 'h', subject: 's', polarity: 'match', claim: 'ok', confidence: 1.0, severity: 'info', blocking: false }] });
+    mockFetch.mockReturnValue(makeApiResponse(validBody));
+    const { checkModelJudgesHealth } = await import('../src/tools/modelJudgesHealth');
+    await checkModelJudgesHealth({ primary: { provider: 'openrouter', model: 'gpt-4o' }, deep: true });
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.response_format?.json_schema?.name).not.toBe('health_check');
+    expect(body.response_format?.json_schema?.schema?.properties?.evidence).toBeDefined();
+  });
+
+  it('call_ok + schemaCheckStatus:unparseable → status is degraded or unavailable, not ok', async () => {
+    // Provider returns {"ok":true} — matches old health_check schema but NOT EVIDENCE_JSON_SCHEMA
+    mockFetch.mockReturnValue(makeApiResponse('{"ok":true}'));
+    const { checkModelJudgesHealth } = await import('../src/tools/modelJudgesHealth');
+    const result = await checkModelJudgesHealth({ primary: { provider: 'openrouter', model: 'gpt-4o' }, deep: true });
+    expect(result.status).not.toBe('ok');
+    expect(['degraded', 'unavailable']).toContain(result.status);
+    expect(result.primary?.schemaCheckStatus).toBe('unparseable');
+  });
+
+  it('message names structured output schema failure when call_ok but evidence schema unparseable', async () => {
+    mockFetch.mockReturnValue(makeApiResponse('{"ok":true}'));
+    const { checkModelJudgesHealth } = await import('../src/tools/modelJudgesHealth');
+    const result = await checkModelJudgesHealth({ primary: { provider: 'openrouter', model: 'gpt-4o' }, deep: true });
+    expect(result.message.toLowerCase()).toMatch(/structured output schema/);
+    expect(result.message).toMatch(/openrouter\/gpt-4o/);
+  });
+
+  it('valid evidence response → status ok and schemaCheckStatus ok', async () => {
+    const validBody = JSON.stringify({ evidence: [{ claimId: 'health', subject: 'system', polarity: 'match', claim: 'provider healthy', confidence: 1.0, severity: 'info', blocking: false }] });
+    mockFetch.mockReturnValue(makeApiResponse(validBody));
+    const { checkModelJudgesHealth } = await import('../src/tools/modelJudgesHealth');
+    const result = await checkModelJudgesHealth({ primary: { provider: 'openrouter', model: 'gpt-4o' }, deep: true });
+    expect(result.status).toBe('ok');
+    expect(result.primary?.schemaCheckStatus).toBe('ok');
+    expect(result.primary?.structuredOutputSupported).toBe(true);
+  });
+
+  it('evidence array missing required fields → schemaCheckStatus unparseable', async () => {
+    // Returns evidence but missing severity and blocking (required in EVIDENCE_JSON_SCHEMA)
+    const partial = JSON.stringify({ evidence: [{ claimId: 'h', subject: 's', polarity: 'match', claim: 'ok', confidence: 1.0 }] });
+    mockFetch.mockReturnValue(makeApiResponse(partial));
+    const { checkModelJudgesHealth } = await import('../src/tools/modelJudgesHealth');
+    const result = await checkModelJudgesHealth({ primary: { provider: 'openrouter', model: 'gpt-4o' }, deep: true });
+    expect(result.primary?.schemaCheckStatus).toBe('unparseable');
+    expect(result.status).not.toBe('ok');
+  });
+
+  it('provider that only passes tiny health schema but fails evidence schema is not reported ok', async () => {
+    // This specifically tests that the old {"ok":true} response no longer passes
+    mockFetch.mockReturnValue(makeApiResponse(JSON.stringify({ ok: true })));
+    const { checkModelJudgesHealth } = await import('../src/tools/modelJudgesHealth');
+    const result = await checkModelJudgesHealth({ primary: { provider: 'openrouter', model: 'gpt-4o' }, deep: true });
+    expect(result.status).not.toBe('ok');
+    expect(result.primary?.structuredOutputSupported).toBe(false);
+  });
+});
