@@ -55,9 +55,11 @@ export interface JudgeProviderRunSummary {
   primaryEvidenceCount: number;
   primaryErrorCount: number;
   primaryHadSuccess: boolean;
+  primaryAttempted: boolean;
   reviewerEvidenceCount: number;
   reviewerErrorCount: number;
   reviewerHadSuccess: boolean;
+  reviewerAttempted: boolean;
 }
 
 export interface AnalyzerResult {
@@ -71,4 +73,5 @@ export interface AnalyzerResult {
   judgeProviderErrors?: JudgeProviderError[];
   judgeHadSuccessfulResults?: boolean;
   judgeProviderRunSummary?: JudgeProviderRunSummary;
+  overlapLegibilitySummary?: import('../types').OverlapLegibilitySummary;
 }

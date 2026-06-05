@@ -463,6 +463,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     new OverlapLegibilityAnalyzer()
   ];
   const visualCaveats: VisualCaveat[] = [];
+  let overlapLegibilitySummary: import('../types').OverlapLegibilitySummary | undefined;
   const remainingResults = await Promise.all(remainingStage1.map((a) => a.run(ctx, graph)));
   const perAnalyzerMs: Record<string, number> = {};
   for (let i = 0; i < remainingStage1.length; i++) {
@@ -471,6 +472,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   for (const r of remainingResults) {
     warnings.push(...r.warnings);
     if (r.visualCaveats) visualCaveats.push(...r.visualCaveats);
+    if (r.overlapLegibilitySummary) overlapLegibilitySummary = r.overlapLegibilitySummary;
   }
 
   // ---- Inline ROI quality analysis (faithful port from original compareImages.ts) ----
@@ -804,11 +806,30 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
       visualAuditStatus = 'error';
       acceptanceStatus = 'rejected';
       if (!actionRequired) {
+        // Build an accurate message based on what actually happened
+        const prs = judgeProviderRunSummary;
+        const reviewerOk = prs?.reviewerHadSuccess ?? false;
+        const primaryAttempted = prs?.primaryAttempted ?? false;
+        const primaryErrors = prs?.primaryErrorCount ?? 0;
+        let fallbackMsg: string;
+        if (!primaryAttempted) {
+          fallbackMsg = reviewerOk
+            ? 'Required primary judge was not attempted; reviewer succeeded. Visual audit is incomplete.'
+            : 'Required primary judge was not attempted. Visual audit is incomplete.';
+        } else if (primaryErrors > 0) {
+          fallbackMsg = reviewerOk
+            ? 'Required primary judge failed; reviewer succeeded. Visual audit is incomplete.'
+            : 'All required model judges failed.';
+        } else {
+          fallbackMsg = reviewerOk
+            ? 'Required primary judge produced no evidence; reviewer succeeded. Visual audit is incomplete.'
+            : 'Required model judges ran but produced no usable results.';
+        }
         actionRequired = {
           type: 'model_judges_failed',
           severity: 'blocking',
-          message: 'Required model judges ran but produced no successful results. All judge outputs were errors.',
-          recommendedUserPrompt: 'All model judge calls failed. Check provider status, API key validity, and model compatibility.',
+          message: fallbackMsg,
+          recommendedUserPrompt: 'Check provider status, API key validity, and model compatibility.',
           suggestedFixes: [
             'Run model_judges_health with deep:true to test provider connectivity',
             'Verify API keys are valid and not rate-limited',
@@ -828,7 +849,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         acceptanceStatus = qualityStatus === 'pass' ? 'accepted' : 'rejected';
       } else {
         visualAuditStatus = 'pass';
-        acceptanceStatus = qualityStatus === 'pass' ? 'accepted' : 'rejected';
+        // qualityStatus 'not_evaluated' means no ROIs configured — judges succeeding is sufficient for 'accepted'
+        acceptanceStatus = qualityStatus === 'fail' ? 'rejected' : 'accepted';
       }
     }
   } else if (visualAuditMode === 'visual_parity') {
@@ -973,24 +995,37 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
       providerCfg: { provider: string; model: string } | undefined,
       evidenceCount: number,
       errorCount: number,
-      hadSuccess: boolean
+      hadSuccess: boolean,
+      attempted: boolean,
+      isProviderRequired: boolean
     ): ModelJudgesProviderSummary | undefined => {
       if (!providerCfg) return undefined;
       let status: ModelJudgesProviderSummary['status'];
-      if (isInvalidCapture) status = 'skipped';
-      else if (!hadSuccess && errorCount > 0) status = 'error';
-      else if (hadSuccess && errorCount > 0) status = 'partial';
-      else if (hadSuccess) status = 'success';
-      else status = 'skipped';
-      return { provider: providerCfg.provider, model: providerCfg.model, status, evidenceCount, errorCount, hadSuccess };
+      if (isInvalidCapture) {
+        status = 'skipped';
+      } else if (!attempted) {
+        // Provider was never built (missing API key → unavailable)
+        status = 'unavailable';
+      } else if (!hadSuccess && errorCount > 0) {
+        status = 'error';
+      } else if (hadSuccess && errorCount > 0) {
+        status = 'partial';
+      } else if (hadSuccess) {
+        status = 'success';
+      } else {
+        // attempted=true but no success and no errors: provider returned empty response
+        // Guard: required judge must not show 'skipped' — convert to 'error'
+        status = isProviderRequired && visualAuditMode === 'visual_parity' ? 'error' : 'skipped';
+      }
+      return { provider: providerCfg.provider, model: providerCfg.model, status, evidenceCount, errorCount, hadSuccess, attempted };
     };
 
     modelJudgesSummary = {
       enabled: true,
       required: isRequired,
       policy: String(policy),
-      primary: buildProviderSummary(primaryCfg, prs?.primaryEvidenceCount ?? 0, prs?.primaryErrorCount ?? 0, prs?.primaryHadSuccess ?? false),
-      reviewer: buildProviderSummary(reviewerCfg, prs?.reviewerEvidenceCount ?? 0, prs?.reviewerErrorCount ?? 0, prs?.reviewerHadSuccess ?? false),
+      primary: buildProviderSummary(primaryCfg, prs?.primaryEvidenceCount ?? 0, prs?.primaryErrorCount ?? 0, prs?.primaryHadSuccess ?? false, prs?.primaryAttempted ?? false, isRequired),
+      reviewer: buildProviderSummary(reviewerCfg, prs?.reviewerEvidenceCount ?? 0, prs?.reviewerErrorCount ?? 0, prs?.reviewerHadSuccess ?? false, prs?.reviewerAttempted ?? false, (cfg as any).requireConsensusForCodeHints === true),
       failedRois
     };
   }
@@ -1045,6 +1080,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     ...(acceptanceStatus !== undefined ? { acceptanceStatus } : {}),
     ...(effectiveVisualCaveats.length > 0 ? { visualCaveats: effectiveVisualCaveats } : {}),
     ...(modelJudgesSummary ? { modelJudgesSummary } : {}),
+    ...(overlapLegibilitySummary ? { overlapLegibilitySummary } : {}),
     timings,
     artifacts: {
       expected: pixelDiff.processedExpectedPath,
