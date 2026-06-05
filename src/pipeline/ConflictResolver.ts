@@ -139,6 +139,27 @@ export class ConflictResolver {
           warnings.push(`Model claim '${modelItem.claimId}' blocked (INSUFFICIENT_CONFIDENCE): reference macro values match expected — seed/fixture mismatch claim is unsupported`);
         }
       }
+
+      // Also block when a reference fact explicitly declares it blocks this change vector via blocksChangeVectors field.
+      // This handles the real config path where ReferenceContextAnalyzer stores blocksChangeVectors as a comma-separated string.
+      for (const modelItem of seedDataModelClaims) {
+        if (blockedClaimIds.includes(modelItem.claimId)) continue;
+        const hasExplicitBlock = allEvidence.some(
+          (e) =>
+            e.authority === 'source' &&
+            !e.blocked &&
+            typeof e.measurements?.blocksChangeVectors === 'string' &&
+            (e.measurements.blocksChangeVectors as string)
+              .split(',')
+              .map((v: string) => v.trim())
+              .includes(modelItem.proposedChangeVector as string)
+        );
+        if (hasExplicitBlock) {
+          graph.block(modelItem.claimId, 'SOURCE_CONTRADICTION');
+          blockedClaimIds.push(modelItem.claimId);
+          warnings.push(`Model claim '${modelItem.claimId}' blocked: reference fact explicitly blocks '${modelItem.proposedChangeVector}' change vector`);
+        }
+      }
     }
 
     return {

@@ -255,6 +255,57 @@ describe('ModelJudgeAnalyzer', () => {
     expect(result.actionRequired).toBeUndefined();
     expect(result.warnings.some((w) => w.includes('metric-only'))).toBe(true);
   });
+});
+
+// ============================================================
+// Blocker 1: schema pass-through for timeoutMs/maxRetries/retryOnParseError
+// ============================================================
+
+describe('modelJudges schema accepts timeoutMs, maxRetries, retryOnParseError', () => {
+  it('uiDiffConfig modelJudgesSchema accepts and preserves all three fields', async () => {
+    const { modelJudgesSchema } = await import('../src/config/uiDiffConfig');
+    const input = {
+      enabled: true,
+      required: false,
+      timeoutMs: 8000,
+      maxRetries: 3,
+      retryOnParseError: false,
+      primary: { provider: 'openrouter' as const, model: 'gpt-4o' }
+    };
+    const parsed = modelJudgesSchema!.parse(input);
+    expect(parsed!.timeoutMs).toBe(8000);
+    expect(parsed!.maxRetries).toBe(3);
+    expect(parsed!.retryOnParseError).toBe(false);
+  });
+
+  it('mcp server modelJudgesSchema accepts and preserves all three fields', async () => {
+    const { modelJudgesSchema } = await import('../src/mcp/server');
+    const input = {
+      enabled: true,
+      timeoutMs: 5000,
+      maxRetries: 1,
+      retryOnParseError: true,
+      primary: { provider: 'nvidia' as const, model: 'llama-3.2-90b' }
+    };
+    const parsed = modelJudgesSchema.parse(input);
+    expect(parsed!.timeoutMs).toBe(5000);
+    expect(parsed!.maxRetries).toBe(1);
+    expect(parsed!.retryOnParseError).toBe(true);
+  });
+
+  it('ModelJudgesConfig TypeScript interface exposes timeoutMs, maxRetries, retryOnParseError', async () => {
+    // Compile-time check: ensure the config object passes to ModelJudgeAnalyzer without TS error
+    const cfg = {
+      enabled: true,
+      timeoutMs: 12000,
+      maxRetries: 2,
+      retryOnParseError: true,
+      primary: { provider: 'openrouter' as const, model: 'test' }
+    };
+    // ModelJudgeAnalyzer constructor must accept this without a type error
+    const judge = new ModelJudgeAnalyzer(cfg);
+    expect(judge).toBeDefined();
+  });
 
   it('disabled without explicitSkipReason emits ambiguity warning', async () => {
     const judge = new ModelJudgeAnalyzer({ enabled: false });

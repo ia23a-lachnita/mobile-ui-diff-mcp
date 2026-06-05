@@ -147,7 +147,10 @@ export const modelJudgesSchema = z.object({
     provider: z.enum(['openrouter', 'nvidia']),
     model: z.string().min(1)
   }).optional(),
-  requireConsensusForCodeHints: z.boolean().optional()
+  requireConsensusForCodeHints: z.boolean().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  maxRetries: z.number().int().nonnegative().optional(),
+  retryOnParseError: z.boolean().optional()
 }).optional();
 
 export const overlapLegibilityRegionSchema = z.object({

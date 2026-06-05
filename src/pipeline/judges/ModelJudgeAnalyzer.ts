@@ -10,11 +10,12 @@ function isProviderErrorEvidence(e: Evidence): boolean {
   return !!(e.measurements?.error) || /-(error|parse-error)-/.test(e.claimId);
 }
 
-/** polarity:'match' evidence is never a visual caveat — it is confirmation only. */
+/** polarity:'match' evidence is never a visual caveat — it is confirmation only. Config metadata is not a visual finding. */
 function isCaveatEligible(e: Evidence): boolean {
   const polarity = (e as any).polarity as string | undefined;
   if (polarity === 'match') return false;
   if (polarity === 'error') return false;
+  if (isConfigMetadataObservation(e.claim)) return false;
   return true;
 }
 

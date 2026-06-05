@@ -771,6 +771,15 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     warnings.push('Model judges disabled without explicitSkipReason. Set explicitSkipReason to confirm metric-only mode, or enable judges for visual parity.');
   }
 
+  // ---- Stage 3: Conflict resolution (runs before audit status so blocked caveats are filtered out) ----
+  const conflictResolver = new ConflictResolver(referenceContextInput);
+  const conflictResult = conflictResolver.resolve(graph);
+  warnings.push(...conflictResult.warnings);
+
+  // Remove caveats whose underlying evidence was blocked by ConflictResolver — blocked claims must not
+  // drive visualAuditStatus or appear in the report's visualCaveats list.
+  const effectiveVisualCaveats = visualCaveats.filter((c) => !conflictResult.blockedClaimIds.includes(c.id));
+
   // Compute visualAuditStatus — check actionRequired type first to avoid 'not_run' masking 'unavailable'
   let visualAuditStatus: VisualAuditStatus | undefined;
   let acceptanceStatus: AcceptanceStatus | undefined;
@@ -808,8 +817,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         };
       }
     } else {
-      const hasBlockingCaveat = visualCaveats.some((c) => c.blocking);
-      const hasNonBlockingCaveat = visualCaveats.some((c) => !c.blocking);
+      const hasBlockingCaveat = effectiveVisualCaveats.some((c) => c.blocking);
+      const hasNonBlockingCaveat = effectiveVisualCaveats.some((c) => !c.blocking);
       if (hasBlockingCaveat) {
         visualAuditStatus = 'fail';
         acceptanceStatus = 'rejected';
@@ -844,11 +853,6 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     const hasVlmErrors = regions.some((r) => r.analysisStatus === 'error');
     vlmAnalysisStatus = hasVlmErrors ? 'error' : 'pass';
   }
-
-  // ---- Stage 3: Conflict resolution ----
-  const conflictResolver = new ConflictResolver(referenceContextInput);
-  const conflictResult = conflictResolver.resolve(graph);
-  warnings.push(...conflictResult.warnings);
 
   // ---- Priority findings ----
   const priorityFindings: PriorityFinding[] = [];
@@ -1039,7 +1043,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     actionRequired,
     ...(visualAuditStatus !== undefined ? { visualAuditStatus } : {}),
     ...(acceptanceStatus !== undefined ? { acceptanceStatus } : {}),
-    ...(visualCaveats.length > 0 ? { visualCaveats } : {}),
+    ...(effectiveVisualCaveats.length > 0 ? { visualCaveats: effectiveVisualCaveats } : {}),
     ...(modelJudgesSummary ? { modelJudgesSummary } : {}),
     timings,
     artifacts: {
