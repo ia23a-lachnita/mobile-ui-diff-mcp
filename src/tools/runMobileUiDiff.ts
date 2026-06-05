@@ -113,6 +113,8 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     report.preCapture = preCaptureResults;
   }
 
-  await fs.writeFile(path.join(outputDir, 'report.json'), JSON.stringify(report, null, 2));
+  const reportJsonPath = path.join(outputDir, 'report.json');
+  report.reportJsonPath = reportJsonPath;
+  await fs.writeFile(reportJsonPath, JSON.stringify(report, null, 2));
   return report;
 }

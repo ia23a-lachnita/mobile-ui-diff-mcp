@@ -705,7 +705,7 @@ describe('model_judges_health — deep mode interface', () => {
     const originalFetch = global.fetch;
     (global as any).fetch = vi.fn().mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ choices: [{ message: { content: 'pong' } }] })
+      json: async () => ({ choices: [{ message: { content: '{"ok":true}' } }] })
     });
     try {
       const result = await checkModelJudgesHealth({
@@ -713,6 +713,8 @@ describe('model_judges_health — deep mode interface', () => {
         deep: true
       });
       expect(result.primary!.status).toBe('call_ok');
+      expect(result.primary!.schemaCheckStatus).toBe('ok');
+      expect(result.primary!.structuredOutputSupported).toBe(true);
       expect(result.status).toBe('ok');
       expect(result.message).toMatch(/deep call verified/i);
     } finally {

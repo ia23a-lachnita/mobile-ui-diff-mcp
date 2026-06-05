@@ -76,9 +76,7 @@ async function deepCheckProvider(cfg: { provider: 'openrouter' | 'nvidia'; model
     : 'https://integrate.api.nvidia.com/v1/chat/completions';
 
   // Send a minimal schema-constrained request to verify structured output support
-  const body = cfg.provider === 'nvidia'
-    ? { model: cfg.model, messages: [{ role: 'user', content: 'Reply with {"ok":true}' }], max_tokens: 20, response_format: { type: 'json_schema', json_schema: HEALTH_CHECK_SCHEMA } }
-    : { model: cfg.model, messages: [{ role: 'user', content: 'Reply with {"ok":true}' }], max_tokens: 20, response_format: { type: 'json_object' } };
+  const body = { model: cfg.model, messages: [{ role: 'user', content: 'Reply with {"ok":true}' }], max_tokens: 20, response_format: { type: 'json_schema', json_schema: HEALTH_CHECK_SCHEMA } };
 
   try {
     const response = await fetch(url, {
@@ -205,15 +203,25 @@ export async function checkModelJudgesHealth(input: ModelJudgesHealthInput): Pro
     for (const { cfg, result } of toDeepCheck) {
       const deepResult = await deepCheckProvider(cfg);
       result.status = deepResult.status;
+      if (deepResult.structuredOutputSupported !== undefined) result.structuredOutputSupported = deepResult.structuredOutputSupported;
+      if (deepResult.schemaCheckStatus !== undefined) result.schemaCheckStatus = deepResult.schemaCheckStatus;
       if (deepResult.deepCheckError) {
         result.deepCheckError = deepResult.deepCheckError;
         warnings.push(`Deep check failed for ${cfg.provider}/${cfg.model}: ${deepResult.deepCheckError}`);
+      }
+      if (deepResult.schemaCheckStatus === 'unparseable') {
+        warnings.push(`Structured output schema check failed for ${cfg.provider}/${cfg.model}: response did not match expected schema.`);
       }
     }
   }
 
   const allConfigured = [primaryResult, reviewerResult].filter(Boolean) as ProviderHealthResult[];
-  const allReady = allConfigured.every((r) => r.status === 'ready' || r.status === 'call_ok');
+  const allReady = allConfigured.every((r) => {
+    if (r.status !== 'ready' && r.status !== 'call_ok') return false;
+    // In deep mode, call_ok with unparseable schema means structured output is broken
+    if (input.deep && r.schemaCheckStatus !== undefined && r.schemaCheckStatus !== 'ok') return false;
+    return true;
+  });
   const noneConfigured = allConfigured.length === 0;
 
   let status: ModelJudgesHealthResult['status'];

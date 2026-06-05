@@ -998,6 +998,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     ...(referenceContextSummary ? { referenceContextSummary } : {})
   };
 
-  await fs.writeFile(path.join(ctx.outputDir, 'report.json'), JSON.stringify(report, null, 2));
+  const reportJsonPath = path.join(ctx.outputDir, 'report.json');
+  report.reportJsonPath = reportJsonPath;
+  await fs.writeFile(reportJsonPath, JSON.stringify(report, null, 2));
   return report;
 }

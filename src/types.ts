@@ -547,6 +547,7 @@ export interface DiffReport {
   timings?: RunTimings;
   visualCaveats?: VisualCaveat[];
   warnings?: string[];
+  reportJsonPath?: string;
   vlm?: VlmSummary;
   referenceContextSummary?: {
     factsLoaded: number;
