@@ -18,6 +18,22 @@ function isCaveatEligible(e: Evidence): boolean {
   return true;
 }
 
+/**
+ * Configuration/metadata observations from the model (e.g. "ROI has 1 dynamic subregion configured")
+ * must never become blocking caveats — they describe pipeline state, not visual differences.
+ */
+function isConfigMetadataObservation(claim: string): boolean {
+  const lower = claim.toLowerCase();
+  return (
+    /\broi has \d+/.test(lower) ||
+    /\d+ dynamic subregion/.test(lower) ||
+    lower.includes(' is configured') ||
+    lower.includes(' are configured') ||
+    lower.includes('subregion configured') ||
+    lower.includes('dynamic region configured')
+  );
+}
+
 function evidenceToVisualCaveat(e: Evidence): VisualCaveat {
   const polarity = (e as any).polarity as string | undefined;
   const explicitBlocking = (e as any).blocking as boolean | undefined;
@@ -26,7 +42,8 @@ function evidenceToVisualCaveat(e: Evidence): VisualCaveat {
   else if (e.confidence >= 0.5) severity = 'medium';
   else severity = 'low';
   // blocking requires explicit blocking:true AND polarity:'mismatch' — confidence alone must not block
-  const blocking = explicitBlocking === true && polarity === 'mismatch';
+  // Config/metadata observations (e.g. "ROI has 1 dynamic subregion configured") must never block
+  const blocking = explicitBlocking === true && polarity === 'mismatch' && !isConfigMetadataObservation(e.claim);
   return {
     id: e.claimId,
     source: e.source,
@@ -390,6 +407,20 @@ export class ModelJudgeAnalyzer {
 
     const judgeHadSuccessfulResults = primaryHadSuccess;
 
+    const primaryErrorCount = judgeProviderErrors.filter((e) => e.provider === cfg.primary?.provider).length;
+    const reviewerErrorCount = cfg.reviewer
+      ? judgeProviderErrors.filter((e) => e.provider === cfg.reviewer!.provider).length
+      : 0;
+
+    const judgeProviderRunSummary = {
+      primaryEvidenceCount: primaryEvidence.length,
+      primaryErrorCount,
+      primaryHadSuccess,
+      reviewerEvidenceCount: reviewerEvidence.length,
+      reviewerErrorCount,
+      reviewerHadSuccess
+    };
+
     return {
       analyzerName: this.name,
       stage: this.stage,
@@ -399,7 +430,8 @@ export class ModelJudgeAnalyzer {
       ...(actionRequired ? { actionRequired } : {}),
       ...(judgeProviderErrors.length > 0 ? { judgeProviderErrors } : {}),
       ...(modelCaveats.length > 0 ? { visualCaveats: modelCaveats } : {}),
-      judgeHadSuccessfulResults
+      judgeHadSuccessfulResults,
+      judgeProviderRunSummary
     };
   }
 
