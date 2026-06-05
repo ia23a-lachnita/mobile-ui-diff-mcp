@@ -183,6 +183,7 @@ export const modelJudgesHealthSchema = z.object({
   }).optional(),
   screen: z.string().min(1).optional(),
   configPath: z.string().min(1).optional(),
+  mode: z.enum(['fast', 'deep']).optional(),
   deep: z.boolean().optional()
 });
 
@@ -361,6 +362,7 @@ export function buildCompactReport(report: any, controls: OutputControls): any {
   // Always included in compact
   const compact: Record<string, any> = {
     status: report.status,
+    reportJsonPath: report.reportJsonPath ?? report.run?.reportPath,
     diffFraction: report.diffFraction ?? report.diffPercent,
     diffPercentHuman: report.diffPercentHuman ?? `${((report.diffPercent ?? 0) * 100).toFixed(2)}%`,
     thresholdFraction: report.thresholdFraction ?? report.maxDiffPercent,
@@ -1065,7 +1067,7 @@ export function getToolList() {
     },
     {
       name: "model_judges_health",
-      description: "Check model judge provider readiness (API keys present, providers configured). Fast check — does not call provider APIs.",
+      description: "Check model judge provider readiness (API keys present, providers configured). Pass mode:'deep' to verify API connectivity and structured output support with a live call.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1087,7 +1089,10 @@ export function getToolList() {
             },
             required: ["provider", "model"]
           },
-          deep: { type: "boolean", description: "When true, attempt a live API call to verify key validity (slower)." }
+          screen: { type: "string", minLength: 1, description: "Screen name from ui-diff.config.json. When provided, loads provider config and policy from the named screen." },
+          configPath: { type: "string", minLength: 1, description: "Optional path to ui-diff.config.json. Defaults to ./ui-diff.config.json. Used together with screen." },
+          mode: { type: "string", enum: ["fast", "deep"], default: "fast", description: "'fast' (default) checks API key presence only. 'deep' makes a live API call with a schema-constrained request to verify connectivity and structured output support." },
+          deep: { type: "boolean", description: "Deprecated alias for mode:'deep'. Prefer mode:'deep'." }
         }
       }
     },
@@ -1165,7 +1170,7 @@ export function createServer() {
         }
         case "model_judges_health": {
           const args = modelJudgesHealthSchema.parse(request.params.arguments);
-          const result = await checkModelJudgesHealth(args);
+          const result = await checkModelJudgesHealth({ ...args, deep: args.deep ?? args.mode === 'deep' });
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
         case "vlm_health": {

@@ -811,9 +811,14 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         acceptanceStatus = qualityStatus === 'pass' ? 'accepted' : 'rejected';
       }
     }
+  } else if (visualAuditMode === 'visual_parity') {
+    // visual_parity + no judges and no prior actionRequired — should have been caught above, but guard here too
+    visualAuditStatus = 'unavailable';
+    acceptanceStatus = 'incomplete';
   } else {
+    // metric_only with no judges configured — valid explicit skip path
     visualAuditStatus = 'not_run';
-    // acceptanceStatus left undefined when no judges configured — backward compat
+    acceptanceStatus = 'metric_only';
   }
 
   // vlmAnalysisStatus — describes legacy Ollama VLM path separately from model judges
@@ -918,8 +923,9 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     roiReports: roiCropArtifacts, priorityFindings, localHotspots, actionRequired
   });
 
-  // metric_only and incomplete acceptance statuses must not authorize stopping iteration
-  if ((acceptanceStatus === 'metric_only' || acceptanceStatus === 'incomplete') && agentSummary.canStopIterating) {
+  // incomplete (judges unavailable/failed) must not authorize stopping iteration
+  // metric_only is an explicit opt-out — quality gate results determine canStopIterating
+  if (acceptanceStatus === 'incomplete' && agentSummary.canStopIterating) {
     agentSummary = { ...agentSummary, canStopIterating: false };
   }
 

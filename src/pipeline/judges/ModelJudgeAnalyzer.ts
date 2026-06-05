@@ -25,10 +25,8 @@ function evidenceToVisualCaveat(e: Evidence): VisualCaveat {
   if (e.confidence >= 0.8) severity = 'high';
   else if (e.confidence >= 0.5) severity = 'medium';
   else severity = 'low';
-  // blocking requires explicit blocking:true OR severity high/critical + polarity mismatch
-  const blocking = explicitBlocking === true
-    ? true
-    : (polarity === 'uncertainty' ? false : e.confidence >= 0.8);
+  // blocking requires explicit blocking:true AND polarity:'mismatch' — confidence alone must not block
+  const blocking = explicitBlocking === true && polarity === 'mismatch';
   return {
     id: e.claimId,
     source: e.source,
@@ -59,16 +57,21 @@ export interface ModelJudgesConfig {
   retryOnParseError?: boolean;
 }
 
-function buildProvider(cfg: { provider: 'openrouter' | 'nvidia'; model: string }, timeoutMs: number): IModelJudgeProvider | null {
+function buildProvider(
+  cfg: { provider: 'openrouter' | 'nvidia'; model: string },
+  timeoutMs: number,
+  maxRetries: number,
+  retryOnParseError: boolean
+): IModelJudgeProvider | null {
   if (cfg.provider === 'openrouter') {
     const apiKey = process.env.OPENROUTER_API_KEY ?? '';
     if (!apiKey) return null;
-    return new OpenRouterProvider(apiKey, cfg.model, timeoutMs);
+    return new OpenRouterProvider(apiKey, cfg.model, timeoutMs, maxRetries, retryOnParseError);
   }
   if (cfg.provider === 'nvidia') {
     const apiKey = process.env.NVIDIA_API_KEY ?? '';
     if (!apiKey) return null;
-    return new NvidiaProvider(apiKey, cfg.model, timeoutMs);
+    return new NvidiaProvider(apiKey, cfg.model, timeoutMs, maxRetries, retryOnParseError);
   }
   return null;
 }
@@ -178,7 +181,7 @@ export class ModelJudgeAnalyzer {
     let reviewerHadSuccess = false;
 
     if (cfg.primary) {
-      const provider = buildProvider(cfg.primary, timeoutMs);
+      const provider = buildProvider(cfg.primary, timeoutMs, maxRetries, retryOnParseError);
       if (!provider) {
         const keyName = cfg.primary.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'NVIDIA_API_KEY';
         warnings.push(`ModelJudgeAnalyzer: primary provider '${cfg.primary.provider}' requires ${keyName} env var`);
@@ -250,7 +253,7 @@ export class ModelJudgeAnalyzer {
     let reviewerUnavailable = false;
     let reviewerMissingKey = false;
     if (cfg.reviewer) {
-      const provider = buildProvider(cfg.reviewer, timeoutMs);
+      const provider = buildProvider(cfg.reviewer, timeoutMs, maxRetries, retryOnParseError);
       if (!provider) {
         const keyName = cfg.reviewer.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'NVIDIA_API_KEY';
         warnings.push(`ModelJudgeAnalyzer: reviewer provider '${cfg.reviewer.provider}' requires ${keyName} env var`);

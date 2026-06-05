@@ -74,27 +74,39 @@ function resolveBox(
   };
 }
 
+function setPixel(data: Buffer, w: number, cx: number, cy: number, r: number, g: number, b: number, a: number) {
+  const idx = (cy * w + cx) << 2;
+  if (idx < 0 || idx + 3 >= data.length) return;
+  data[idx] = r; data[idx + 1] = g; data[idx + 2] = b; data[idx + 3] = a;
+}
+
 async function writeOverlayArtifact(
   ctx: AnalyzerContext,
   regionId: string,
   png: PNG,
-  x0: number, y0: number, x1: number, y1: number,
+  bx0: number, by0: number, bx1: number, by1: number,
   avoidColors: { r: number; g: number; b: number }[],
   colorThreshold: number,
   clearancePx: number,
   nearestAvoidColorDistancePx: number | null
 ): Promise<string | null> {
   try {
-    const cropW = x1 - x0;
-    const cropH = y1 - y0;
+    // Expand crop by context + clearance so annotations are visible
+    const CONTEXT_PX = Math.max(50, clearancePx + 10);
+    const cx0 = Math.max(0, bx0 - CONTEXT_PX);
+    const cy0 = Math.max(0, by0 - CONTEXT_PX);
+    const cx1 = Math.min(png.width, bx1 + CONTEXT_PX);
+    const cy1 = Math.min(png.height, by1 + CONTEXT_PX);
+    const cropW = cx1 - cx0;
+    const cropH = cy1 - cy0;
     if (cropW <= 0 || cropH <= 0) return null;
 
-    // Draw on the actual ROI crop (not a blank canvas)
+    // Copy source pixels into context crop
     const crop = new PNG({ width: cropW, height: cropH });
-    for (let cy = 0; cy < cropH; cy++) {
-      for (let cx = 0; cx < cropW; cx++) {
-        const srcIdx = ((y0 + cy) * png.width + (x0 + cx)) << 2;
-        const dstIdx = (cy * cropW + cx) << 2;
+    for (let y = 0; y < cropH; y++) {
+      for (let x = 0; x < cropW; x++) {
+        const srcIdx = ((cy0 + y) * png.width + (cx0 + x)) << 2;
+        const dstIdx = (y * cropW + x) << 2;
         crop.data[dstIdx] = png.data[srcIdx];
         crop.data[dstIdx + 1] = png.data[srcIdx + 1];
         crop.data[dstIdx + 2] = png.data[srcIdx + 2];
@@ -102,53 +114,72 @@ async function writeOverlayArtifact(
       }
     }
 
-    // Highlight avoid-color pixels in the box with red overlay
-    for (let cy = 0; cy < cropH; cy++) {
-      for (let cx = 0; cx < cropW; cx++) {
-        const idx = (cy * cropW + cx) << 2;
-        const r = crop.data[idx];
-        const g = crop.data[idx + 1];
-        const b = crop.data[idx + 2];
-        const matches = avoidColors.some((c) => colorDistance(r, g, b, c.r, c.g, c.b) < colorThreshold);
-        if (matches) {
-          crop.data[idx] = 255;
-          crop.data[idx + 1] = 0;
-          crop.data[idx + 2] = 0;
-          crop.data[idx + 3] = 220;
+    // Box coords relative to crop origin
+    const rx0 = bx0 - cx0; const ry0 = by0 - cy0;
+    const rx1 = bx1 - cx0; const ry1 = by1 - cy0;
+
+    // Highlight avoid-color pixels inside the configured box (red overlay)
+    for (let y = ry0; y < ry1; y++) {
+      for (let x = rx0; x < rx1; x++) {
+        const idx = (y * cropW + x) << 2;
+        const r = crop.data[idx]; const g = crop.data[idx + 1]; const b = crop.data[idx + 2];
+        if (avoidColors.some((c) => colorDistance(r, g, b, c.r, c.g, c.b) < colorThreshold)) {
+          crop.data[idx] = 255; crop.data[idx + 1] = 0; crop.data[idx + 2] = 0; crop.data[idx + 3] = 220;
         }
       }
     }
 
-    // Draw box boundary (blue border = configured legibility region)
-    const borderColor = { r: 0, g: 100, b: 255 };
-    for (let cx = 0; cx < cropW; cx++) {
-      for (const cy of [0, cropH - 1]) {
-        const idx = (cy * cropW + cx) << 2;
-        crop.data[idx] = borderColor.r; crop.data[idx + 1] = borderColor.g; crop.data[idx + 2] = borderColor.b; crop.data[idx + 3] = 255;
-      }
-    }
-    for (let cy = 0; cy < cropH; cy++) {
-      for (const cx of [0, cropW - 1]) {
-        const idx = (cy * cropW + cx) << 2;
-        crop.data[idx] = borderColor.r; crop.data[idx + 1] = borderColor.g; crop.data[idx + 2] = borderColor.b; crop.data[idx + 3] = 255;
-      }
-    }
-
-    // Draw clearance band (orange border outside box)
+    // Highlight avoid-color pixels in the clearance band (orange overlay) if clearance > 0
     if (clearancePx > 0) {
-      const ex0c = Math.max(0, -clearancePx); // relative to crop origin
-      const ey0c = Math.max(0, -clearancePx);
-      const ex1c = Math.min(cropW, cropW + clearancePx);
-      const ey1c = Math.min(cropH, cropH + clearancePx);
-      // mark top/bottom band rows
-      for (let cy = ey0c; cy < Math.min(0, cropH); cy++) {
-        for (let cx = ex0c; cx < ex1c && cx < cropW; cx++) {
-          if (cx < 0) continue;
-          const idx = (cy * cropW + cx) << 2;
-          if (idx >= 0 && idx + 3 < crop.data.length) {
-            crop.data[idx] = 255; crop.data[idx + 1] = 165; crop.data[idx + 2] = 0; crop.data[idx + 3] = 180;
+      const ex0 = Math.max(0, rx0 - clearancePx); const ey0 = Math.max(0, ry0 - clearancePx);
+      const ex1 = Math.min(cropW, rx1 + clearancePx); const ey1 = Math.min(cropH, ry1 + clearancePx);
+      for (let y = ey0; y < ey1; y++) {
+        for (let x = ex0; x < ex1; x++) {
+          if (x >= rx0 && x < rx1 && y >= ry0 && y < ry1) continue; // skip inner box
+          const idx = (y * cropW + x) << 2;
+          const r = crop.data[idx]; const g = crop.data[idx + 1]; const b = crop.data[idx + 2];
+          if (avoidColors.some((c) => colorDistance(r, g, b, c.r, c.g, c.b) < colorThreshold)) {
+            crop.data[idx] = 255; crop.data[idx + 1] = 140; crop.data[idx + 2] = 0; crop.data[idx + 3] = 200;
           }
         }
+      }
+    }
+
+    // Draw clearance band border (dashed orange rectangle)
+    if (clearancePx > 0) {
+      const cbx0 = Math.max(0, rx0 - clearancePx); const cby0 = Math.max(0, ry0 - clearancePx);
+      const cbx1 = Math.min(cropW - 1, rx1 + clearancePx); const cby1 = Math.min(cropH - 1, ry1 + clearancePx);
+      for (let x = cbx0; x <= cbx1; x++) {
+        if (x % 4 < 2) {
+          setPixel(crop.data, cropW, x, cby0, 255, 140, 0, 220);
+          setPixel(crop.data, cropW, x, cby1, 255, 140, 0, 220);
+        }
+      }
+      for (let y = cby0; y <= cby1; y++) {
+        if (y % 4 < 2) {
+          setPixel(crop.data, cropW, cbx0, y, 255, 140, 0, 220);
+          setPixel(crop.data, cropW, cbx1, y, 255, 140, 0, 220);
+        }
+      }
+    }
+
+    // Draw box boundary (solid blue border = configured legibility region)
+    for (let x = rx0; x < rx1; x++) {
+      setPixel(crop.data, cropW, x, ry0, 0, 100, 255, 255);
+      setPixel(crop.data, cropW, x, ry1 - 1, 0, 100, 255, 255);
+    }
+    for (let y = ry0; y < ry1; y++) {
+      setPixel(crop.data, cropW, rx0, y, 0, 100, 255, 255);
+      setPixel(crop.data, cropW, rx1 - 1, y, 0, 100, 255, 255);
+    }
+
+    // Draw nearest-distance marker: a short horizontal line from box edge toward the nearest avoid-color pixel
+    if (nearestAvoidColorDistancePx !== null && nearestAvoidColorDistancePx > 0 && nearestAvoidColorDistancePx < CONTEXT_PX) {
+      const midY = Math.floor((ry0 + ry1) / 2);
+      const markerLen = Math.min(Math.round(nearestAvoidColorDistancePx), rx0);
+      for (let x = rx0 - markerLen; x < rx0; x++) {
+        setPixel(crop.data, cropW, x, midY, 255, 255, 0, 255);
+        if (midY + 1 < cropH) setPixel(crop.data, cropW, x, midY + 1, 255, 255, 0, 255);
       }
     }
 

@@ -9,7 +9,9 @@ export class OpenRouterProvider implements IModelJudgeProvider {
   constructor(
     private readonly apiKey: string,
     private readonly model: string,
-    private readonly timeoutMs: number = 45000
+    private readonly timeoutMs: number = 45000,
+    private readonly maxRetries: number = 1,
+    private readonly retryOnParseError: boolean = true
   ) {}
 
   async analyze(bundle: EvidenceBundle, allEvidence: Evidence[]): Promise<Evidence[]> {
@@ -155,12 +157,17 @@ export class OpenRouterProvider implements IModelJudgeProvider {
       }];
     }
 
+    const VALID_POLARITY = new Set(['match', 'mismatch', 'uncertainty', 'error']);
     try {
       const parsed = JSON.parse(responseText);
       const items: any[] = Array.isArray(parsed) ? parsed : (parsed.evidence ?? parsed.items ?? []);
+      if (!Array.isArray(items)) throw new Error('evidence is not an array');
       const evidence: Evidence[] = [];
       for (const item of items) {
         if (!item.claimId || !item.claim) continue;
+        if (!item.polarity || !VALID_POLARITY.has(String(item.polarity))) {
+          throw new Error(`item '${item.claimId}' has missing or invalid polarity: ${JSON.stringify(item.polarity)}`);
+        }
         // polarity:'error' items are provider errors, not visual evidence
         if (item.polarity === 'error') continue;
         evidence.push({
@@ -181,16 +188,15 @@ export class OpenRouterProvider implements IModelJudgeProvider {
         });
       }
       return evidence;
-    } catch {
-      // Parse error — retry once
-      if (attempt === 0) {
-        return this.callWithRetry(messages, roiId, 1);
+    } catch (parseErr: any) {
+      if (this.retryOnParseError && attempt < this.maxRetries) {
+        return this.callWithRetry(messages, roiId, attempt + 1);
       }
       return [{
         source: 'modelJudge',
         claimId: `openrouter-parse-error-${roiId}`,
         subject: `roi:${roiId}`,
-        claim: 'OpenRouter returned unparseable response after retry',
+        claim: `OpenRouter returned unparseable response after ${attempt + 1} attempt(s): ${parseErr?.message ?? 'parse error'}`,
         confidence: 0,
         authority: 'model' as const,
         measurements: { error: 'parse_error_after_retry' }

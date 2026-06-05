@@ -15,6 +15,8 @@ export interface ProviderHealthResult {
   envVar: string;
   status: 'ready' | 'missing_key' | 'unknown' | 'call_ok' | 'call_failed';
   deepCheckError?: string;
+  structuredOutputSupported?: boolean;
+  schemaCheckStatus?: 'ok' | 'unsupported' | 'unparseable';
 }
 
 export interface EffectivePolicyReport {
@@ -53,7 +55,18 @@ function checkProvider(cfg: { provider: 'openrouter' | 'nvidia'; model: string }
   };
 }
 
-async function deepCheckProvider(cfg: { provider: 'openrouter' | 'nvidia'; model: string }): Promise<Pick<ProviderHealthResult, 'status' | 'deepCheckError'>> {
+const HEALTH_CHECK_SCHEMA = {
+  name: 'health_check',
+  strict: true,
+  schema: {
+    type: 'object',
+    properties: { ok: { type: 'boolean' } },
+    required: ['ok'],
+    additionalProperties: false
+  }
+};
+
+async function deepCheckProvider(cfg: { provider: 'openrouter' | 'nvidia'; model: string }): Promise<Pick<ProviderHealthResult, 'status' | 'deepCheckError' | 'structuredOutputSupported' | 'schemaCheckStatus'>> {
   const envVar = providerEnvVar(cfg.provider);
   const apiKey = process.env[envVar] ?? '';
   if (!apiKey) return { status: 'missing_key' };
@@ -62,22 +75,43 @@ async function deepCheckProvider(cfg: { provider: 'openrouter' | 'nvidia'; model
     ? 'https://openrouter.ai/api/v1/chat/completions'
     : 'https://integrate.api.nvidia.com/v1/chat/completions';
 
+  // Send a minimal schema-constrained request to verify structured output support
+  const body = cfg.provider === 'nvidia'
+    ? { model: cfg.model, messages: [{ role: 'user', content: 'Reply with {"ok":true}' }], max_tokens: 20, response_format: { type: 'json_schema', json_schema: HEALTH_CHECK_SCHEMA } }
+    : { model: cfg.model, messages: [{ role: 'user', content: 'Reply with {"ok":true}' }], max_tokens: 20, response_format: { type: 'json_object' } };
+
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: cfg.model,
-        messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: 1
-      })
+      body: JSON.stringify(body)
     });
 
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      return { status: 'call_failed', deepCheckError: `HTTP ${response.status}: ${text.slice(0, 200)}` };
+      // 422/400 with "json_schema" in body may mean structured output is unsupported
+      const isSchemaRejected = (response.status === 400 || response.status === 422) && text.includes('json_schema');
+      return {
+        status: 'call_failed',
+        deepCheckError: `HTTP ${response.status}: ${text.slice(0, 200)}`,
+        structuredOutputSupported: isSchemaRejected ? false : undefined,
+        schemaCheckStatus: isSchemaRejected ? 'unsupported' : undefined
+      };
     }
-    return { status: 'call_ok' };
+
+    const data = await response.json() as any;
+    const content: string = data?.choices?.[0]?.message?.content ?? '';
+    try {
+      const parsed = JSON.parse(content);
+      const structuredOutputSupported = typeof parsed?.ok === 'boolean';
+      return {
+        status: 'call_ok',
+        structuredOutputSupported,
+        schemaCheckStatus: structuredOutputSupported ? 'ok' : 'unparseable'
+      };
+    } catch {
+      return { status: 'call_ok', structuredOutputSupported: false, schemaCheckStatus: 'unparseable' };
+    }
   } catch (err: any) {
     return { status: 'call_failed', deepCheckError: err?.message ?? String(err) };
   }
