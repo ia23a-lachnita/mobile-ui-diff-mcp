@@ -703,9 +703,10 @@ describe('model_judges_health — deep mode interface', () => {
     const savedKey = process.env.OPENROUTER_API_KEY;
     process.env.OPENROUTER_API_KEY = 'sk-test-key';
     const originalFetch = global.fetch;
+    const validEvidence = JSON.stringify({ evidence: [{ claimId: 'health', subject: 'system', polarity: 'match', claim: 'provider healthy', confidence: 1.0, severity: 'info', blocking: false }] });
     (global as any).fetch = vi.fn().mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ choices: [{ message: { content: 'pong' } }] })
+      json: async () => ({ choices: [{ message: { content: validEvidence } }] })
     });
     try {
       const result = await checkModelJudgesHealth({
@@ -713,6 +714,8 @@ describe('model_judges_health — deep mode interface', () => {
         deep: true
       });
       expect(result.primary!.status).toBe('call_ok');
+      expect(result.primary!.schemaCheckStatus).toBe('ok');
+      expect(result.primary!.structuredOutputSupported).toBe(true);
       expect(result.status).toBe('ok');
       expect(result.message).toMatch(/deep call verified/i);
     } finally {

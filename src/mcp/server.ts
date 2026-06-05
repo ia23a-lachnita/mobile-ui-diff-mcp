@@ -183,6 +183,7 @@ export const modelJudgesHealthSchema = z.object({
   }).optional(),
   screen: z.string().min(1).optional(),
   configPath: z.string().min(1).optional(),
+  mode: z.enum(['fast', 'deep']).optional(),
   deep: z.boolean().optional()
 });
 
@@ -197,6 +198,16 @@ export const vlmConfigSchema = z.object({
   autoPull: z.boolean().optional(),
   timeoutMs: z.number().int().positive().optional()
 }).optional();
+
+export const outputModeSchema = z.enum(['compact', 'standard', 'full']).optional();
+
+const OUTPUT_CONTROLS = {
+  outputMode: { type: 'string', enum: ['compact', 'standard', 'full'], default: 'compact', description: "Controls response size. 'compact' (default) returns top findings and paths only. 'full' returns the complete report as written to disk." },
+  maxInlineFindings: { type: 'integer', minimum: 1, maximum: 50, default: 10, description: 'Max number of priority findings to include in compact output.' },
+  includeRegionDetails: { type: 'boolean', default: false, description: 'Include full region crop details in response.' },
+  includeModelRawEvidence: { type: 'boolean', default: false, description: 'Include raw model judge evidence in response.' },
+  includeArtifactsInline: { type: 'boolean', default: false, description: 'Include all artifact paths in response.' }
+};
 
 export const compareImagesSchema = z.object({
   expectedImage: z.string().min(1),
@@ -222,7 +233,12 @@ export const compareImagesSchema = z.object({
   referenceContext: referenceContextSchema,
   modelJudges: modelJudgesSchema,
   visualAuditMode: z.enum(['visual_parity', 'metric_only']).optional(),
-  overlapLegibility: overlapLegibilitySchema
+  overlapLegibility: overlapLegibilitySchema,
+  outputMode: outputModeSchema,
+  maxInlineFindings: z.number().int().positive().max(50).optional(),
+  includeRegionDetails: z.boolean().optional(),
+  includeModelRawEvidence: z.boolean().optional(),
+  includeArtifactsInline: z.boolean().optional()
 }).strict();
 
 export const captureAndroidSchema = z.object({
@@ -274,7 +290,12 @@ export const runMobileUiDiffSchema = z.object({
   referenceContext: referenceContextSchema,
   modelJudges: modelJudgesSchema,
   visualAuditMode: z.enum(['visual_parity', 'metric_only']).optional(),
-  overlapLegibility: overlapLegibilitySchema
+  overlapLegibility: overlapLegibilitySchema,
+  outputMode: outputModeSchema,
+  maxInlineFindings: z.number().int().positive().max(50).optional(),
+  includeRegionDetails: z.boolean().optional(),
+  includeModelRawEvidence: z.boolean().optional(),
+  includeArtifactsInline: z.boolean().optional()
 });
 
 export const runScreenUiDiffSchema = z.object({
@@ -306,7 +327,12 @@ export const runScreenUiDiffSchema = z.object({
   referenceContext: referenceContextSchema,
   modelJudges: modelJudgesSchema,
   visualAuditMode: z.enum(['visual_parity', 'metric_only']).optional(),
-  overlapLegibility: overlapLegibilitySchema
+  overlapLegibility: overlapLegibilitySchema,
+  outputMode: outputModeSchema,
+  maxInlineFindings: z.number().int().positive().max(50).optional(),
+  includeRegionDetails: z.boolean().optional(),
+  includeModelRawEvidence: z.boolean().optional(),
+  includeArtifactsInline: z.boolean().optional()
 });
 
 export const vlmHealthSchema = z.object({
@@ -318,6 +344,77 @@ export const vlmHealthSchema = z.object({
   keepAlive: z.string().min(1).default('10m'),
   timeoutMs: z.number().int().positive().default(30000)
 });
+
+interface OutputControls {
+  outputMode?: 'compact' | 'standard' | 'full';
+  maxInlineFindings?: number;
+  includeRegionDetails?: boolean;
+  includeModelRawEvidence?: boolean;
+  includeArtifactsInline?: boolean;
+}
+
+export function buildCompactReport(report: any, controls: OutputControls): any {
+  const mode = controls.outputMode ?? 'compact';
+  if (mode === 'full') return report;
+
+  const maxFindings = controls.maxInlineFindings ?? 10;
+
+  // Always included in compact
+  const compact: Record<string, any> = {
+    status: report.status,
+    reportJsonPath: report.reportJsonPath ?? report.run?.reportPath,
+    diffFraction: report.diffFraction ?? report.diffPercent,
+    diffPercentHuman: report.diffPercentHuman ?? `${((report.diffPercent ?? 0) * 100).toFixed(2)}%`,
+    thresholdFraction: report.thresholdFraction ?? report.maxDiffPercent,
+    thresholdPercentHuman: report.thresholdPercentHuman,
+    qualityStatus: report.qualityStatus,
+    visualAuditStatus: report.visualAuditStatus,
+    acceptanceStatus: report.acceptanceStatus,
+    vlmAnalysisStatus: report.vlmAnalysisStatus,
+    actionRequired: report.actionRequired ?? null,
+    agentSummary: report.agentSummary,
+    agentActionContract: report.agentActionContract,
+    priorityFindings: (report.priorityFindings ?? []).slice(0, maxFindings),
+    timings: report.timings,
+    artifacts: report.artifacts,
+    run: (report as any).run,
+    // Caveat summary
+    visualCaveats: report.visualCaveats
+      ? report.visualCaveats.map((c: any) => ({
+          id: c.id, source: c.source, subject: c.subject,
+          severity: c.severity, blocking: c.blocking,
+          message: c.message, confidence: c.confidence,
+          proposedChangeVector: c.proposedChangeVector
+        }))
+      : undefined,
+    warnings: report.warnings,
+    qualityFailures: report.qualityFailures,
+    delta: (report as any).delta
+  };
+
+  // Strip out bulk arrays unless requested
+  if (controls.includeRegionDetails) {
+    compact.regions = report.regions;
+    compact.regionsOfInterest = report.regionsOfInterest;
+    compact.localHotspots = report.localHotspots;
+  } else {
+    compact.actionableRegionCount = report.actionableRegionCount;
+    compact.roiSummary = (report.regionsOfInterest ?? []).map((r: any) => ({
+      id: r.id, label: r.label, status: r.status,
+      diffPercent: r.diffPercent,
+      diffPercentHuman: `${(r.diffPercent * 100).toFixed(2)}%`,
+      maxDiffPercent: r.maxDiffPercent, critical: r.critical,
+      artifacts: { expected: r.artifacts?.expected, actual: r.artifacts?.actual, diff: r.artifacts?.diff }
+    }));
+  }
+
+  // Remove undefined keys
+  for (const k of Object.keys(compact)) {
+    if (compact[k] === undefined) delete compact[k];
+  }
+
+  return compact;
+}
 
 export function getToolList() {
   return [
@@ -947,7 +1044,10 @@ export function getToolList() {
               },
               required: ["x", "y", "width", "height"]
             }
-          }
+          },
+          outputMode: { type: "string", enum: ["compact", "standard", "full"], default: "compact", description: "Response size mode. 'compact' (default) returns top findings and paths only — avoids flooding context. Full report is always written to disk at reportJsonPath." },
+          maxInlineFindings: { type: "integer", minimum: 1, maximum: 50, default: 10, description: "Max priority findings returned in compact mode." },
+          includeRegionDetails: { type: "boolean", default: false, description: "When true, include full region crop details in response." }
         },
         required: ["screen"]
       }
@@ -967,7 +1067,7 @@ export function getToolList() {
     },
     {
       name: "model_judges_health",
-      description: "Check model judge provider readiness (API keys present, providers configured). Fast check — does not call provider APIs.",
+      description: "Check model judge provider readiness (API keys present, providers configured). Pass mode:'deep' to verify API connectivity and structured output support with a live call.",
       inputSchema: {
         type: "object",
         properties: {
@@ -989,7 +1089,10 @@ export function getToolList() {
             },
             required: ["provider", "model"]
           },
-          deep: { type: "boolean", description: "When true, attempt a live API call to verify key validity (slower)." }
+          screen: { type: "string", minLength: 1, description: "Screen name from ui-diff.config.json. When provided, loads provider config and policy from the named screen." },
+          configPath: { type: "string", minLength: 1, description: "Optional path to ui-diff.config.json. Defaults to ./ui-diff.config.json. Used together with screen." },
+          mode: { type: "string", enum: ["fast", "deep"], default: "fast", description: "'fast' (default) checks API key presence only. 'deep' makes a live API call with a schema-constrained request to verify connectivity and structured output support." },
+          deep: { type: "boolean", description: "Deprecated alias for mode:'deep'. Prefer mode:'deep'." }
         }
       }
     },
@@ -1030,7 +1133,8 @@ export function createServer() {
         case "compare_images": {
           const args = compareImagesSchema.parse(request.params.arguments);
           const result = await compareImages(args);
-          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+          const output = buildCompactReport(result, args);
+          return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
         }
         case "capture_android_screenshot": {
           const args = captureAndroidSchema.parse(request.params.arguments);
@@ -1050,12 +1154,14 @@ export function createServer() {
         case "run_mobile_ui_diff": {
           const args = runMobileUiDiffSchema.parse(request.params.arguments);
           const result = await runMobileUiDiff(args);
-          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+          const output = buildCompactReport(result, args);
+          return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
         }
         case "run_screen_ui_diff": {
           const args = runScreenUiDiffSchema.parse(request.params.arguments);
           const result = await runScreenUiDiff(args);
-          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+          const output = buildCompactReport(result, args);
+          return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
         }
         case "discover_stable_regions": {
           const args = discoverStableRegionsSchema.parse(request.params.arguments);
@@ -1064,7 +1170,7 @@ export function createServer() {
         }
         case "model_judges_health": {
           const args = modelJudgesHealthSchema.parse(request.params.arguments);
-          const result = await checkModelJudgesHealth(args);
+          const result = await checkModelJudgesHealth({ ...args, deep: args.deep ?? args.mode === 'deep' });
           return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
         }
         case "vlm_health": {

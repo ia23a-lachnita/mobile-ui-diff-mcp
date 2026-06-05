@@ -10,17 +10,29 @@ function isProviderErrorEvidence(e: Evidence): boolean {
   return !!(e.measurements?.error) || /-(error|parse-error)-/.test(e.claimId);
 }
 
+/** polarity:'match' evidence is never a visual caveat — it is confirmation only. */
+function isCaveatEligible(e: Evidence): boolean {
+  const polarity = (e as any).polarity as string | undefined;
+  if (polarity === 'match') return false;
+  if (polarity === 'error') return false;
+  return true;
+}
+
 function evidenceToVisualCaveat(e: Evidence): VisualCaveat {
+  const polarity = (e as any).polarity as string | undefined;
+  const explicitBlocking = (e as any).blocking as boolean | undefined;
   let severity: VisualCaveat['severity'];
   if (e.confidence >= 0.8) severity = 'high';
   else if (e.confidence >= 0.5) severity = 'medium';
   else severity = 'low';
+  // blocking requires explicit blocking:true AND polarity:'mismatch' — confidence alone must not block
+  const blocking = explicitBlocking === true && polarity === 'mismatch';
   return {
     id: e.claimId,
     source: e.source,
     subject: e.subject,
     severity,
-    blocking: e.confidence >= 0.8,
+    blocking,
     message: e.claim,
     confidence: e.confidence,
     ...(e.measurements ? { measurements: e.measurements } : {}),
@@ -37,18 +49,29 @@ export interface ModelJudgesConfig {
   primary?: { provider: 'openrouter' | 'nvidia'; model: string };
   reviewer?: { provider: 'openrouter' | 'nvidia'; model: string };
   requireConsensusForCodeHints?: boolean;
+  /** Timeout in ms per provider call. Default: 45000. */
+  timeoutMs?: number;
+  /** Max retries on parse/format error. Default: 1. */
+  maxRetries?: number;
+  /** Retry on parse error. Default: true. */
+  retryOnParseError?: boolean;
 }
 
-function buildProvider(cfg: { provider: 'openrouter' | 'nvidia'; model: string }): IModelJudgeProvider | null {
+function buildProvider(
+  cfg: { provider: 'openrouter' | 'nvidia'; model: string },
+  timeoutMs: number,
+  maxRetries: number,
+  retryOnParseError: boolean
+): IModelJudgeProvider | null {
   if (cfg.provider === 'openrouter') {
     const apiKey = process.env.OPENROUTER_API_KEY ?? '';
     if (!apiKey) return null;
-    return new OpenRouterProvider(apiKey, cfg.model);
+    return new OpenRouterProvider(apiKey, cfg.model, timeoutMs, maxRetries, retryOnParseError);
   }
   if (cfg.provider === 'nvidia') {
     const apiKey = process.env.NVIDIA_API_KEY ?? '';
     if (!apiKey) return null;
-    return new NvidiaProvider(apiKey, cfg.model);
+    return new NvidiaProvider(apiKey, cfg.model, timeoutMs, maxRetries, retryOnParseError);
   }
   return null;
 }
@@ -132,6 +155,9 @@ export class ModelJudgeAnalyzer {
     }
 
     const isRequired = cfg.required ?? true;
+    const timeoutMs = cfg.timeoutMs ?? 45000;
+    const maxRetries = cfg.maxRetries ?? 1;
+    const retryOnParseError = cfg.retryOnParseError !== false;
 
     const shouldRun = this.shouldRunForPolicy(policy, graph);
     if (!shouldRun) {
@@ -155,7 +181,7 @@ export class ModelJudgeAnalyzer {
     let reviewerHadSuccess = false;
 
     if (cfg.primary) {
-      const provider = buildProvider(cfg.primary);
+      const provider = buildProvider(cfg.primary, timeoutMs, maxRetries, retryOnParseError);
       if (!provider) {
         const keyName = cfg.primary.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'NVIDIA_API_KEY';
         warnings.push(`ModelJudgeAnalyzer: primary provider '${cfg.primary.provider}' requires ${keyName} env var`);
@@ -227,7 +253,7 @@ export class ModelJudgeAnalyzer {
     let reviewerUnavailable = false;
     let reviewerMissingKey = false;
     if (cfg.reviewer) {
-      const provider = buildProvider(cfg.reviewer);
+      const provider = buildProvider(cfg.reviewer, timeoutMs, maxRetries, retryOnParseError);
       if (!provider) {
         const keyName = cfg.reviewer.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'NVIDIA_API_KEY';
         warnings.push(`ModelJudgeAnalyzer: reviewer provider '${cfg.reviewer.provider}' requires ${keyName} env var`);
@@ -355,10 +381,11 @@ export class ModelJudgeAnalyzer {
       graph.add(e);
     }
 
-    // Blocker 2: surface non-blocked model findings as visualCaveats so ROI pass cannot suppress them.
+    // Surface non-blocked mismatch/uncertainty findings as visualCaveats.
+    // match/error polarity evidence is excluded — confirmations are not caveats.
     // Provider errors are already separated into judgeProviderErrors and must not become caveats.
     const modelCaveats: VisualCaveat[] = [...primaryEvidence, ...reviewerEvidence]
-      .filter((e) => !e.blocked)
+      .filter((e) => !e.blocked && isCaveatEligible(e))
       .map(evidenceToVisualCaveat);
 
     const judgeHadSuccessfulResults = primaryHadSuccess;

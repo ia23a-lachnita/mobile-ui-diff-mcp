@@ -579,6 +579,46 @@ For each returned region, `analysisStatus` describes the state of the VLM feedba
 - `"fallback"`: VLM was unreachable, timed out, missing the proper model, or returned invalid JSON, so a synthetic fallback description is provided.
 - `"error"`: A system error prevented the analysis from completing.
 
+## Agent Usage Guide for Large Runs
+
+When running `run_screen_ui_diff` or `compare_images` from a Claude Code session, follow these steps to avoid flooding your context window:
+
+**1. Check judge health first**
+```json
+{ "tool": "model_judges_health", "primary": { "provider": "openrouter", "model": "..." } }
+```
+
+**2. Always use compact output mode**
+```json
+{
+  "screen": "today",
+  "configPath": "ui-diff.config.json",
+  "outputMode": "compact"
+}
+```
+The compact response includes: `status`, `diffPercentHuman`, `qualityStatus`, `visualAuditStatus`, `acceptanceStatus`, `actionRequired`, top findings, timings, and all artifact/report paths. Full details remain in `report.json` on disk.
+
+**3. Do not paste the full MCP response into conversation**
+Use the returned `run.reportPath` to read specific sections:
+```
+Read report.json → check visualCaveats[].message
+Read report.json → check regionsOfInterest[*].artifacts.diff
+```
+
+**4. Use isolated/sandboxed context mode for huge tool outputs**
+If your host supports context-mode (e.g. Claude Code with context-mode plugin), use `ctx_execute` to process the report file without inlining raw JSON into context.
+
+**5. Save and cite artifact paths — do not dump JSON**
+Report artifact paths directly: `run.artifacts.diff`, `run.regionsOfInterest[*].artifacts.diff`, `visualCaveats[*].artifacts`.
+
+**Percent formatting note**
+Reports include both `diffFraction` (machine-readable, e.g. `0.0984`) and `diffPercentHuman` (e.g. `"9.84%"`). Never interpret a raw fraction like `0.0984` as `0.0984%` — it means `9.84%`.
+
+**Timeout and retry defaults**
+- External judge providers: 45s timeout, 1 retry on parse error
+- Local Ollama VLM: 30s timeout
+- If a required judge fails after retry: `actionRequired.type = "model_judges_failed"`, `visualAuditStatus = "error"`
+
 ## Limitations
 - Only standard PNG files are fully supported.
 - Requires your own adb setup for Android or macOS Xcode tools simulator.

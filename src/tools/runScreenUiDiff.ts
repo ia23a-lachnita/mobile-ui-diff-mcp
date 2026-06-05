@@ -554,6 +554,7 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     }
   }
 
+  finalReport.reportJsonPath = reportPath;
   await fs.writeFile(reportPath, JSON.stringify(finalReport, null, 2));
   return finalReport;
 }

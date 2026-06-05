@@ -190,7 +190,7 @@ describe('Reviewer consensus enforcement (Blocker 1)', () => {
 // Blocker 2: Model judge findings surfaced as visualCaveats
 // ---------------------------------------------------------------------------
 describe('Model judge findings surfaced as visualCaveats (Blocker 2)', () => {
-  it('high confidence finding (≥0.8) → blocking visualCaveat with severity high', async () => {
+  it('high confidence finding without explicit blocking:true → non-blocking caveat with severity high', async () => {
     mockPrimaryAnalyze.mockResolvedValue([{
       source: 'visualMismatchJudge',
       claimId: 'openrouter-test-roi-high-conf',
@@ -198,6 +198,7 @@ describe('Model judge findings surfaced as visualCaveats (Blocker 2)', () => {
       claim: 'Ring stroke width mismatch detected',
       confidence: 0.9,
       authority: 'model' as const
+      // No polarity or blocking field — confidence alone must NOT make it blocking
     }]);
 
     const judge = new ModelJudgeAnalyzer({
@@ -211,11 +212,37 @@ describe('Model judge findings surfaced as visualCaveats (Blocker 2)', () => {
     expect(result.visualCaveats).toBeDefined();
     expect(result.visualCaveats!.length).toBeGreaterThan(0);
     const caveat = result.visualCaveats![0];
-    expect(caveat.blocking).toBe(true);
+    expect(caveat.blocking).toBe(false); // confidence alone must NOT block
     expect(caveat.severity).toBe('high');
     expect(caveat.source).toBe('visualMismatchJudge');
     expect(caveat.message).toBe('Ring stroke width mismatch detected');
     expect(caveat.confidence).toBe(0.9);
+  });
+
+  it('polarity:mismatch + blocking:true → blocking caveat', async () => {
+    mockPrimaryAnalyze.mockResolvedValue([{
+      source: 'visualMismatchJudge',
+      claimId: 'openrouter-test-roi-explicit-block',
+      subject: 'roi:test-roi',
+      claim: 'Ring stroke confirmed mismatched',
+      confidence: 0.9,
+      polarity: 'mismatch',
+      blocking: true,
+      authority: 'model' as const
+    } as any]);
+
+    const judge = new ModelJudgeAnalyzer({
+      enabled: true,
+      policy: 'always_audit',
+      primary: { provider: 'openrouter', model: 'primary-model' }
+    }, 'visual_parity');
+
+    const result = await judge.run(makeContext(), new EvidenceGraph(), makeBundles());
+
+    expect(result.visualCaveats).toBeDefined();
+    const caveat = result.visualCaveats![0];
+    expect(caveat.blocking).toBe(true);
+    expect(caveat.severity).toBe('high');
   });
 
   it('medium confidence finding (0.5–0.8) → non-blocking visualCaveat with severity medium', async () => {

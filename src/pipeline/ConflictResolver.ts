@@ -99,6 +99,48 @@ export class ConflictResolver {
     // Rule 5: Source + deterministic agreement → allow specific change vector (annotate, do not block)
     // This is handled by VerdictEngine when building the contract
 
+    // Rule 6: Block seed_data/fixture_plan vectors when reference facts confirm current values match expected.
+    // If geometry/model infers seed mismatch but reference facts confirm the same current/target values,
+    // the causal claim is a SOURCE_CONTRADICTION — do not recommend seed or plan changes.
+    const referenceConfirmsCurrentValues = allEvidence.some(
+      (e) => e.authority === 'source' && !e.blocked &&
+        e.measurements?.confirmsCurrentValues === true
+    );
+    if (referenceConfirmsCurrentValues) {
+      for (const modelItem of allEvidence.filter((e) => e.authority === 'model' && !e.blocked)) {
+        if (modelItem.proposedChangeVector === 'seed_data' || modelItem.proposedChangeVector === 'fixture_plan') {
+          graph.block(modelItem.claimId, 'SOURCE_CONTRADICTION');
+          blockedClaimIds.push(modelItem.claimId);
+          warnings.push(`Model claim '${modelItem.claimId}' blocked: seed_data/fixture_plan vector contradicted by reference facts confirming current values`);
+        }
+      }
+    }
+
+    // Also block seed_data/fixture_plan vectors for any model evidence where the subject's
+    // reference facts show matching current/target values (e.g. referenceContext macro values).
+    const seedDataModelClaims = allEvidence.filter(
+      (e) =>
+        e.authority === 'model' &&
+        !e.blocked &&
+        (e.proposedChangeVector === 'seed_data' || e.proposedChangeVector === 'fixture_plan')
+    );
+    if (seedDataModelClaims.length > 0) {
+      const hasMatchingRefFacts = allEvidence.some(
+        (e) =>
+          e.authority === 'source' &&
+          !e.blocked &&
+          e.measurements?.macroValuesMatch === true
+      );
+      if (hasMatchingRefFacts) {
+        for (const modelItem of seedDataModelClaims) {
+          if (blockedClaimIds.includes(modelItem.claimId)) continue;
+          graph.block(modelItem.claimId, 'SOURCE_CONTRADICTION');
+          blockedClaimIds.push(modelItem.claimId);
+          warnings.push(`Model claim '${modelItem.claimId}' blocked (INSUFFICIENT_CONFIDENCE): reference macro values match expected — seed/fixture mismatch claim is unsupported`);
+        }
+      }
+    }
+
     return {
       blockedClaimIds,
       downgradedClaimIds,

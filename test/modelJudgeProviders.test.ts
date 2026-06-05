@@ -51,6 +51,7 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'stroke-width-too-large',
         subject: 'roi:macro-ring-hero',
+        polarity: 'mismatch',
         claim: 'Actual stroke is wider than source spec.',
         confidence: 0.9,
         source: 'geometryInterpretationJudge',
@@ -85,6 +86,7 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'visual-mismatch',
         claim: 'Visual mismatch detected',
+        polarity: 'mismatch',
         confidence: 0.8,
         source: 'visualMismatchJudge'
       }]
@@ -100,6 +102,7 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'geometry-finding',
         claim: 'Ring geometry differs',
+        polarity: 'mismatch',
         confidence: 0.85,
         source: 'geometryInterpretationJudge'
       }]
@@ -115,6 +118,7 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'counter-claim',
         claim: 'No meaningful mismatch',
+        polarity: 'match',
         confidence: 0.7,
         source: 'adversarialReviewer'
       }]
@@ -130,6 +134,7 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'source-corroboration',
         claim: 'Corroborates reference facts',
+        polarity: 'match',
         confidence: 0.85,
         source: 'sourceAwareReviewer'
       }]
@@ -145,6 +150,7 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'no-source-claim',
         claim: 'Something happened',
+        polarity: 'mismatch',
         confidence: 0.6
       }]
     });
@@ -155,14 +161,14 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
   });
 
   it('returns safe error evidence on malformed JSON — no crash', async () => {
-    mockFetch.mockResolvedValueOnce(makeOkResponse('this is not { valid json'));
+    // Two calls: first attempt + one retry (maxRetries=1)
+    mockFetch.mockResolvedValue(makeOkResponse('this is not { valid json'));
     const provider = new OpenRouterProvider('test-key', 'test-model');
     const result = await provider.analyze(makeBundle('test-roi'), []);
     expect(Array.isArray(result)).toBe(true);
     expect(result.length).toBeGreaterThan(0);
     expect(result[0].confidence).toBe(0);
     expect(result[0].authority).toBe('model');
-    // No proposedChangeVector on error evidence
     expect(result[0].proposedChangeVector).toBeUndefined();
   });
 
@@ -181,6 +187,7 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'bad-vector',
         claim: 'Some finding',
+        polarity: 'mismatch',
         confidence: 0.8,
         source: 'visualMismatchJudge',
         proposedChangeVector: 'hack_the_system_xyz'
@@ -197,6 +204,7 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'valid-vector',
         claim: 'Ring stroke differs',
+        polarity: 'mismatch',
         confidence: 0.8,
         source: 'geometryInterpretationJudge',
         proposedChangeVector: 'ring_stroke_width'
@@ -213,7 +221,7 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
       evidence: [
         { claim: 'missing claimId', confidence: 0.5, source: 'visualMismatchJudge' },
         { claimId: 'missing-claim', confidence: 0.5, source: 'visualMismatchJudge' },
-        { claimId: 'complete', claim: 'Valid item', confidence: 0.9, source: 'visualMismatchJudge' }
+        { claimId: 'complete', claim: 'Valid item', polarity: 'mismatch', confidence: 0.9, source: 'visualMismatchJudge' }
       ]
     });
     mockFetch.mockResolvedValueOnce(makeOkResponse(responseBody));
@@ -226,8 +234,8 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
   it('clamps confidence to [0, 1]', async () => {
     const responseBody = JSON.stringify({
       evidence: [
-        { claimId: 'over', claim: 'Over', confidence: 5.0, source: 'visualMismatchJudge' },
-        { claimId: 'under', claim: 'Under', confidence: -2.0, source: 'visualMismatchJudge' }
+        { claimId: 'over', claim: 'Over', polarity: 'mismatch', confidence: 5.0, source: 'visualMismatchJudge' },
+        { claimId: 'under', claim: 'Under', polarity: 'mismatch', confidence: -2.0, source: 'visualMismatchJudge' }
       ]
     });
     mockFetch.mockResolvedValueOnce(makeOkResponse(responseBody));
@@ -235,6 +243,87 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
     const result = await provider.analyze(makeBundle(), []);
     expect(result[0].confidence).toBe(1);
     expect(result[1].confidence).toBe(0);
+  });
+
+  it('missing polarity triggers parse error and retry', async () => {
+    const badResponse = JSON.stringify({
+      evidence: [{ claimId: 'no-polarity', claim: 'Something', confidence: 0.9 }]
+    });
+    // Need two calls: initial + one retry
+    mockFetch.mockResolvedValue(makeOkResponse(badResponse));
+    const provider = new OpenRouterProvider('test-key', 'test-model', 45000, 1, true);
+    const result = await provider.analyze(makeBundle('roi-a'), []);
+    expect(mockFetch).toHaveBeenCalledTimes(2); // initial + 1 retry
+    expect(result[0].measurements).toMatchObject({ error: 'parse_error_after_retry' });
+  });
+
+  it('invalid polarity triggers parse error', async () => {
+    const badResponse = JSON.stringify({
+      evidence: [{ claimId: 'bad-polarity', claim: 'Something', polarity: 'bad_value', confidence: 0.9 }]
+    });
+    mockFetch.mockResolvedValue(makeOkResponse(badResponse));
+    const provider = new OpenRouterProvider('test-key', 'test-model', 45000, 1, true);
+    const result = await provider.analyze(makeBundle('roi-b'), []);
+    expect(result[0].measurements).toMatchObject({ error: 'parse_error_after_retry' });
+  });
+
+  it('maxRetries=0 returns parse error without retrying', async () => {
+    const badResponse = JSON.stringify({
+      evidence: [{ claimId: 'no-polarity', claim: 'Something', confidence: 0.9 }]
+    });
+    mockFetch.mockResolvedValue(makeOkResponse(badResponse));
+    const provider = new OpenRouterProvider('test-key', 'test-model', 45000, 0, true);
+    const result = await provider.analyze(makeBundle('roi-c'), []);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result[0].measurements).toMatchObject({ error: 'parse_error_after_retry' });
+  });
+
+  it('retryOnParseError=false skips retry on parse error', async () => {
+    const badResponse = JSON.stringify({
+      evidence: [{ claimId: 'no-polarity', claim: 'Something', confidence: 0.9 }]
+    });
+    mockFetch.mockResolvedValue(makeOkResponse(badResponse));
+    const provider = new OpenRouterProvider('test-key', 'test-model', 45000, 1, false);
+    const result = await provider.analyze(makeBundle('roi-d'), []);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result[0].measurements).toMatchObject({ error: 'parse_error_after_retry' });
+  });
+
+  it('high-confidence mismatch without explicit blocking:true is non-blocking', async () => {
+    // evidenceToVisualCaveat is in ModelJudgeAnalyzer, but here we verify
+    // the provider preserves blocking:false from the model response
+    const responseBody = JSON.stringify({
+      evidence: [{
+        claimId: 'high-conf-no-block',
+        claim: 'High confidence finding but not blocking',
+        polarity: 'mismatch',
+        confidence: 0.95,
+        blocking: false,
+        source: 'visualMismatchJudge'
+      }]
+    });
+    mockFetch.mockResolvedValueOnce(makeOkResponse(responseBody));
+    const provider = new OpenRouterProvider('test-key', 'test-model');
+    const result = await provider.analyze(makeBundle(), []);
+    expect((result[0] as any).blocking).toBe(false);
+    expect(result[0].confidence).toBe(0.95);
+  });
+
+  it('explicit blocking:true mismatch is preserved', async () => {
+    const responseBody = JSON.stringify({
+      evidence: [{
+        claimId: 'explicit-block',
+        claim: 'Confirmed mismatch',
+        polarity: 'mismatch',
+        confidence: 0.9,
+        blocking: true,
+        source: 'visualMismatchJudge'
+      }]
+    });
+    mockFetch.mockResolvedValueOnce(makeOkResponse(responseBody));
+    const provider = new OpenRouterProvider('test-key', 'test-model');
+    const result = await provider.analyze(makeBundle(), []);
+    expect((result[0] as any).blocking).toBe(true);
   });
 });
 
@@ -255,6 +344,7 @@ describe('NvidiaProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'radius-too-small',
         subject: 'roi:macro-ring',
+        polarity: 'mismatch',
         claim: 'Ring radius is smaller than expected.',
         confidence: 0.88,
         source: 'geometryInterpretationJudge',
@@ -288,6 +378,7 @@ describe('NvidiaProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'challenge-1',
         claim: 'Counter-evidence: difference is within tolerance',
+        polarity: 'match',
         confidence: 0.7,
         source: 'adversarialReviewer'
       }]
@@ -303,6 +394,7 @@ describe('NvidiaProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'no-src',
         claim: 'No source role set',
+        polarity: 'mismatch',
         confidence: 0.5
       }]
     });
@@ -313,7 +405,7 @@ describe('NvidiaProvider — real provider with mocked fetch', () => {
   });
 
   it('returns safe error evidence on malformed JSON — no crash', async () => {
-    mockFetch.mockResolvedValueOnce(makeOkResponse('{ bad json >>>'));
+    mockFetch.mockResolvedValue(makeOkResponse('{ bad json >>>'));
     const provider = new NvidiaProvider('test-key', 'test-model');
     const result = await provider.analyze(makeBundle('test-roi'), []);
     expect(Array.isArray(result)).toBe(true);
@@ -335,6 +427,7 @@ describe('NvidiaProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'bad-cv',
         claim: 'Some finding',
+        polarity: 'mismatch',
         confidence: 0.75,
         source: 'adversarialReviewer',
         proposedChangeVector: '__invalid__vector__'
@@ -351,6 +444,7 @@ describe('NvidiaProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'valid-cv',
         claim: 'Ring gap differs',
+        polarity: 'mismatch',
         confidence: 0.8,
         source: 'geometryInterpretationJudge',
         proposedChangeVector: 'ring_gap'
@@ -367,6 +461,7 @@ describe('NvidiaProvider — real provider with mocked fetch', () => {
       evidence: [{
         claimId: 'my-claim',
         claim: 'Test claim',
+        polarity: 'mismatch',
         confidence: 0.8,
         source: 'adversarialReviewer'
       }]
@@ -375,5 +470,26 @@ describe('NvidiaProvider — real provider with mocked fetch', () => {
     const provider = new NvidiaProvider('test-key', 'test-model');
     const result = await provider.analyze(makeBundle('my-roi'), []);
     expect(result[0].claimId).toBe('nvidia-my-roi-my-claim');
+  });
+
+  it('missing polarity triggers parse error and retry', async () => {
+    const badResponse = JSON.stringify({
+      evidence: [{ claimId: 'no-polarity', claim: 'Something', confidence: 0.9 }]
+    });
+    mockFetch.mockResolvedValue(makeOkResponse(badResponse));
+    const provider = new NvidiaProvider('test-key', 'test-model', 45000, 1, true);
+    const result = await provider.analyze(makeBundle('roi-n'), []);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result[0].measurements).toMatchObject({ error: 'parse_error_after_retry' });
+  });
+
+  it('maxRetries honored — retries up to configured limit', async () => {
+    const badResponse = JSON.stringify({
+      evidence: [{ claimId: 'no-polarity', claim: 'No polarity', confidence: 0.9 }]
+    });
+    mockFetch.mockResolvedValue(makeOkResponse(badResponse));
+    const provider = new NvidiaProvider('test-key', 'test-model', 45000, 3, true);
+    await provider.analyze(makeBundle('roi-retry'), []);
+    expect(mockFetch).toHaveBeenCalledTimes(4); // initial + 3 retries
   });
 });
