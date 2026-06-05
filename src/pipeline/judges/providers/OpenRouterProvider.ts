@@ -6,11 +6,13 @@ import { VALID_CHANGE_VECTORS } from '../../constants';
 export class OpenRouterProvider implements IModelJudgeProvider {
   readonly providerName = 'openrouter';
 
-  constructor(private readonly apiKey: string, private readonly model: string) {}
+  constructor(
+    private readonly apiKey: string,
+    private readonly model: string,
+    private readonly timeoutMs: number = 45000
+  ) {}
 
   async analyze(bundle: EvidenceBundle, allEvidence: Evidence[]): Promise<Evidence[]> {
-    const evidence: Evidence[] = [];
-
     const formatMeasurements = (m: Record<string, unknown> | undefined): string => {
       if (!m) return '';
       const parts: string[] = [];
@@ -60,9 +62,18 @@ export class OpenRouterProvider implements IModelJudgeProvider {
       '3. Whether the diff is consistent with the reference facts above',
       '',
       'Return a JSON object with key "evidence": array of items, each with:',
-      '  claimId (string), subject (string, use "roi:<roiId>"), claim (string),',
-      '  confidence (0-1), authority="model",',
-      '  optionally: proposedChangeVector (e.g. "ring_stroke_width"), expectedValue, actualValue'
+      '  claimId (string), subject (string, use "roi:<roiId>"),',
+      '  polarity ("match"|"mismatch"|"uncertainty"|"error"),',
+      '  claim (string), confidence (0-1),',
+      '  severity ("info"|"low"|"medium"|"high"|"critical"),',
+      '  blocking (boolean — true only for confirmed mismatch that should fail the audit),',
+      '  optionally: proposedChangeVector (e.g. "ring_stroke_width"), expectedValue, actualValue',
+      '',
+      'polarity rules:',
+      '  match = layout/geometry/value matches expected. Do NOT set blocking:true.',
+      '  mismatch = confirmed visual difference. May set blocking:true if high severity.',
+      '  uncertainty = possible issue, insufficient evidence. blocking must be false.',
+      '  error = provider/model error, not a visual claim.'
     ].join('\n');
 
     // Load images
@@ -95,20 +106,32 @@ export class OpenRouterProvider implements IModelJudgeProvider {
       }
     ];
 
+    return this.callWithRetry(messages, bundle.roiId);
+  }
+
+  private async callWithRetry(messages: any[], roiId: string, attempt = 0): Promise<Evidence[]> {
     let responseText = '';
     try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: this.model,
-          messages,
-          response_format: { type: 'json_object' }
-        })
-      });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      let response: Response;
+      try {
+        response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: this.model,
+            messages,
+            response_format: { type: 'json_object' }
+          }),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timer);
+      }
 
       if (!response.ok) {
         const text = await response.text();
@@ -118,11 +141,14 @@ export class OpenRouterProvider implements IModelJudgeProvider {
       const data = await response.json() as any;
       responseText = data?.choices?.[0]?.message?.content ?? '';
     } catch (err: any) {
+      const isTimeout = err?.name === 'AbortError';
       return [{
         source: 'modelJudge',
-        claimId: `openrouter-error-${bundle.roiId}`,
-        subject: `roi:${bundle.roiId}`,
-        claim: `OpenRouter analysis failed: ${err?.message ?? String(err)}`,
+        claimId: `openrouter-error-${roiId}`,
+        subject: `roi:${roiId}`,
+        claim: isTimeout
+          ? `OpenRouter analysis timed out after ${this.timeoutMs}ms`
+          : `OpenRouter analysis failed: ${err?.message ?? String(err)}`,
         confidence: 0,
         authority: 'model' as const,
         measurements: { error: err?.message ?? String(err) }
@@ -132,15 +158,20 @@ export class OpenRouterProvider implements IModelJudgeProvider {
     try {
       const parsed = JSON.parse(responseText);
       const items: any[] = Array.isArray(parsed) ? parsed : (parsed.evidence ?? parsed.items ?? []);
+      const evidence: Evidence[] = [];
       for (const item of items) {
         if (!item.claimId || !item.claim) continue;
+        // polarity:'error' items are provider errors, not visual evidence
+        if (item.polarity === 'error') continue;
         evidence.push({
           source: typeof item.source === 'string' && item.source ? item.source : 'modelJudge',
-          claimId: `openrouter-${bundle.roiId}-${item.claimId}`,
-          subject: item.subject ?? `roi:${bundle.roiId}`,
+          claimId: `openrouter-${roiId}-${item.claimId}`,
+          subject: item.subject ?? `roi:${roiId}`,
           claim: String(item.claim),
           confidence: typeof item.confidence === 'number' ? Math.max(0, Math.min(1, item.confidence)) : 0.5,
           authority: 'model' as const,
+          ...(item.polarity !== undefined ? { polarity: String(item.polarity) } as any : {}),
+          ...(item.blocking !== undefined ? { blocking: Boolean(item.blocking) } as any : {}),
           ...(item.claimType !== undefined ? { claimType: String(item.claimType) } : {}),
           ...(item.expectedValue !== undefined ? { expectedValue: item.expectedValue as number | string } : {}),
           ...(item.actualValue !== undefined ? { actualValue: item.actualValue as number | string } : {}),
@@ -149,17 +180,21 @@ export class OpenRouterProvider implements IModelJudgeProvider {
           measurements: item.measurements
         });
       }
+      return evidence;
     } catch {
-      evidence.push({
+      // Parse error — retry once
+      if (attempt === 0) {
+        return this.callWithRetry(messages, roiId, 1);
+      }
+      return [{
         source: 'modelJudge',
-        claimId: `openrouter-parse-error-${bundle.roiId}`,
-        subject: `roi:${bundle.roiId}`,
-        claim: 'OpenRouter returned unparseable response',
+        claimId: `openrouter-parse-error-${roiId}`,
+        subject: `roi:${roiId}`,
+        claim: 'OpenRouter returned unparseable response after retry',
         confidence: 0,
-        authority: 'model' as const
-      });
+        authority: 'model' as const,
+        measurements: { error: 'parse_error_after_retry' }
+      }];
     }
-
-    return evidence;
   }
 }

@@ -36,12 +36,14 @@ import {
   ActionRequired,
   VlmAvailability,
   VlmPolicy,
+  VlmAnalysisStatus,
   IgnoreRegion,
   BoxLike,
   AgentSummary,
   VisualAuditStatus,
   AcceptanceStatus,
-  VisualCaveat
+  VisualCaveat,
+  RunTimings
 } from '../types';
 
 // ---- helpers (ported directly from original compareImages.ts) ----
@@ -297,6 +299,7 @@ function buildVlmUnavailableActionRequired(): ActionRequired {
 // ---- Main pipeline ----
 
 export async function runPipeline(input: CompareImagesInput): Promise<DiffReport> {
+  const pipelineStart = Date.now();
   const pixelmatchThreshold = input.pixelmatchThreshold ?? input.threshold ?? 0.1;
   const maxDiffPercent = input.maxDiffPercent ?? 0.001;
   const maxRegions = input.maxRegions ?? 50;
@@ -428,8 +431,10 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   if (isInvalidCapture) actionRequired = buildInvalidCaptureActionRequired();
 
   // ---- Stage 1b: PixelDiffAnalyzer (must run before ROI analyzers) ----
+  const pixelDiffStart = Date.now();
   const pixelDiffAnalyzer = new PixelDiffAnalyzer();
   const pixelDiffResult = await pixelDiffAnalyzer.run(ctx, graph);
+  const pixelDiffMs = Date.now() - pixelDiffStart;
   warnings.push(...pixelDiffResult.warnings);
   const pixelDiff = (ctx as any)[PIXEL_DIFF_KEY] as PixelDiffResult;
   if (!pixelDiff) throw new Error('PixelDiffAnalyzer did not produce results');
@@ -447,6 +452,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   }
 
   // ---- Stage 1c: Remaining deterministic analyzers in parallel ----
+  const stage1cStart = Date.now();
   const remainingStage1: IAnalyzer[] = [
     new DynamicMaskAnalyzer(),
     new RadialGeometryAnalyzer(),
@@ -456,6 +462,10 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   ];
   const visualCaveats: VisualCaveat[] = [];
   const remainingResults = await Promise.all(remainingStage1.map((a) => a.run(ctx, graph)));
+  const perAnalyzerMs: Record<string, number> = {};
+  for (let i = 0; i < remainingStage1.length; i++) {
+    perAnalyzerMs[remainingStage1[i].name] = remainingResults[i].durationMs;
+  }
   for (const r of remainingResults) {
     warnings.push(...r.warnings);
     if (r.visualCaveats) visualCaveats.push(...r.visualCaveats);
@@ -728,9 +738,16 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   }
 
   let judgeHadSuccessfulResults: boolean | undefined;
+  let modelJudgesMs: number | undefined;
+  // Default vlmPolicy to 'disabled' when model judges are the primary analysis path
+  const effectiveVlmPolicy = vlmPolicy === 'ask_user' && modelJudgesInput?.enabled
+    ? 'optional'
+    : vlmPolicy;
   if (modelJudgesInput?.enabled) {
+    const judgesStart = Date.now();
     const judgeAnalyzer = new ModelJudgeAnalyzer(modelJudgesInput, visualAuditMode);
     const judgeResult = await judgeAnalyzer.run(ctx, graph, bundles);
+    modelJudgesMs = Date.now() - judgesStart;
     warnings.push(...judgeResult.warnings);
     judgeHadSuccessfulResults = judgeResult.judgeHadSuccessfulResults;
     // Provider errors are separate from visual evidence — they must not be treated as visual claims.
@@ -797,6 +814,19 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   } else {
     visualAuditStatus = 'not_run';
     // acceptanceStatus left undefined when no judges configured — backward compat
+  }
+
+  // vlmAnalysisStatus — describes legacy Ollama VLM path separately from model judges
+  let vlmAnalysisStatus: VlmAnalysisStatus;
+  if (!shouldUseVlm) {
+    vlmAnalysisStatus = 'disabled';
+  } else if (isInvalidCapture) {
+    vlmAnalysisStatus = 'skipped';
+  } else if (!vlmAvailability.usable) {
+    vlmAnalysisStatus = 'unavailable';
+  } else {
+    const hasVlmErrors = regions.some((r) => r.analysisStatus === 'error');
+    vlmAnalysisStatus = hasVlmErrors ? 'error' : 'pass';
   }
 
   // ---- Stage 3: Conflict resolution ----
@@ -893,11 +923,28 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     agentSummary = { ...agentSummary, canStopIterating: false };
   }
 
+  const totalMs = Date.now() - pipelineStart;
+  const timings: RunTimings = {
+    totalMs,
+    pixelDiffMs,
+    modelJudgesMs,
+    perAnalyzer: perAnalyzerMs
+  };
+
+  const diffFraction = pixelDiff.diffPercent;
+  const diffPercentHuman = `${(diffFraction * 100).toFixed(2)}%`;
+  const thresholdFraction = maxDiffPercent;
+  const thresholdPercentHuman = `${(thresholdFraction * 100).toFixed(2)}%`;
+
   const report: DiffReport = {
     status: reportStatus,
     diffPixels: pixelDiff.diffPixels,
     totalPixels: pixelDiff.totalPixels,
     diffPercent: pixelDiff.diffPercent,
+    diffFraction,
+    diffPercentHuman,
+    thresholdFraction,
+    thresholdPercentHuman,
     pixelmatchThreshold,
     maxDiffPercent,
     regions,
@@ -928,10 +975,12 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     maxDiffPercentSuggestionBlockedBy: suggestionBlockers.length ? suggestionBlockers : undefined,
     vlmPolicy,
     vlmAvailability,
+    vlmAnalysisStatus,
     actionRequired,
     ...(visualAuditStatus !== undefined ? { visualAuditStatus } : {}),
     ...(acceptanceStatus !== undefined ? { acceptanceStatus } : {}),
     ...(visualCaveats.length > 0 ? { visualCaveats } : {}),
+    timings,
     artifacts: {
       expected: pixelDiff.processedExpectedPath,
       actual: pixelDiff.processedActualPath,

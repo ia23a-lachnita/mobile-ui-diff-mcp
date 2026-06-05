@@ -142,6 +142,27 @@ export interface ConfigSuggestion {
 
 export type VlmPolicy = 'disabled' | 'optional' | 'required' | 'ask_user';
 
+export type OutputMode = 'compact' | 'standard' | 'full';
+
+export type VlmAnalysisStatus = 'disabled' | 'skipped' | 'pass' | 'unavailable' | 'error';
+
+export interface RunTimings {
+  totalMs: number;
+  captureMs?: number;
+  imageLoadMs?: number;
+  pixelDiffMs?: number;
+  roiQualityMs?: number;
+  overlapLegibilityMs?: number;
+  localVlmMs?: number;
+  modelJudgesMs?: number;
+  providers?: {
+    openrouter?: { totalMs: number; attempts: number; timeoutMs: number };
+    nvidia?: { totalMs: number; attempts: number; timeoutMs: number };
+    ollama?: { totalMs: number; attempts: number; timeoutMs: number };
+  };
+  perAnalyzer?: Record<string, number>;
+}
+
 export type VlmUnavailableReason = 'resource_limited' | 'unreachable' | 'model_missing' | 'timeout' | 'unknown';
 
 export interface VlmAvailability {
@@ -471,7 +492,16 @@ export interface DiffReport {
   status: "pass" | "fail";
   diffPixels: number;
   totalPixels: number;
+  /** Raw fraction 0–1 (e.g. 0.0984 means 9.84% of pixels differ). */
   diffPercent: number;
+  /** Machine-readable fraction — same value as diffPercent, explicit name. */
+  diffFraction?: number;
+  /** Human-readable percentage string (e.g. "9.84%"). */
+  diffPercentHuman?: string;
+  /** Raw fraction 0–1 threshold. */
+  thresholdFraction?: number;
+  /** Human-readable threshold string (e.g. "14.00%"). */
+  thresholdPercentHuman?: string;
   pixelmatchThreshold: number;
   maxDiffPercent: number;
   regions: RegionReport[];
@@ -510,9 +540,11 @@ export interface DiffReport {
   maxDiffPercentSuggestionBlockedBy?: string[];
   vlmPolicy?: VlmPolicy;
   vlmAvailability?: VlmAvailability;
+  vlmAnalysisStatus?: VlmAnalysisStatus;
   actionRequired?: ActionRequired | null;
   visualAuditStatus?: VisualAuditStatus;
   acceptanceStatus?: AcceptanceStatus;
+  timings?: RunTimings;
   visualCaveats?: VisualCaveat[];
   warnings?: string[];
   vlm?: VlmSummary;

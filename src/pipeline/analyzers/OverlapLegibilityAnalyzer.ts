@@ -80,30 +80,80 @@ async function writeOverlayArtifact(
   png: PNG,
   x0: number, y0: number, x1: number, y1: number,
   avoidColors: { r: number; g: number; b: number }[],
-  colorThreshold: number
+  colorThreshold: number,
+  clearancePx: number,
+  nearestAvoidColorDistancePx: number | null
 ): Promise<string | null> {
   try {
-    const overlay = new PNG({ width: png.width, height: png.height });
-    png.data.copy(overlay.data);
+    const cropW = x1 - x0;
+    const cropH = y1 - y0;
+    if (cropW <= 0 || cropH <= 0) return null;
 
-    for (let y = y0; y < y1; y++) {
-      for (let x = x0; x < x1; x++) {
-        const idx = (y * png.width + x) << 2;
-        const r = png.data[idx];
-        const g = png.data[idx + 1];
-        const b = png.data[idx + 2];
+    // Draw on the actual ROI crop (not a blank canvas)
+    const crop = new PNG({ width: cropW, height: cropH });
+    for (let cy = 0; cy < cropH; cy++) {
+      for (let cx = 0; cx < cropW; cx++) {
+        const srcIdx = ((y0 + cy) * png.width + (x0 + cx)) << 2;
+        const dstIdx = (cy * cropW + cx) << 2;
+        crop.data[dstIdx] = png.data[srcIdx];
+        crop.data[dstIdx + 1] = png.data[srcIdx + 1];
+        crop.data[dstIdx + 2] = png.data[srcIdx + 2];
+        crop.data[dstIdx + 3] = png.data[srcIdx + 3];
+      }
+    }
+
+    // Highlight avoid-color pixels in the box with red overlay
+    for (let cy = 0; cy < cropH; cy++) {
+      for (let cx = 0; cx < cropW; cx++) {
+        const idx = (cy * cropW + cx) << 2;
+        const r = crop.data[idx];
+        const g = crop.data[idx + 1];
+        const b = crop.data[idx + 2];
         const matches = avoidColors.some((c) => colorDistance(r, g, b, c.r, c.g, c.b) < colorThreshold);
         if (matches) {
-          overlay.data[idx] = 255;
-          overlay.data[idx + 1] = 0;
-          overlay.data[idx + 2] = 0;
-          overlay.data[idx + 3] = 200;
+          crop.data[idx] = 255;
+          crop.data[idx + 1] = 0;
+          crop.data[idx + 2] = 0;
+          crop.data[idx + 3] = 220;
+        }
+      }
+    }
+
+    // Draw box boundary (blue border = configured legibility region)
+    const borderColor = { r: 0, g: 100, b: 255 };
+    for (let cx = 0; cx < cropW; cx++) {
+      for (const cy of [0, cropH - 1]) {
+        const idx = (cy * cropW + cx) << 2;
+        crop.data[idx] = borderColor.r; crop.data[idx + 1] = borderColor.g; crop.data[idx + 2] = borderColor.b; crop.data[idx + 3] = 255;
+      }
+    }
+    for (let cy = 0; cy < cropH; cy++) {
+      for (const cx of [0, cropW - 1]) {
+        const idx = (cy * cropW + cx) << 2;
+        crop.data[idx] = borderColor.r; crop.data[idx + 1] = borderColor.g; crop.data[idx + 2] = borderColor.b; crop.data[idx + 3] = 255;
+      }
+    }
+
+    // Draw clearance band (orange border outside box)
+    if (clearancePx > 0) {
+      const ex0c = Math.max(0, -clearancePx); // relative to crop origin
+      const ey0c = Math.max(0, -clearancePx);
+      const ex1c = Math.min(cropW, cropW + clearancePx);
+      const ey1c = Math.min(cropH, cropH + clearancePx);
+      // mark top/bottom band rows
+      for (let cy = ey0c; cy < Math.min(0, cropH); cy++) {
+        for (let cx = ex0c; cx < ex1c && cx < cropW; cx++) {
+          if (cx < 0) continue;
+          const idx = (cy * cropW + cx) << 2;
+          if (idx >= 0 && idx + 3 < crop.data.length) {
+            crop.data[idx] = 255; crop.data[idx + 1] = 165; crop.data[idx + 2] = 0; crop.data[idx + 3] = 180;
+          }
         }
       }
     }
 
     const artifactPath = path.join(ctx.outputDir, `overlap-legibility-${regionId}.png`);
-    await fs.writeFile(artifactPath, PNG.sync.write(overlay));
+    await fs.writeFile(artifactPath, PNG.sync.write(crop));
     return artifactPath;
   } catch {
     return null;
@@ -168,26 +218,36 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
 
       const overlapPercent = matchCount / totalPixels;
 
-      // Proximity check: count avoid-color pixels in expanded border (minClearancePx) around the box
+      // Proximity check + nearest avoid-color distance measurement
       let proximityViolation = false;
+      let nearestAvoidColorDistancePx: number | null = null;
+      let coloredPixelCountInClearanceBand = 0;
       const clearance = region.minClearancePx ?? 0;
       if (clearance > 0) {
         const ex0 = Math.max(0, x0 - clearance);
         const ey0 = Math.max(0, y0 - clearance);
         const ex1 = Math.min(imgWidth, x1 + clearance);
         const ey1 = Math.min(imgHeight, y1 + clearance);
-        for (let y = ey0; y < ey1 && !proximityViolation; y++) {
-          for (let x = ex0; x < ex1 && !proximityViolation; x++) {
+        let minDist = Infinity;
+        for (let y = ey0; y < ey1; y++) {
+          for (let x = ex0; x < ex1; x++) {
             if (x >= x0 && x < x1 && y >= y0 && y < y1) continue; // skip inner box
             const idx = (y * imgWidth + x) << 2;
             const r = png.data[idx];
             const g = png.data[idx + 1];
             const b = png.data[idx + 2];
             if (avoidColors.some((c) => colorDistance(r, g, b, c.r, c.g, c.b) < colorThreshold)) {
-              proximityViolation = true;
+              coloredPixelCountInClearanceBand++;
+              // Distance from pixel to nearest box edge
+              const dx = x < x0 ? x0 - x : x >= x1 ? x - x1 + 1 : 0;
+              const dy = y < y0 ? y0 - y : y >= y1 ? y - y1 + 1 : 0;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              if (dist < minDist) minDist = dist;
+              if (!proximityViolation) proximityViolation = true;
             }
           }
         }
+        if (minDist !== Infinity) nearestAvoidColorDistancePx = minDist;
       }
 
       const maxAllowed = region.maxOverlapPercent ?? 0.05;
@@ -202,11 +262,19 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
         claim: `Region '${region.label ?? region.id}' overlap with avoid-colors: ${(overlapPercent * 100).toFixed(2)}%`,
         confidence: 0.75,
         authority: 'deterministic',
-        measurements: { overlapPercent, maxOverlapPercent: maxAllowed, regionId: region.id, proximityViolation }
+        measurements: {
+          overlapPercent,
+          maxOverlapPercent: maxAllowed,
+          regionId: region.id,
+          proximityViolation,
+          coloredPixelCountInBox: matchCount,
+          coloredPixelCountInClearanceBand,
+          ...(nearestAvoidColorDistancePx !== null ? { nearestAvoidColorDistancePx } : {})
+        }
       });
 
       if (hasViolation) {
-        const artifactPath = await writeOverlayArtifact(ctx, region.id, png, x0, y0, x1, y1, avoidColors, colorThreshold);
+        const artifactPath = await writeOverlayArtifact(ctx, region.id, png, x0, y0, x1, y1, avoidColors, colorThreshold, clearance, nearestAvoidColorDistancePx);
         if (artifactPath) artifacts.push(artifactPath);
 
         const reason = proximityViolation && overlapPercent <= maxAllowed
@@ -221,7 +289,15 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
           blocking: isBlocking,
           message: reason,
           confidence: 0.75,
-          measurements: { overlapPercent, maxOverlapPercent: maxAllowed, proximityViolation },
+          measurements: {
+            overlapPercent,
+            maxOverlapPercent: maxAllowed,
+            proximityViolation,
+            coloredPixelCountInBox: matchCount,
+            coloredPixelCountInClearanceBand,
+            ...(nearestAvoidColorDistancePx !== null ? { nearestAvoidColorDistancePx } : {}),
+            minClearancePx: clearance
+          },
           artifacts: artifactPath ? [artifactPath] : []
         });
       }
