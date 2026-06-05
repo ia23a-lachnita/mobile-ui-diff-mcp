@@ -179,6 +179,33 @@ export class ModelJudgeAnalyzer {
 
     const shouldRun = this.shouldRunForPolicy(policy, graph);
     if (!shouldRun) {
+      // Required judges in visual_parity mode cannot be silently skipped by policy —
+      // if the policy conditions aren't met, this is a configuration error.
+      if (isRequired && isVisualParity) {
+        return {
+          analyzerName: this.name,
+          stage: this.stage,
+          evidence: [],
+          warnings: [],
+          durationMs: Date.now() - start,
+          judgeHadSuccessfulResults: false,
+          judgeProviderRunSummary: {
+            primaryEvidenceCount: 0, primaryErrorCount: 0, primaryHadSuccess: false, primaryAttempted: false,
+            reviewerEvidenceCount: 0, reviewerErrorCount: 0, reviewerHadSuccess: false, reviewerAttempted: false
+          },
+          actionRequired: {
+            type: 'model_judges_failed',
+            severity: 'blocking',
+            message: `Required primary judge was not attempted: policy '${policy}' conditions were not met. In visual_parity mode with required:true, judges must always execute.`,
+            recommendedUserPrompt: `Set modelJudges.policy to 'always_audit' or 'always' when required:true in visual_parity mode.`,
+            suggestedFixes: [
+              "Set modelJudges.policy: 'always_audit' to ensure judges always execute",
+              "Set modelJudges.required: false to make judge execution optional",
+              "Set visualAuditMode: 'metric_only' to opt out of the judge requirement"
+            ]
+          }
+        };
+      }
       return {
         analyzerName: this.name,
         stage: this.stage,
@@ -196,7 +223,9 @@ export class ModelJudgeAnalyzer {
     const reviewerEvidence: Evidence[] = [];
     const judgeProviderErrors: JudgeProviderError[] = [];
     let primaryHadSuccess = false;
+    let primaryAttempted = false;
     let reviewerHadSuccess = false;
+    let reviewerAttempted = false;
 
     if (cfg.primary) {
       const provider = buildProvider(cfg.primary, timeoutMs, maxRetries, retryOnParseError);
@@ -207,7 +236,7 @@ export class ModelJudgeAnalyzer {
           actionRequired = {
             type: 'model_judges_unavailable',
             severity: 'blocking',
-            message: `Model judge analysis is required but ${keyName} is not set.`,
+            message: `Required primary judge '${cfg.primary.provider}' is unavailable: ${keyName} is not set.`,
             recommendedUserPrompt: `Set the ${keyName} environment variable and rerun, or change modelJudges.policy to a non-required value.`,
             suggestedFixes: [
               `Set ${keyName} in your environment`,
@@ -217,6 +246,7 @@ export class ModelJudgeAnalyzer {
           };
         }
       } else {
+        primaryAttempted = true;
         for (const bundle of bundles) {
           try {
             const bundleEvidence = await provider.analyze(bundle, allEvidence);
@@ -251,20 +281,7 @@ export class ModelJudgeAnalyzer {
             warnings.push(`ModelJudgeAnalyzer: primary provider failed for ROI '${bundle.roiId}': ${err?.message ?? String(err)}`);
           }
         }
-        // If required and we got no successful results (all errors), mark as failed
-        if (isRequired && !primaryHadSuccess && judgeProviderErrors.some((e) => e.provider === cfg.primary!.provider)) {
-          actionRequired = {
-            type: 'model_judges_failed',
-            severity: 'blocking',
-            message: `Required model judge '${cfg.primary.provider}' returned only errors. Check API key validity, provider status, and model compatibility.`,
-            recommendedUserPrompt: 'Model judge calls failed. Check API key validity and provider status, then rerun.',
-            suggestedFixes: [
-              'Verify API key is valid and not rate-limited',
-              'Check provider status and model compatibility (run model_judges_health with deep:true)',
-              "Set modelJudges.required: false to make failures non-blocking"
-            ]
-          };
-        }
+        // NOTE: do NOT set actionRequired here — wait until after reviewer runs so we have full context
       }
     }
 
@@ -278,6 +295,7 @@ export class ModelJudgeAnalyzer {
         reviewerUnavailable = true;
         reviewerMissingKey = true;
       } else {
+        reviewerAttempted = true;
         for (const bundle of bundles) {
           try {
             const bundleEvidence = await provider.analyze(bundle, allEvidence);
@@ -316,46 +334,102 @@ export class ModelJudgeAnalyzer {
       }
     }
 
-    // When reviewer is required for consensus and failed, the audit cannot pass.
-    if (cfg.requireConsensusForCodeHints && cfg.reviewer && reviewerUnavailable && !actionRequired) {
-      if (reviewerMissingKey) {
-        const keyName = cfg.reviewer.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'NVIDIA_API_KEY';
-        actionRequired = {
-          type: 'model_judges_unavailable',
-          severity: 'blocking',
-          message: `Reviewer judge '${cfg.reviewer.provider}' is required for consensus (requireConsensusForCodeHints:true) but ${keyName} is not set.`,
-          recommendedUserPrompt: `Set ${keyName} to enable the reviewer judge, or set requireConsensusForCodeHints:false to make reviewer optional.`,
-          suggestedFixes: [
-            `Set ${keyName} in your environment`,
-            "Set requireConsensusForCodeHints:false to make reviewer optional"
-          ]
-        };
-      } else {
+    // ---- Build actionRequired with full context from both providers ----
+    // This runs after both primary and reviewer so messages accurately reflect both outcomes.
+    if (!actionRequired) {
+      if (isRequired && cfg.primary && !primaryHadSuccess) {
+        // Primary failed. Determine exact reason and incorporate reviewer outcome.
+        const primaryErrors = judgeProviderErrors.filter((e) => e.provider === cfg.primary!.provider);
+        const reviewerSucceeded = reviewerHadSuccess;
+        const reviewerNote = reviewerSucceeded ? `; reviewer '${cfg.reviewer?.provider ?? 'reviewer'}' succeeded` : '';
+
+        if (!primaryAttempted) {
+          // Provider was not built (missing API key — already handled above as model_judges_unavailable)
+          // Fall through to consensus checks
+        } else if (primaryErrors.length > 0) {
+          actionRequired = reviewerSucceeded
+            ? {
+                type: 'model_judges_failed',
+                severity: 'blocking',
+                message: `Required primary judge '${cfg.primary.provider}' failed${reviewerNote}. Visual audit is incomplete.`,
+                recommendedUserPrompt: 'Check primary provider status, API key validity, and model compatibility, then rerun.',
+                suggestedFixes: [
+                  'Verify primary API key is valid and not rate-limited',
+                  'Run model_judges_health with deep:true to test provider connectivity',
+                  "Set modelJudges.required: false to make failures non-blocking"
+                ]
+              }
+            : {
+                type: 'model_judges_failed',
+                severity: 'blocking',
+                message: 'All required model judges failed.',
+                recommendedUserPrompt: 'Check provider status, API key validity, and model compatibility, then rerun.',
+                suggestedFixes: [
+                  'Run model_judges_health with deep:true to test provider connectivity',
+                  'Verify API keys are valid and not rate-limited',
+                  "Set modelJudges.required: false to make failures non-blocking"
+                ]
+              };
+        } else {
+          // Primary was attempted, no errors, but produced zero evidence
+          actionRequired = {
+            type: 'model_judges_failed',
+            severity: 'blocking',
+            message: `Required primary judge '${cfg.primary.provider}' produced no evidence${reviewerNote}. Visual audit is incomplete.`,
+            recommendedUserPrompt: 'Primary judge returned an empty response. Check model configuration and retry.',
+            suggestedFixes: [
+              'Verify model is configured correctly and the prompt/schema is accepted',
+              'Run model_judges_health with deep:true to test provider schema validation',
+              "Set modelJudges.required: false to make failures non-blocking"
+            ]
+          };
+        }
+      }
+
+      // Reviewer required for consensus and failed/unavailable
+      if (!actionRequired && cfg.requireConsensusForCodeHints && cfg.reviewer && reviewerUnavailable) {
+        if (reviewerMissingKey) {
+          const keyName = cfg.reviewer.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'NVIDIA_API_KEY';
+          const primaryNote = primaryHadSuccess ? `; primary '${cfg.primary?.provider ?? 'primary'}' succeeded` : '';
+          actionRequired = {
+            type: 'model_judges_unavailable',
+            severity: 'blocking',
+            message: `Required reviewer judge '${cfg.reviewer.provider}' is unavailable (requireConsensusForCodeHints:true): ${keyName} is not set${primaryNote}. Visual audit is incomplete.`,
+            recommendedUserPrompt: `Set ${keyName} to enable the reviewer judge, or set requireConsensusForCodeHints:false to make reviewer optional.`,
+            suggestedFixes: [
+              `Set ${keyName} in your environment`,
+              "Set requireConsensusForCodeHints:false to make reviewer optional"
+            ]
+          };
+        } else {
+          const primaryNote = primaryHadSuccess ? `; primary '${cfg.primary?.provider ?? 'primary'}' succeeded` : '';
+          actionRequired = {
+            type: 'model_judges_failed',
+            severity: 'blocking',
+            message: `Required reviewer judge '${cfg.reviewer.provider}' failed (requireConsensusForCodeHints:true)${primaryNote}. Visual audit is incomplete.`,
+            recommendedUserPrompt: `Check reviewer API key and provider status, then rerun. Or set requireConsensusForCodeHints:false to make reviewer optional.`,
+            suggestedFixes: [
+              'Verify reviewer API key is valid and not rate-limited',
+              "Set requireConsensusForCodeHints:false to make reviewer optional"
+            ]
+          };
+        }
+      }
+
+      // Reviewer ran but produced no evidence — failure in consensus mode
+      if (!actionRequired && cfg.requireConsensusForCodeHints && cfg.reviewer && !reviewerUnavailable && !reviewerHadSuccess) {
+        const primaryNote = primaryHadSuccess ? `; primary '${cfg.primary?.provider ?? 'primary'}' succeeded` : '';
         actionRequired = {
           type: 'model_judges_failed',
           severity: 'blocking',
-          message: `Reviewer judge '${cfg.reviewer.provider}' is required for consensus (requireConsensusForCodeHints:true) but returned only errors.`,
-          recommendedUserPrompt: `Check reviewer API key and provider status, then rerun. Or set requireConsensusForCodeHints:false to make reviewer optional.`,
+          message: `Required reviewer judge '${cfg.reviewer.provider}' produced no usable evidence (requireConsensusForCodeHints:true)${primaryNote}. Visual audit is incomplete.`,
+          recommendedUserPrompt: `Check reviewer model configuration and provider status, then rerun. Or set requireConsensusForCodeHints:false to make reviewer optional.`,
           suggestedFixes: [
-            'Verify reviewer API key is valid and not rate-limited',
+            'Verify reviewer model is configured correctly and returns valid evidence',
             "Set requireConsensusForCodeHints:false to make reviewer optional"
           ]
         };
       }
-    }
-
-    // Reviewer ran without errors but produced no usable evidence — treat as failure in consensus mode.
-    if (cfg.requireConsensusForCodeHints && cfg.reviewer && !reviewerUnavailable && !reviewerHadSuccess && !actionRequired) {
-      actionRequired = {
-        type: 'model_judges_failed',
-        severity: 'blocking',
-        message: `Reviewer judge '${cfg.reviewer.provider}' is required for consensus (requireConsensusForCodeHints:true) but produced no usable evidence.`,
-        recommendedUserPrompt: `Check reviewer model configuration and provider status, then rerun. Or set requireConsensusForCodeHints:false to make reviewer optional.`,
-        suggestedFixes: [
-          'Verify reviewer model is configured correctly and returns valid evidence',
-          "Set requireConsensusForCodeHints:false to make reviewer optional"
-        ]
-      };
     }
 
     if (cfg.requireConsensusForCodeHints) {
@@ -417,9 +491,11 @@ export class ModelJudgeAnalyzer {
       primaryEvidenceCount: primaryEvidence.length,
       primaryErrorCount,
       primaryHadSuccess,
+      primaryAttempted,
       reviewerEvidenceCount: reviewerEvidence.length,
       reviewerErrorCount,
-      reviewerHadSuccess
+      reviewerHadSuccess,
+      reviewerAttempted
     };
 
     return {

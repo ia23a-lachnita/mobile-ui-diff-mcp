@@ -95,16 +95,17 @@ describe('ModelJudgeAnalyzer', () => {
     if (savedKey) process.env.OPENROUTER_API_KEY = savedKey;
   });
 
-  it('policy on_failed_quality does not run when all ROIs pass', async () => {
+  it('policy on_failed_quality does not run when all ROIs pass (required:false)', async () => {
+    // required:false = policy-based skip is valid (judges are optional)
     const judge = new ModelJudgeAnalyzer({
       enabled: true,
+      required: false,
       policy: 'on_failed_quality',
       primary: { provider: 'openrouter', model: 'test-model' }
     });
     const ctx = makeContext();
     const graph = new EvidenceGraph();
 
-    // Add passing ROI evidence
     graph.add({
       source: 'roiQuality',
       claimId: 'roi-quality-ring',
@@ -118,8 +119,38 @@ describe('ModelJudgeAnalyzer', () => {
     const bundles = makeBundles();
     const result = await judge.run(ctx, graph, bundles);
 
-    // Policy should not trigger (no fails), so no API calls needed
+    // Optional judge: policy skip → warning only, no actionRequired
     expect(result.warnings.some((w) => w.includes('policy') && w.includes('on_failed_quality'))).toBe(true);
+    expect(result.actionRequired).toBeUndefined();
+  });
+
+  it('policy on_failed_quality with required:true (default) and quality passing → error (required judge cannot be skipped)', async () => {
+    // required:true (default) + conditional policy that does not trigger = misconfiguration → error
+    const judge = new ModelJudgeAnalyzer({
+      enabled: true,
+      policy: 'on_failed_quality',
+      primary: { provider: 'openrouter', model: 'test-model' }
+    });
+    const ctx = makeContext();
+    const graph = new EvidenceGraph();
+
+    graph.add({
+      source: 'roiQuality',
+      claimId: 'roi-quality-ring',
+      subject: 'roi:ring',
+      claim: 'ROI passes',
+      confidence: 1.0,
+      authority: 'deterministic',
+      measurements: { status: 'pass' }
+    });
+
+    const bundles = makeBundles();
+    const result = await judge.run(ctx, graph, bundles);
+
+    // Required judge cannot be silently skipped by policy in visual_parity mode
+    expect(result.actionRequired).toBeDefined();
+    expect(result.actionRequired?.type).toBe('model_judges_failed');
+    expect(result.actionRequired?.message).toMatch(/not attempted|policy.*did not trigger/i);
   });
 
   it('provider parse preserves unit field from model response', () => {

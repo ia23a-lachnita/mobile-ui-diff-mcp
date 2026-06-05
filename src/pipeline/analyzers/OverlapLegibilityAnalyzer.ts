@@ -4,7 +4,7 @@ import { PNG } from 'pngjs';
 import { IAnalyzer, AnalyzerContext } from './IAnalyzer';
 import { AnalyzerResult } from '../types';
 import { EvidenceGraph } from '../EvidenceGraph';
-import { VisualCaveat, RegionOfInterestConfig } from '../../types';
+import { VisualCaveat, RegionOfInterestConfig, OverlapLegibilityRegionResult } from '../../types';
 
 function parseHex(hex: string): { r: number; g: number; b: number } | null {
   const m = hex.match(/^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/);
@@ -198,7 +198,7 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
   async run(ctx: AnalyzerContext, graph: EvidenceGraph): Promise<AnalyzerResult> {
     const start = Date.now();
     const visualCaveats: VisualCaveat[] = [];
-    const artifacts: string[] = [];
+    const regionResults: OverlapLegibilityRegionResult[] = [];
 
     const config = ctx.config.overlapLegibility;
     // Treat omitted `enabled` as true when regions are present; only skip when explicitly disabled.
@@ -220,21 +220,56 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
 
     for (const region of config.regions) {
       const avoidColors = (region.avoidColors ?? []).map(parseHex).filter((c): c is NonNullable<typeof c> => c !== null);
-      if (!avoidColors.length) continue;
+      if (!avoidColors.length) {
+        regionResults.push({
+          id: region.id,
+          roiId: region.roiId,
+          checked: false,
+          status: 'skipped',
+          skipReason: 'No valid avoidColors configured'
+        });
+        continue;
+      }
 
-      const { x0: bx0, y0: by0, x1: bx1, y1: by1 } = resolveBox(
-        region.box,
-        region.coordinateSpace,
-        region.roiId,
-        imgWidth,
-        imgHeight,
-        ctx.regionsOfInterest
-      );
+      let resolvedBox: { x0: number; y0: number; x1: number; y1: number };
+      try {
+        resolvedBox = resolveBox(
+          region.box,
+          region.coordinateSpace,
+          region.roiId,
+          imgWidth,
+          imgHeight,
+          ctx.regionsOfInterest
+        );
+      } catch (err: any) {
+        regionResults.push({
+          id: region.id,
+          roiId: region.roiId,
+          checked: false,
+          status: 'error',
+          skipReason: `Coordinate resolution failed: ${err?.message ?? String(err)}`
+        });
+        continue;
+      }
+
+      const { x0: bx0, y0: by0, x1: bx1, y1: by1 } = resolvedBox;
 
       const x0 = Math.max(0, bx0);
       const y0 = Math.max(0, by0);
       const x1 = Math.min(imgWidth, bx1);
       const y1 = Math.min(imgHeight, by1);
+
+      if (x1 <= x0 || y1 <= y0) {
+        regionResults.push({
+          id: region.id,
+          roiId: region.roiId,
+          checked: false,
+          status: 'error',
+          skipReason: `Resolved box is empty or out of image bounds (${x0},${y0})-(${x1},${y1})`
+        });
+        continue;
+      }
+
       const totalPixels = Math.max(1, (x1 - x0) * (y1 - y0));
 
       let matchCount = 0;
@@ -305,10 +340,25 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
         }
       });
 
-      if (hasViolation) {
-        const artifactPath = await writeOverlayArtifact(ctx, region.id, png, x0, y0, x1, y1, avoidColors, colorThreshold, clearance, nearestAvoidColorDistancePx);
-        if (artifactPath) artifacts.push(artifactPath);
+      // Always write artifact — even for passing regions (proves what was measured)
+      const artifactPath = await writeOverlayArtifact(ctx, region.id, png, x0, y0, x1, y1, avoidColors, colorThreshold, clearance, nearestAvoidColorDistancePx);
 
+      const regionStatus: OverlapLegibilityRegionResult['status'] = hasViolation ? 'caveat' : 'pass';
+
+      regionResults.push({
+        id: region.id,
+        roiId: region.roiId,
+        checked: true,
+        status: regionStatus,
+        overlapPercent,
+        nearestAvoidColorDistancePx,
+        coloredPixelCountInBox: matchCount,
+        coloredPixelCountInClearanceBand,
+        minClearancePx: clearance,
+        artifactPath: artifactPath ?? null
+      });
+
+      if (hasViolation) {
         const reason = proximityViolation && overlapPercent <= maxAllowed
           ? `Region '${region.label ?? region.id}' has avoid-color pixels within ${clearance}px clearance zone.`
           : `Region '${region.label ?? region.id}' has ${(overlapPercent * 100).toFixed(1)}% overlap with avoid-colors (max ${(maxAllowed * 100).toFixed(1)}%).`;
@@ -341,7 +391,11 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
       evidence: [],
       warnings: [],
       visualCaveats,
-      durationMs: Date.now() - start
+      durationMs: Date.now() - start,
+      overlapLegibilitySummary: {
+        enabled: true,
+        regions: regionResults
+      }
     };
   }
 }

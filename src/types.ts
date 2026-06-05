@@ -479,13 +479,34 @@ export interface BlockedChangeVector {
   reasonCode: ReasonCode;
 }
 
+export interface OverlapLegibilityRegionResult {
+  id: string;
+  roiId?: string;
+  checked: boolean;
+  status: 'pass' | 'caveat' | 'error' | 'skipped';
+  skipReason?: string;
+  overlapPercent?: number;
+  nearestAvoidColorDistancePx?: number | null;
+  coloredPixelCountInBox?: number;
+  coloredPixelCountInClearanceBand?: number;
+  minClearancePx?: number;
+  artifactPath?: string | null;
+}
+
+export interface OverlapLegibilitySummary {
+  enabled: true;
+  regions: OverlapLegibilityRegionResult[];
+}
+
 export interface ModelJudgesProviderSummary {
   provider: string;
   model: string;
-  status: 'success' | 'partial' | 'error' | 'skipped';
+  status: 'success' | 'partial' | 'error' | 'skipped' | 'unavailable';
   evidenceCount: number;
   errorCount: number;
   hadSuccess: boolean;
+  attempted: boolean;
+  skippedReason?: string;
 }
 
 export interface ModelJudgesSummary {
@@ -565,6 +586,7 @@ export interface DiffReport {
   timings?: RunTimings;
   visualCaveats?: VisualCaveat[];
   modelJudgesSummary?: ModelJudgesSummary;
+  overlapLegibilitySummary?: OverlapLegibilitySummary;
   warnings?: string[];
   reportJsonPath?: string;
   vlm?: VlmSummary;

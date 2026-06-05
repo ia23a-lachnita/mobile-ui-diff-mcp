@@ -49,3 +49,4 @@ logs/
 # Misc
 .sentryclirc
 *.local
+api-keys.txt
