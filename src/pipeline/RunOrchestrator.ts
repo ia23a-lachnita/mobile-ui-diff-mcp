@@ -43,7 +43,9 @@ import {
   VisualAuditStatus,
   AcceptanceStatus,
   VisualCaveat,
-  RunTimings
+  RunTimings,
+  ModelJudgesSummary,
+  ModelJudgesProviderSummary
 } from '../types';
 
 // ---- helpers (ported directly from original compareImages.ts) ----
@@ -739,17 +741,22 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
 
   let judgeHadSuccessfulResults: boolean | undefined;
   let modelJudgesMs: number | undefined;
+  let judgeProviderRunSummary: import('./types').JudgeProviderRunSummary | undefined;
+  let judgeProviderErrors: import('./types').JudgeProviderError[] | undefined;
   // Default vlmPolicy to 'disabled' when model judges are the primary analysis path
   const effectiveVlmPolicy = vlmPolicy === 'ask_user' && modelJudgesInput?.enabled
     ? 'optional'
     : vlmPolicy;
-  if (modelJudgesInput?.enabled) {
+  // Invalid capture must short-circuit before model judges — never spend time judging a black screenshot.
+  if (modelJudgesInput?.enabled && !isInvalidCapture) {
     const judgesStart = Date.now();
     const judgeAnalyzer = new ModelJudgeAnalyzer(modelJudgesInput, visualAuditMode);
     const judgeResult = await judgeAnalyzer.run(ctx, graph, bundles);
     modelJudgesMs = Date.now() - judgesStart;
     warnings.push(...judgeResult.warnings);
     judgeHadSuccessfulResults = judgeResult.judgeHadSuccessfulResults;
+    judgeProviderRunSummary = judgeResult.judgeProviderRunSummary;
+    judgeProviderErrors = judgeResult.judgeProviderErrors;
     // Provider errors are separate from visual evidence — they must not be treated as visual claims.
     // If required judges had only errors and no successful results, judgeResult.actionRequired is already set.
     if (judgeResult.actionRequired && !actionRequired) {
@@ -764,11 +771,24 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     warnings.push('Model judges disabled without explicitSkipReason. Set explicitSkipReason to confirm metric-only mode, or enable judges for visual parity.');
   }
 
+  // ---- Stage 3: Conflict resolution (runs before audit status so blocked caveats are filtered out) ----
+  const conflictResolver = new ConflictResolver(referenceContextInput);
+  const conflictResult = conflictResolver.resolve(graph);
+  warnings.push(...conflictResult.warnings);
+
+  // Remove caveats whose underlying evidence was blocked by ConflictResolver — blocked claims must not
+  // drive visualAuditStatus or appear in the report's visualCaveats list.
+  const effectiveVisualCaveats = visualCaveats.filter((c) => !conflictResult.blockedClaimIds.includes(c.id));
+
   // Compute visualAuditStatus — check actionRequired type first to avoid 'not_run' masking 'unavailable'
   let visualAuditStatus: VisualAuditStatus | undefined;
   let acceptanceStatus: AcceptanceStatus | undefined;
 
-  if (actionRequired?.type === 'model_judges_unavailable') {
+  if (isInvalidCapture) {
+    // Invalid capture: judges never ran — visual audit is not_run, result is rejected
+    visualAuditStatus = 'not_run';
+    acceptanceStatus = 'rejected';
+  } else if (actionRequired?.type === 'model_judges_unavailable') {
     visualAuditStatus = 'unavailable';
     acceptanceStatus = 'incomplete';
   } else if (actionRequired?.type === 'model_judges_failed') {
@@ -797,8 +817,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         };
       }
     } else {
-      const hasBlockingCaveat = visualCaveats.some((c) => c.blocking);
-      const hasNonBlockingCaveat = visualCaveats.some((c) => !c.blocking);
+      const hasBlockingCaveat = effectiveVisualCaveats.some((c) => c.blocking);
+      const hasNonBlockingCaveat = effectiveVisualCaveats.some((c) => !c.blocking);
       if (hasBlockingCaveat) {
         visualAuditStatus = 'fail';
         acceptanceStatus = 'rejected';
@@ -833,11 +853,6 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     const hasVlmErrors = regions.some((r) => r.analysisStatus === 'error');
     vlmAnalysisStatus = hasVlmErrors ? 'error' : 'pass';
   }
-
-  // ---- Stage 3: Conflict resolution ----
-  const conflictResolver = new ConflictResolver(referenceContextInput);
-  const conflictResult = conflictResolver.resolve(graph);
-  warnings.push(...conflictResult.warnings);
 
   // ---- Priority findings ----
   const priorityFindings: PriorityFinding[] = [];
@@ -909,7 +924,9 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     graph,
     { requiresUserDecision: conflictResult.requiresUserDecision, blockedClaimIds: conflictResult.blockedClaimIds },
     qualityStatus,
-    modelJudgesInput?.allowEditSuggestionsOnPass
+    modelJudgesInput?.allowEditSuggestionsOnPass,
+    visualAuditStatus,
+    actionRequired
   );
 
   // Ensure canEditApp is false when a blocking action is required
@@ -936,6 +953,47 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     modelJudgesMs,
     perAnalyzer: perAnalyzerMs
   };
+
+  // Build modelJudgesSummary from judge config and per-provider run data
+  let modelJudgesSummary: ModelJudgesSummary | undefined;
+  if (modelJudgesInput?.enabled) {
+    const cfg = modelJudgesInput;
+    const isRequired = (cfg as any).required !== false;
+    const policy = (cfg as any).policy ?? (visualAuditMode !== 'metric_only' ? 'always_audit' : 'disabled');
+    const failedRois = (judgeProviderErrors ?? []).map((pe: any) => ({
+      roiId: pe.roiId,
+      provider: pe.provider,
+      error: pe.message
+    }));
+    const primaryCfg = (cfg as any).primary;
+    const reviewerCfg = (cfg as any).reviewer;
+    const prs = judgeProviderRunSummary;
+
+    const buildProviderSummary = (
+      providerCfg: { provider: string; model: string } | undefined,
+      evidenceCount: number,
+      errorCount: number,
+      hadSuccess: boolean
+    ): ModelJudgesProviderSummary | undefined => {
+      if (!providerCfg) return undefined;
+      let status: ModelJudgesProviderSummary['status'];
+      if (isInvalidCapture) status = 'skipped';
+      else if (!hadSuccess && errorCount > 0) status = 'error';
+      else if (hadSuccess && errorCount > 0) status = 'partial';
+      else if (hadSuccess) status = 'success';
+      else status = 'skipped';
+      return { provider: providerCfg.provider, model: providerCfg.model, status, evidenceCount, errorCount, hadSuccess };
+    };
+
+    modelJudgesSummary = {
+      enabled: true,
+      required: isRequired,
+      policy: String(policy),
+      primary: buildProviderSummary(primaryCfg, prs?.primaryEvidenceCount ?? 0, prs?.primaryErrorCount ?? 0, prs?.primaryHadSuccess ?? false),
+      reviewer: buildProviderSummary(reviewerCfg, prs?.reviewerEvidenceCount ?? 0, prs?.reviewerErrorCount ?? 0, prs?.reviewerHadSuccess ?? false),
+      failedRois
+    };
+  }
 
   const diffFraction = pixelDiff.diffPercent;
   const diffPercentHuman = `${(diffFraction * 100).toFixed(2)}%`;
@@ -985,7 +1043,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     actionRequired,
     ...(visualAuditStatus !== undefined ? { visualAuditStatus } : {}),
     ...(acceptanceStatus !== undefined ? { acceptanceStatus } : {}),
-    ...(visualCaveats.length > 0 ? { visualCaveats } : {}),
+    ...(effectiveVisualCaveats.length > 0 ? { visualCaveats: effectiveVisualCaveats } : {}),
+    ...(modelJudgesSummary ? { modelJudgesSummary } : {}),
     timings,
     artifacts: {
       expected: pixelDiff.processedExpectedPath,

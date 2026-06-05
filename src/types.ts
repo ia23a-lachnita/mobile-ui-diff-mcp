@@ -479,6 +479,24 @@ export interface BlockedChangeVector {
   reasonCode: ReasonCode;
 }
 
+export interface ModelJudgesProviderSummary {
+  provider: string;
+  model: string;
+  status: 'success' | 'partial' | 'error' | 'skipped';
+  evidenceCount: number;
+  errorCount: number;
+  hadSuccess: boolean;
+}
+
+export interface ModelJudgesSummary {
+  enabled: boolean;
+  required: boolean;
+  policy: string;
+  primary?: ModelJudgesProviderSummary;
+  reviewer?: ModelJudgesProviderSummary;
+  failedRois: Array<{ roiId: string; provider: string; error: string }>;
+}
+
 export interface AgentActionContract {
   canEditApp: boolean;
   confidence: 'high' | 'medium' | 'low' | 'none';
@@ -546,6 +564,7 @@ export interface DiffReport {
   acceptanceStatus?: AcceptanceStatus;
   timings?: RunTimings;
   visualCaveats?: VisualCaveat[];
+  modelJudgesSummary?: ModelJudgesSummary;
   warnings?: string[];
   reportJsonPath?: string;
   vlm?: VlmSummary;

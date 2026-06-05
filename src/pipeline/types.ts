@@ -51,6 +51,15 @@ export interface JudgeProviderError {
   message: string;
 }
 
+export interface JudgeProviderRunSummary {
+  primaryEvidenceCount: number;
+  primaryErrorCount: number;
+  primaryHadSuccess: boolean;
+  reviewerEvidenceCount: number;
+  reviewerErrorCount: number;
+  reviewerHadSuccess: boolean;
+}
+
 export interface AnalyzerResult {
   analyzerName: string;
   stage: AnalyzerStage;
@@ -61,4 +70,5 @@ export interface AnalyzerResult {
   visualCaveats?: import('../types').VisualCaveat[];
   judgeProviderErrors?: JudgeProviderError[];
   judgeHadSuccessfulResults?: boolean;
+  judgeProviderRunSummary?: JudgeProviderRunSummary;
 }

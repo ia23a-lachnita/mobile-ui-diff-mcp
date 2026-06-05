@@ -175,7 +175,10 @@ export const modelJudgesSchema = z.object({
   policy: modelJudgesPolicySchema.optional(),
   primary: modelJudgesProviderSchema.optional(),
   reviewer: modelJudgesProviderSchema.optional(),
-  requireConsensusForCodeHints: z.boolean().optional()
+  requireConsensusForCodeHints: z.boolean().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  maxRetries: z.number().int().nonnegative().optional(),
+  retryOnParseError: z.boolean().optional()
 }).optional();
 
 export const overlapLegibilityRegionSchema = z.object({

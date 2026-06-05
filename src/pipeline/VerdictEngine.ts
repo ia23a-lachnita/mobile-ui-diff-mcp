@@ -14,7 +14,9 @@ import {
   LocalHotspot,
   RegionOfInterestReport,
   VisualAssertionResult,
-  FloorBlocker
+  FloorBlocker,
+  VisualAuditStatus,
+  ActionRequired
 } from '../types';
 import { CompareImagesInput } from '../tools/compareImages';
 import { PIXEL_DIFF_KEY, PixelDiffResult } from './analyzers/PixelDiffAnalyzer';
@@ -40,7 +42,9 @@ export class VerdictEngine {
     graph: EvidenceGraph,
     conflictResult: { requiresUserDecision: boolean; blockedClaimIds: string[] },
     qualityStatus: 'pass' | 'fail' | 'not_evaluated',
-    allowEditSuggestionsOnPass?: boolean
+    allowEditSuggestionsOnPass?: boolean,
+    visualAuditStatus?: VisualAuditStatus,
+    actionRequired?: ActionRequired | null
   ): AgentActionContract {
     const allEvidence = graph.getAll();
     const allowedChangeVectors: AllowedChangeVector[] = [];
@@ -185,7 +189,7 @@ export class VerdictEngine {
       allowedChangeVectors: finalAllowedVectors,
       blockedChangeVectors,
       requiresUserDecision: conflictResult.requiresUserDecision,
-      reasonSummary: this.buildReasonSummary(qualityStatus, finalAllowedVectors, blockedChangeVectors, conflictResult)
+      reasonSummary: this.buildReasonSummary(qualityStatus, finalAllowedVectors, blockedChangeVectors, conflictResult, visualAuditStatus, actionRequired)
     };
   }
 
@@ -209,10 +213,34 @@ export class VerdictEngine {
     qualityStatus: 'pass' | 'fail' | 'not_evaluated',
     allowed: AllowedChangeVector[],
     blocked: BlockedChangeVector[],
-    conflictResult: { requiresUserDecision: boolean }
+    conflictResult: { requiresUserDecision: boolean },
+    visualAuditStatus?: VisualAuditStatus,
+    actionRequired?: ActionRequired | null
   ): string {
     if (conflictResult.requiresUserDecision) return 'Reference conflict requires user resolution.';
-    if (qualityStatus === 'pass' && allowed.length === 0) return 'All quality gates pass. No changes needed.';
+    // Visual audit failure must be mentioned even when deterministic quality gates pass.
+    if (actionRequired?.type === 'invalid_capture') {
+      return 'Invalid capture: screenshot is unusable. Recapture before any analysis.';
+    }
+    if (actionRequired?.type === 'model_judges_failed') {
+      const qualityNote = qualityStatus === 'pass'
+        ? 'Deterministic quality gates pass, but visual audit failed because required model judges failed.'
+        : 'Visual audit failed: required model judges failed.';
+      return qualityNote;
+    }
+    if (actionRequired?.type === 'model_judges_unavailable') {
+      return 'Visual audit incomplete: model judges are unavailable or not configured. Configure judges or set visualAuditMode:metric_only.';
+    }
+    if (visualAuditStatus === 'error') {
+      return 'Visual audit error: model judge results contain errors. Review provider status and retry.';
+    }
+    if (visualAuditStatus === 'fail') {
+      return `Visual audit failed: blocking caveats detected.${allowed.length > 0 ? ` Suggested vectors: ${allowed.map((a) => a.vector).join(', ')}.` : ''}`;
+    }
+    if (qualityStatus === 'pass' && allowed.length === 0 && (!visualAuditStatus || visualAuditStatus === 'pass' || visualAuditStatus === 'pass_with_caveats' || visualAuditStatus === 'skipped_by_config' || visualAuditStatus === 'not_run')) {
+      const caveatNote = visualAuditStatus === 'pass_with_caveats' ? ' Non-blocking visual caveats exist; review before accepting.' : '';
+      return `All quality gates pass. No changes needed.${caveatNote}`;
+    }
     if (allowed.length > 0) return `Suggested change vectors: ${allowed.map((a) => a.vector).join(', ')}.`;
     if (blocked.length > 0) return `All change vectors blocked: ${blocked.map((b) => b.reasonCode).join(', ')}.`;
     return 'Insufficient evidence to determine change vector.';

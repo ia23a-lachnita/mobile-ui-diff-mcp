@@ -201,7 +201,8 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
     const artifacts: string[] = [];
 
     const config = ctx.config.overlapLegibility;
-    if (!config?.enabled || !config.regions?.length) {
+    // Treat omitted `enabled` as true when regions are present; only skip when explicitly disabled.
+    if (config?.enabled === false || !config?.regions?.length) {
       return {
         analyzerName: this.name,
         stage: this.stage,
