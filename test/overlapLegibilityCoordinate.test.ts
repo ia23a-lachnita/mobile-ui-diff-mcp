@@ -96,7 +96,7 @@ describe('OverlapLegibilityAnalyzer — coordinate resolution', () => {
         coordinateSpace: 'roiNormalized',
         box: { x: 0.36, y: 0.58, width: 0.28, height: 0.11 },
         avoidColors: ['#00dc00'],
-        maxOverlapPercent: 0.05
+        maxOverlapPercent: 5
       }]
     });
 
@@ -140,7 +140,7 @@ describe('OverlapLegibilityAnalyzer — coordinate resolution', () => {
         coordinateSpace: 'normalized',
         box: { x: 0.1, y: 0.05, width: 0.3, height: 0.1 },
         avoidColors: ['#00dc00'],
-        maxOverlapPercent: 0.05
+        maxOverlapPercent: 5
       }]
     });
 
@@ -168,7 +168,7 @@ describe('OverlapLegibilityAnalyzer — coordinate resolution', () => {
         coordinateSpace: 'roiNormalized',
         box: { x: 0.36, y: 0.58, width: 0.28, height: 0.11 },
         avoidColors: ['#ff0000'],
-        maxOverlapPercent: 0.05
+        maxOverlapPercent: 5
       }]
     });
 
@@ -195,7 +195,7 @@ describe('OverlapLegibilityAnalyzer — coordinate resolution', () => {
         coordinateSpace: 'roiNormalized',
         box: { x: 0.36, y: 0.58, width: 0.28, height: 0.11 },
         avoidColors: ['#00dc00'],
-        maxOverlapPercent: 0.0
+        maxOverlapPercent: 0
       }]
     });
     (ctx as any).outputDir = outDir;
@@ -220,7 +220,7 @@ describe('OverlapLegibilityAnalyzer — coordinate resolution', () => {
         coordinateSpace: 'roiNormalized',
         box: { x: 0.36, y: 0.58, width: 0.28, height: 0.11 },
         avoidColors: ['#00dc00'],
-        maxOverlapPercent: 0.05
+        maxOverlapPercent: 5
       }]
     });
     (ctx as any).outputDir = outDir;

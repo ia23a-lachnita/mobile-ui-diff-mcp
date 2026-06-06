@@ -166,7 +166,7 @@ export const overlapLegibilityRegionSchema = z.object({
   }),
   avoidColors: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
   minClearancePx: z.number().nonnegative().optional(),
-  maxOverlapPercent: z.number().min(0).max(1).optional(),
+  maxOverlapPercent: z.number().min(0).max(100).optional(),
   severity: z.enum(['critical', 'high', 'medium', 'low', 'warning']).optional()
 });
 
@@ -575,7 +575,7 @@ export function getToolList() {
                     box: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number", exclusiveMinimum: 0 }, height: { type: "number", exclusiveMinimum: 0 } }, required: ["x", "y", "width", "height"] },
                     avoidColors: { type: "array", items: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" }, description: "Hex colors (e.g. #1FCC74) that must not appear in or near this region." },
                     minClearancePx: { type: "number", minimum: 0, description: "Minimum pixel clearance from box boundary to avoid-color pixels." },
-                    maxOverlapPercent: { type: "number", minimum: 0, maximum: 1, description: "Maximum fraction of the region allowed to match avoid-colors. Default: 0.05." },
+                    maxOverlapPercent: { type: "number", minimum: 0, maximum: 100, description: "Maximum human-percentage of the region allowed to match avoid-colors (e.g. 1 = 1%, 5 = 5%). Default: 5." },
                     severity: { type: "string", enum: ["critical", "high", "medium", "low", "warning"] }
                   },
                   required: ["id", "box"]

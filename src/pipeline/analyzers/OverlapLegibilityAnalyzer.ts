@@ -323,7 +323,7 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
         if (minDist !== Infinity) nearestAvoidColorDistancePx = minDist;
       }
 
-      const maxAllowed = region.maxOverlapPercent ?? 0.05;
+      const maxAllowed = (region.maxOverlapPercent ?? 5) / 100;
       const sev = region.severity ?? 'high';
       const isBlocking = sev === 'critical' || sev === 'high';
       const hasViolation = overlapPercent > maxAllowed || proximityViolation;

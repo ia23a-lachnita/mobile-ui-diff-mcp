@@ -242,7 +242,7 @@ describe('OverlapLegibilityAnalyzer', () => {
             label: '980 kcal pill',
             box: { x: 0, y: 0, width: 5, height: 5 },
             avoidColors: ['#00FF00'],
-            maxOverlapPercent: 0.05,
+            maxOverlapPercent: 5,
             severity: 'high'
           }]
         }
@@ -274,7 +274,7 @@ describe('OverlapLegibilityAnalyzer', () => {
             id: 'pill',
             box: { x: 0, y: 0, width: 10, height: 10 },
             avoidColors: ['#00FF00'],
-            maxOverlapPercent: 0.05
+            maxOverlapPercent: 5
           }]
         }
       }
@@ -645,7 +645,7 @@ describe('OverlapLegibilityAnalyzer — caveat survives ROI pass', () => {
             label: '980 kcal left pill',
             box: { x: 0, y: 0, width: 8, height: 8 },
             avoidColors: ['#00C800'],
-            maxOverlapPercent: 0.05,
+            maxOverlapPercent: 5,
             severity: 'warning'
           }]
         }

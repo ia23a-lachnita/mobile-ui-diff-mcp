@@ -1715,7 +1715,7 @@ describe('visualAuditMode enforcement and overlapLegibility integration', () => 
           label: 'black rect area',
           box: { x: 10, y: 10, width: 20, height: 20 },
           avoidColors: ['#000000'],
-          maxOverlapPercent: 0.01,
+          maxOverlapPercent: 1,
           severity: 'high'
         }]
       }
@@ -1747,7 +1747,7 @@ describe('visualAuditMode enforcement and overlapLegibility integration', () => 
           label: 'black rect high severity',
           box: { x: 10, y: 10, width: 20, height: 20 },
           avoidColors: ['#000000'],
-          maxOverlapPercent: 0.01,
+          maxOverlapPercent: 1,
           severity: 'high'
         }]
       }
@@ -1772,7 +1772,7 @@ describe('visualAuditMode enforcement and overlapLegibility integration', () => 
           label: 'black rect warning severity',
           box: { x: 10, y: 10, width: 20, height: 20 },
           avoidColors: ['#000000'],
-          maxOverlapPercent: 0.01,
+          maxOverlapPercent: 1,
           severity: 'warning'
         }]
       }
@@ -1798,7 +1798,7 @@ describe('visualAuditMode enforcement and overlapLegibility integration', () => 
           label: 'critical overlap zone',
           box: { x: 10, y: 10, width: 20, height: 20 },
           avoidColors: ['#000000'],
-          maxOverlapPercent: 0.01,
+          maxOverlapPercent: 1,
           severity: 'critical'
         }]
       }

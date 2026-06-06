@@ -423,7 +423,7 @@ describe('overlapLegibility per-region summary', () => {
             box: { x: 70, y: 10, width: 20, height: 10 },
             coordinateSpace: 'expected',
             avoidColors: ['#00dc00'],
-            maxOverlapPercent: 0.05,
+            maxOverlapPercent: 5,
             severity: 'warning'
           }
         ]
@@ -479,7 +479,7 @@ describe('overlapLegibility per-region summary', () => {
             box: { x: 10, y: 30, width: 20, height: 20 },
             coordinateSpace: 'expected',
             avoidColors: ['#00dc00'],
-            maxOverlapPercent: 0.01,
+            maxOverlapPercent: 1,
             severity: 'warning'
           }
         ]
@@ -540,7 +540,7 @@ describe('overlapLegibility per-region summary', () => {
             box: { x: 50, y: 50, width: 20, height: 20 },
             coordinateSpace: 'expected',
             avoidColors: ['#ff0000'],
-            maxOverlapPercent: 0.05,
+            maxOverlapPercent: 5,
             severity: 'warning'
           }
         ]
@@ -588,7 +588,7 @@ describe('overlapLegibility per-region summary', () => {
             box: { x: 10, y: 10, width: 20, height: 10 },
             coordinateSpace: 'expected',
             avoidColors: ['#00dc00'],
-            maxOverlapPercent: 0.05,
+            maxOverlapPercent: 5,
             severity: 'warning'
           }
         ]
