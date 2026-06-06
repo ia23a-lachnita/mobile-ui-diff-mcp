@@ -145,7 +145,8 @@ export const referenceFactSchema = z.object({
   actualValue: z.union([z.number(), z.string()]).optional(),
   unit: z.string().optional(),
   proposedChangeVector: z.string().optional(),
-  blocksChangeVectors: z.array(z.string()).optional()
+  blocksChangeVectors: z.array(z.string()).optional(),
+  blocksClaimsMatching: z.array(z.string()).optional()
 });
 
 export const referenceContextSchema = z.object({

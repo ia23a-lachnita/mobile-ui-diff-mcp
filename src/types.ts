@@ -491,6 +491,9 @@ export interface OverlapLegibilityRegionResult {
   coloredPixelCountInClearanceBand?: number;
   minClearancePx?: number;
   artifactPath?: string | null;
+  resolvedBox?: { x: number; y: number; width: number; height: number; coordinateSpace: string };
+  roiBox?: { x: number; y: number; width: number; height: number };
+  imageSize?: { width: number; height: number };
 }
 
 export interface OverlapLegibilitySummary {
@@ -587,6 +590,7 @@ export interface DiffReport {
   visualCaveats?: VisualCaveat[];
   modelJudgesSummary?: ModelJudgesSummary;
   overlapLegibilitySummary?: OverlapLegibilitySummary;
+  blockedModelFindings?: Array<{ claimId: string; reason: string; sourceFact?: string }>;
   warnings?: string[];
   reportJsonPath?: string;
   vlm?: VlmSummary;

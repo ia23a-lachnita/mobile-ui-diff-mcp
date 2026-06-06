@@ -396,7 +396,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
       roi.coordinateSpace ?? 'expected',
       roi.coordinateSpace === 'actual' ? actualSourceWidth : targetWidth,
       roi.coordinateSpace === 'actual' ? actualSourceHeight : targetHeight
-    )
+    ),
+    coordinateSpace: 'expected' as const
   }));
   const normalizedAppContentBounds = input.appContentBounds
     ? normalizeBox(input.appContentBounds, targetWidth, targetHeight, input.appContentBounds.coordinateSpace ?? 'expected', input.appContentBounds.coordinateSpace === 'actual' ? actualSourceWidth : targetWidth, input.appContentBounds.coordinateSpace === 'actual' ? actualSourceHeight : targetHeight)
@@ -782,6 +783,14 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   // drive visualAuditStatus or appear in the report's visualCaveats list.
   const effectiveVisualCaveats = visualCaveats.filter((c) => !conflictResult.blockedClaimIds.includes(c.id));
 
+  // Build blockedModelFindings for the report — maps each blocked claim to the warning that explains why
+  const blockedModelFindings: Array<{ claimId: string; reason: string; sourceFact?: string }> =
+    conflictResult.blockedClaimIds.map((claimId) => {
+      const warning = conflictResult.warnings.find((w) => w.includes(`'${claimId}'`)) ?? `Blocked by ConflictResolver`;
+      const sourceMatch = warning.match(/source fact '([^']+)'/);
+      return { claimId, reason: warning, ...(sourceMatch ? { sourceFact: sourceMatch[1] } : {}) };
+    });
+
   // Compute visualAuditStatus — check actionRequired type first to avoid 'not_run' masking 'unavailable'
   let visualAuditStatus: VisualAuditStatus | undefined;
   let acceptanceStatus: AcceptanceStatus | undefined;
@@ -1079,6 +1088,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     ...(visualAuditStatus !== undefined ? { visualAuditStatus } : {}),
     ...(acceptanceStatus !== undefined ? { acceptanceStatus } : {}),
     ...(effectiveVisualCaveats.length > 0 ? { visualCaveats: effectiveVisualCaveats } : {}),
+    ...(blockedModelFindings.length > 0 ? { blockedModelFindings } : {}),
     ...(modelJudgesSummary ? { modelJudgesSummary } : {}),
     ...(overlapLegibilitySummary ? { overlapLegibilitySummary } : {}),
     timings,

@@ -636,6 +636,45 @@ describe('seed/data causal attribution', () => {
 // Test 9: Full report shape for a clean passing run
 // ============================================================
 
+// ============================================================
+// Test 9: Data observation classifier — pure value reports must not block
+// ============================================================
+
+describe('model caveat classifier — data observation filter', () => {
+  it('pure data-value observation patterns are recognized and excluded from visual caveats', () => {
+    // These claims only report what is displayed — they are not visual defects
+    const dataClaims = [
+      '1,420 kcal is displayed as consumed',
+      '980 kcal is displayed as remaining',
+      '132 g is displayed as consumed',
+    ];
+
+    // These are real visual defect claims and must NOT be filtered
+    const visualDefectClaims = [
+      'Arc sweep is shorter than expected.',
+      'Color token mismatch in header area.',
+      'Ring stroke width differs by 2px.',
+      'Wrong value shown for calories — expected 1800 but got 1420',
+    ];
+
+    function isDataObservation(claim: string): boolean {
+      const lower = claim.toLowerCase();
+      if (/\b\d[\d,]*\.?\d*\s*(kcal|cal|g|mg|ml|lb|oz|km|mi|%|px)?\b.*\bis (displayed|shown|listed|visible|present)\b/.test(lower)) return true;
+      if (/\bis displayed as\b/.test(lower) && !/\bwrong\b|\bincorrect\b|\bdoes not match\b|\bshould be\b|\bexpected\b/.test(lower)) return true;
+      if (/\bis shown as\b/.test(lower) && !/\bwrong\b|\bincorrect\b|\bdoes not match\b|\bshould be\b|\bexpected\b/.test(lower)) return true;
+      if (/^\d[\d,]*\.?\d*\s*(kcal|cal|g|mg|ml)?\s+\w+\s+is\s+(displayed|shown)\b/.test(lower)) return true;
+      return false;
+    }
+
+    for (const claim of dataClaims) {
+      expect(isDataObservation(claim)).toBe(true);
+    }
+    for (const claim of visualDefectClaims) {
+      expect(isDataObservation(claim)).toBe(false);
+    }
+  });
+});
+
 describe('full report shape — clean metric_only pass', () => {
   it('report contains all required fields', async () => {
     const expectedPath = await writePngFile('expected.png', makeWhitePng());

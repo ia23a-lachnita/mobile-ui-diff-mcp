@@ -232,6 +232,7 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
       }
 
       let resolvedBox: { x0: number; y0: number; x1: number; y1: number };
+      const roiForDebug = region.roiId ? ctx.regionsOfInterest.find((r) => r.id === region.roiId) : undefined;
       try {
         resolvedBox = resolveBox(
           region.box,
@@ -247,7 +248,9 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
           roiId: region.roiId,
           checked: false,
           status: 'error',
-          skipReason: `Coordinate resolution failed: ${err?.message ?? String(err)}`
+          skipReason: `Coordinate resolution failed: ${err?.message ?? String(err)}`,
+          imageSize: { width: imgWidth, height: imgHeight },
+          ...(roiForDebug ? { roiBox: roiForDebug.box } : {})
         });
         continue;
       }
@@ -265,7 +268,10 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
           roiId: region.roiId,
           checked: false,
           status: 'error',
-          skipReason: `Resolved box is empty or out of image bounds (${x0},${y0})-(${x1},${y1})`
+          skipReason: `Resolved box is empty or out of image bounds (${bx0},${by0})-(${bx1},${by1}); clamped to (${x0},${y0})-(${x1},${y1}); image=${imgWidth}x${imgHeight}`,
+          resolvedBox: { x: bx0, y: by0, width: bx1 - bx0, height: by1 - by0, coordinateSpace: region.coordinateSpace ?? 'expected' },
+          imageSize: { width: imgWidth, height: imgHeight },
+          ...(roiForDebug ? { roiBox: roiForDebug.box } : {})
         });
         continue;
       }
@@ -355,7 +361,9 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
         coloredPixelCountInBox: matchCount,
         coloredPixelCountInClearanceBand,
         minClearancePx: clearance,
-        artifactPath: artifactPath ?? null
+        artifactPath: artifactPath ?? null,
+        resolvedBox: { x: x0, y: y0, width: x1 - x0, height: y1 - y0, coordinateSpace: 'expected' },
+        imageSize: { width: imgWidth, height: imgHeight }
       });
 
       if (hasViolation) {
