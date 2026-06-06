@@ -145,7 +145,8 @@ export const referenceFactSchema = z.object({
   actualValue: z.union([z.number(), z.string()]).optional(),
   unit: z.string().optional(),
   proposedChangeVector: z.string().optional(),
-  blocksChangeVectors: z.array(z.string()).optional()
+  blocksChangeVectors: z.array(z.string()).optional(),
+  blocksClaimsMatching: z.array(z.string()).optional()
 });
 
 export const referenceContextSchema = z.object({
@@ -194,7 +195,7 @@ export const overlapLegibilityRegionSchema = z.object({
   }),
   avoidColors: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
   minClearancePx: z.number().nonnegative().optional(),
-  maxOverlapPercent: z.number().min(0).max(1).optional(),
+  maxOverlapPercent: z.number().min(0).max(100).optional(),
   severity: z.enum(['critical', 'high', 'medium', 'low', 'warning']).optional()
 });
 

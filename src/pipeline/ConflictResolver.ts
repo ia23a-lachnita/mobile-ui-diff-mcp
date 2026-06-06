@@ -21,6 +21,7 @@ export interface ReferenceContextConfig {
     unit?: string;
     proposedChangeVector?: string;
     blocksChangeVectors?: string[];
+    blocksClaimsMatching?: string[];
   }>;
 }
 
@@ -45,16 +46,39 @@ export class ConflictResolver {
     // Load reference facts as high-authority source evidence
     const sourceFacts: Evidence[] = allEvidence.filter((e) => e.authority === 'source');
 
-    // Rule 1: Model finding contradicted by source fact → block model finding
+    // Rule 1: Model finding contradicted by source fact → block model finding.
+    // Subject matching: exact match, or global, or the model subject starts with the source subject prefix.
     const modelEvidence = allEvidence.filter((e) => e.authority === 'model' && !e.blocked);
     for (const modelItem of modelEvidence) {
       for (const sourceFact of sourceFacts) {
-        if (sourceFact.subject === modelItem.subject || sourceFact.subject === 'global') {
+        const subjectMatches =
+          sourceFact.subject === modelItem.subject ||
+          sourceFact.subject === 'global' ||
+          modelItem.subject.startsWith(sourceFact.subject);
+        if (subjectMatches) {
           if (this.claimsContradict(sourceFact, modelItem)) {
             graph.block(modelItem.claimId, 'SOURCE_CONTRADICTION');
             blockedClaimIds.push(modelItem.claimId);
             warnings.push(`Model claim '${modelItem.claimId}' blocked: contradicted by source fact '${sourceFact.claimId}'`);
           }
+        }
+      }
+    }
+
+    // Rule 1b: Source fact has explicit blocksClaimsMatching phrases — block any model claim whose
+    // text contains one of the listed phrases (case-insensitive substring match).
+    for (const modelItem of allEvidence.filter((e) => e.authority === 'model' && !e.blocked)) {
+      for (const sourceFact of sourceFacts) {
+        if (blockedClaimIds.includes(modelItem.claimId)) break;
+        const patternsRaw = typeof sourceFact.measurements?.blocksClaimsMatching === 'string'
+          ? (sourceFact.measurements.blocksClaimsMatching as string).split('|||').map((s: string) => s.trim()).filter(Boolean)
+          : [];
+        if (patternsRaw.length === 0) continue;
+        const claimLower = modelItem.claim.toLowerCase();
+        if (patternsRaw.some((p: string) => claimLower.includes(p.toLowerCase()))) {
+          graph.block(modelItem.claimId, 'SOURCE_CONTRADICTION');
+          blockedClaimIds.push(modelItem.claimId);
+          warnings.push(`Model claim '${modelItem.claimId}' blocked: matches blocksClaimsMatching phrase from source fact '${sourceFact.claimId}'`);
         }
       }
     }

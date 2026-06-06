@@ -106,7 +106,8 @@ export class ArtifactBuilder {
         roi.coordinateSpace ?? 'expected',
         roi.coordinateSpace === 'actual' ? actualSourceWidth : expectedPng.width,
         roi.coordinateSpace === 'actual' ? actualSourceHeight : expectedPng.height
-      )
+      ),
+      coordinateSpace: 'expected' as const
     }));
 
     const runId = `run-${Date.now()}`;

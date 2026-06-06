@@ -237,6 +237,98 @@ describe('ConflictResolver', () => {
     expect(result.requiresUserDecision).toBe(false);
   });
 
+  it('blocksClaimsMatching: source fact blocks model claim containing listed phrase', () => {
+    const graph = new EvidenceGraph();
+    // Source fact: recent scans count is a muted label, NOT a green filled pill
+    graph.add({
+      source: 'referenceContext',
+      claimId: 'ref-fact-recent-scans-badge',
+      subject: 'recent-scans-count',
+      claim: 'Recent scans count is muted label text, not a green filled pill',
+      confidence: 1.0,
+      authority: 'source',
+      measurements: {
+        factId: 'recent-scans-badge',
+        authorityLevel: 'high',
+        blocksClaimsMatching: 'green pill|||filled pill|||badge should be green'
+      }
+    });
+    // Model claim: contradicts source by saying green pill is expected
+    graph.add({
+      source: 'modelJudge',
+      claimId: 'openrouter-ring-hero-LC01',
+      subject: 'recent-scans-count',
+      claim: 'Recent scans reference shows a green pill should be displayed',
+      confidence: 0.85,
+      authority: 'model'
+    });
+
+    const resolver = new ConflictResolver();
+    const result = resolver.resolve(graph);
+    expect(result.blockedClaimIds).toContain('openrouter-ring-hero-LC01');
+    const blocked = graph.getAll().find((e) => e.claimId === 'openrouter-ring-hero-LC01');
+    expect(blocked?.blocked).toBe(true);
+    expect(blocked?.blockReason).toBe('SOURCE_CONTRADICTION');
+  });
+
+  it('blocksClaimsMatching: model claim NOT containing any phrase survives', () => {
+    const graph = new EvidenceGraph();
+    graph.add({
+      source: 'referenceContext',
+      claimId: 'ref-fact-badge',
+      subject: 'recent-scans-count',
+      claim: 'Recent scans count is muted label text, not a green filled pill',
+      confidence: 1.0,
+      authority: 'source',
+      measurements: {
+        factId: 'badge',
+        authorityLevel: 'high',
+        blocksClaimsMatching: 'green pill|||filled pill'
+      }
+    });
+    graph.add({
+      source: 'modelJudge',
+      claimId: 'model-color-mismatch',
+      subject: 'recent-scans-count',
+      claim: 'Icon color appears lighter than expected in the mockup',
+      confidence: 0.7,
+      authority: 'model'
+    });
+
+    const resolver = new ConflictResolver();
+    const result = resolver.resolve(graph);
+    expect(result.blockedClaimIds).not.toContain('model-color-mismatch');
+  });
+
+  it('blocksClaimsMatching: subject prefix match — source fact on parent subject blocks child model claim', () => {
+    const graph = new EvidenceGraph();
+    graph.add({
+      source: 'referenceContext',
+      claimId: 'ref-fact-macro-ring',
+      subject: 'roi:macro-ring-hero',
+      claim: 'Macro ring values are correct',
+      confidence: 1.0,
+      authority: 'source',
+      measurements: {
+        factId: 'macro-ring-values',
+        authorityLevel: 'high',
+        blocksClaimsMatching: 'wrong arc sweep|||incorrect sweep'
+      }
+    });
+    graph.add({
+      source: 'modelJudge',
+      claimId: 'nvidia-ring-hero-LC102',
+      subject: 'roi:macro-ring-hero',
+      claim: 'Cyan arc shows wrong arc sweep of -17.6 degrees',
+      confidence: 0.9,
+      authority: 'model'
+    });
+
+    const resolver = new ConflictResolver();
+    const result = resolver.resolve(graph);
+    expect(result.blockedClaimIds).toContain('nvidia-ring-hero-LC102');
+  });
+
   it('source contradiction blocks model-proposed app change vector', () => {
     const graph = new EvidenceGraph();
     // Source fact: no change expected

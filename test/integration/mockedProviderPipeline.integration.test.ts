@@ -129,7 +129,7 @@ describe('overlapLegibility severity drives visualAuditStatus via runScreenUiDif
     id: 'pill',
     box: { x: 5, y: 25, width: 45, height: 45 },
     avoidColors: ['#00dc00'],
-    maxOverlapPercent: 0.01
+    maxOverlapPercent: 1
   };
 
   it('warning severity produces pass_with_caveats, non-blocking caveat, and artifact on disk', async () => {
@@ -315,6 +315,100 @@ describe('full-path source-contradiction via referenceContext config and runScre
         w.toLowerCase().includes('blocked') ||
         w.toLowerCase().includes('contradiction') ||
         w.toLowerCase().includes('seed')
+      )
+    ).toBe(true);
+  });
+});
+
+// ── 3b. Recent Scans green-pill contradiction via blocksClaimsMatching ────────
+
+describe('Recent Scans source-fact: blocksClaimsMatching removes green-pill claim', () => {
+  it('model claim matching blocksClaimsMatching phrase is absent from visualCaveats', async () => {
+    MockedProvider.mockImplementation(function() { return {
+      analyze: vi.fn().mockResolvedValue([
+        {
+          source: 'modelJudge',
+          claimId: 'judge-recent-scans-green-pill',
+          subject: 'roi:test-roi',
+          claim: 'Recent scans label appears as a green filled pill but muted text is expected',
+          confidence: 0.87,
+          authority: 'model',
+          polarity: 'mismatch',
+          blocking: true,
+          proposedChangeVector: 'ui_style'
+        },
+        {
+          source: 'modelJudge',
+          claimId: 'judge-unrelated-claim',
+          subject: 'roi:test-roi',
+          claim: 'Macro ring arc shorter than expected',
+          confidence: 0.78,
+          authority: 'model',
+          polarity: 'mismatch',
+          blocking: true,
+          proposedChangeVector: 'seed_data'
+        }
+      ])
+    }; } as any);
+    process.env.OPENROUTER_API_KEY = 'test-key-green-pill';
+
+    const expectedPath = await writeFile('expected.png', makeWhitePng());
+    const configPath = await writeConfig('home', {
+      platform: 'none',
+      expectedImage: expectedPath,
+      outputDir: path.join(tmpDir, 'runs'),
+      visualAuditMode: 'visual_parity',
+      regionsOfInterest: [{
+        id: 'test-roi',
+        label: 'Test Region',
+        type: 'component',
+        critical: false,
+        box: { x: 0, y: 0, width: 100, height: 100 }
+      }],
+      modelJudges: {
+        enabled: true,
+        required: false,
+        primary: { provider: 'openrouter', model: 'test-model' }
+      },
+      referenceContext: {
+        enabled: true,
+        facts: [{
+          id: 'recent-scans-is-muted-text',
+          subject: 'global',
+          claim: 'Recent scans label renders as muted text — the green filled pill style is a reference fixture artifact, not a real UI state',
+          authority: 'high',
+          blocksClaimsMatching: ['green filled pill', 'recent scans']
+        }]
+      }
+    });
+
+    const run = await runScreenUiDiff({
+      screen: 'home',
+      configPath,
+      actualImage: await writeFile('actual.png', makeWhitePng()),
+      runName: 'run-green-pill'
+    });
+
+    // The green-pill claim must be blocked and absent from visualCaveats
+    expect(run.visualCaveats?.find((c) => c.id === 'judge-recent-scans-green-pill')).toBeUndefined();
+
+    // The unrelated claim must survive (proves selective filtering)
+    expect(run.visualCaveats?.find((c) => c.id === 'judge-unrelated-claim')).toBeDefined();
+
+    // report.json must agree
+    const persisted = JSON.parse(await fs.readFile(run.run.reportPath, 'utf-8'));
+    expect(persisted.visualCaveats?.find((c: any) => c.id === 'judge-recent-scans-green-pill')).toBeUndefined();
+    expect(persisted.visualCaveats?.find((c: any) => c.id === 'judge-unrelated-claim')).toBeDefined();
+
+    // A blocking warning must appear somewhere
+    const allWarnings: string[] = [
+      ...(persisted.warnings ?? []),
+      ...(run.agentSummary?.warnings ?? [])
+    ];
+    expect(
+      allWarnings.some((w) =>
+        w.toLowerCase().includes('blocked') &&
+        (w.toLowerCase().includes('green') || w.toLowerCase().includes('recent'))
       )
     ).toBe(true);
   });

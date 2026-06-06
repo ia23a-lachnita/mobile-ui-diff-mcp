@@ -10,13 +10,31 @@ function isProviderErrorEvidence(e: Evidence): boolean {
   return !!(e.measurements?.error) || /-(error|parse-error)-/.test(e.claimId);
 }
 
-/** polarity:'match' evidence is never a visual caveat — it is confirmation only. Config metadata is not a visual finding. */
+/** polarity:'match' evidence is never a visual caveat — it is confirmation only. Config metadata is not a visual finding. Data-value observations are not visual defects. */
 function isCaveatEligible(e: Evidence): boolean {
   const polarity = (e as any).polarity as string | undefined;
   if (polarity === 'match') return false;
   if (polarity === 'error') return false;
   if (isConfigMetadataObservation(e.claim)) return false;
+  if (isDataObservation(e.claim)) return false;
   return true;
+}
+
+/**
+ * Pure data-value observations (e.g. "1,420 kcal is displayed as consumed") describe what is
+ * shown, not a visual defect. They must never become blocking visual caveats regardless of the
+ * model's confidence or severity. A claim is a data observation if it only reports a numeric or
+ * text value being displayed without asserting it is visually wrong.
+ */
+function isDataObservation(claim: string): boolean {
+  const lower = claim.toLowerCase();
+  // Patterns: "X is displayed", "X is shown", "X appears" where X is a data value
+  if (/\b\d[\d,]*\.?\d*\s*(kcal|cal|g|mg|ml|lb|oz|km|mi|%|px)?\b.*\bis (displayed|shown|listed|visible|present)\b/.test(lower)) return true;
+  if (/\bis displayed as\b/.test(lower) && !/\bwrong\b|\bincorrect\b|\bdoes not match\b|\bshould be\b|\bexpected\b/.test(lower)) return true;
+  if (/\bis shown as\b/.test(lower) && !/\bwrong\b|\bincorrect\b|\bdoes not match\b|\bshould be\b|\bexpected\b/.test(lower)) return true;
+  // "X kcal is displayed" pattern — pure observation without asserting wrong
+  if (/^\d[\d,]*\.?\d*\s*(kcal|cal|g|mg|ml)?\s+\w+\s+is\s+(displayed|shown)\b/.test(lower)) return true;
+  return false;
 }
 
 /**
@@ -43,8 +61,9 @@ function evidenceToVisualCaveat(e: Evidence): VisualCaveat {
   else if (e.confidence >= 0.5) severity = 'medium';
   else severity = 'low';
   // blocking requires explicit blocking:true AND polarity:'mismatch' — confidence alone must not block
-  // Config/metadata observations (e.g. "ROI has 1 dynamic subregion configured") must never block
-  const blocking = explicitBlocking === true && polarity === 'mismatch' && !isConfigMetadataObservation(e.claim);
+  // Config/metadata and pure data observations must never block
+  const blocking = explicitBlocking === true && polarity === 'mismatch' &&
+    !isConfigMetadataObservation(e.claim) && !isDataObservation(e.claim);
   return {
     id: e.claimId,
     source: e.source,

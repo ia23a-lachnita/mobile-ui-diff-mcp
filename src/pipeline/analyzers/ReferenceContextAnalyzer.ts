@@ -50,7 +50,8 @@ export class ReferenceContextAnalyzer implements IAnalyzer {
         measurements: {
           factId: fact.id,
           authorityLevel,
-          ...(fact.blocksChangeVectors ? { blocksChangeVectors: fact.blocksChangeVectors.join(',') } : {})
+          ...(fact.blocksChangeVectors ? { blocksChangeVectors: fact.blocksChangeVectors.join(',') } : {}),
+          ...(fact.blocksClaimsMatching ? { blocksClaimsMatching: fact.blocksClaimsMatching.join('|||') } : {})
         },
         ...(fact.claimType !== undefined ? { claimType: fact.claimType } : {}),
         ...(fact.expectedValue !== undefined ? { expectedValue: fact.expectedValue } : {}),
