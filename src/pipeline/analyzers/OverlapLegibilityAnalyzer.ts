@@ -4,7 +4,7 @@ import { PNG } from 'pngjs';
 import { IAnalyzer, AnalyzerContext } from './IAnalyzer';
 import { AnalyzerResult } from '../types';
 import { EvidenceGraph } from '../EvidenceGraph';
-import { VisualCaveat, RegionOfInterestConfig, OverlapLegibilityRegionResult } from '../../types';
+import { VisualCaveat, RegionOfInterestConfig, OverlapLegibilityRegionResult, CriterionAuditBundle } from '../../types';
 
 function parseHex(hex: string): { r: number; g: number; b: number } | null {
   const m = hex.match(/^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/);
@@ -191,6 +191,78 @@ async function writeOverlayArtifact(
   }
 }
 
+/** Write the full actual image with the configured box highlighted by a thick magenta border.
+ *  Judges use this to determine what element the box is targeting. */
+async function writeAnnotatedFullScreen(
+  ctx: AnalyzerContext,
+  regionId: string,
+  bx0: number, by0: number, bx1: number, by1: number
+): Promise<string | null> {
+  try {
+    const png = ctx.actualPng;
+    const annotated = new PNG({ width: png.width, height: png.height });
+    png.data.copy(annotated.data);
+
+    const BORDER = 4;
+    // Draw thick magenta border around the box (outside the box, not inside)
+    for (let t = 0; t < BORDER; t++) {
+      // top and bottom bands
+      const top = bx0 - t;
+      const bottom = by1 + t;
+      for (let x = Math.max(0, bx0 - BORDER); x <= Math.min(png.width - 1, bx1 + BORDER); x++) {
+        if (by0 - t >= 0) setPixel(annotated.data, png.width, x, by0 - t, 255, 0, 255, 255);
+        if (by1 + t < png.height) setPixel(annotated.data, png.width, x, by1 + t, 255, 0, 255, 255);
+      }
+      // left and right bands
+      for (let y = Math.max(0, by0 - BORDER); y <= Math.min(png.height - 1, by1 + BORDER); y++) {
+        if (bx0 - t >= 0) setPixel(annotated.data, png.width, bx0 - t, y, 255, 0, 255, 255);
+        if (bx1 + t < png.width) setPixel(annotated.data, png.width, bx1 + t, y, 255, 0, 255, 255);
+      }
+      void top; void bottom; // suppress unused warnings
+    }
+
+    const artifactPath = path.join(ctx.outputDir, `overlap-legibility-${regionId}-annotated.png`);
+    await fs.writeFile(artifactPath, PNG.sync.write(annotated));
+    return artifactPath;
+  } catch {
+    return null;
+  }
+}
+
+/** Write a generous-margin crop from the given PNG without any overlays (original pixels). */
+async function writeGenerousCrop(
+  png: PNG,
+  outputPath: string,
+  bx0: number, by0: number, bx1: number, by1: number,
+  marginPx: number
+): Promise<string | null> {
+  try {
+    const cx0 = Math.max(0, bx0 - marginPx);
+    const cy0 = Math.max(0, by0 - marginPx);
+    const cx1 = Math.min(png.width, bx1 + marginPx);
+    const cy1 = Math.min(png.height, by1 + marginPx);
+    const cropW = cx1 - cx0;
+    const cropH = cy1 - cy0;
+    if (cropW <= 0 || cropH <= 0) return null;
+
+    const crop = new PNG({ width: cropW, height: cropH });
+    for (let y = 0; y < cropH; y++) {
+      for (let x = 0; x < cropW; x++) {
+        const srcIdx = ((cy0 + y) * png.width + (cx0 + x)) << 2;
+        const dstIdx = (y * cropW + x) << 2;
+        crop.data[dstIdx] = png.data[srcIdx];
+        crop.data[dstIdx + 1] = png.data[srcIdx + 1];
+        crop.data[dstIdx + 2] = png.data[srcIdx + 2];
+        crop.data[dstIdx + 3] = png.data[srcIdx + 3];
+      }
+    }
+    await fs.writeFile(outputPath, PNG.sync.write(crop));
+    return outputPath;
+  } catch {
+    return null;
+  }
+}
+
 export class OverlapLegibilityAnalyzer implements IAnalyzer {
   readonly name = 'OverlapLegibilityAnalyzer';
   readonly stage = 'stage1_deterministic' as const;
@@ -199,6 +271,7 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
     const start = Date.now();
     const visualCaveats: VisualCaveat[] = [];
     const regionResults: OverlapLegibilityRegionResult[] = [];
+    const criterionAuditBundles: CriterionAuditBundle[] = [];
 
     const config = ctx.config.overlapLegibility;
     // Treat omitted `enabled` as true when regions are present; only skip when explicitly disabled.
@@ -226,6 +299,9 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
           roiId: region.roiId,
           checked: false,
           status: 'skipped',
+          targetStatus: 'not_checked',
+          measurementStatus: 'not_evaluated',
+          judgeAuditStatus: 'not_run',
           skipReason: 'No valid avoidColors configured'
         });
         continue;
@@ -248,6 +324,9 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
           roiId: region.roiId,
           checked: false,
           status: 'error',
+          targetStatus: 'not_checked',
+          measurementStatus: 'not_evaluated',
+          judgeAuditStatus: 'not_run',
           skipReason: `Coordinate resolution failed: ${err?.message ?? String(err)}`,
           imageSize: { width: imgWidth, height: imgHeight },
           ...(roiForDebug ? { roiBox: roiForDebug.box } : {})
@@ -268,6 +347,9 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
           roiId: region.roiId,
           checked: false,
           status: 'error',
+          targetStatus: 'not_checked',
+          measurementStatus: 'not_evaluated',
+          judgeAuditStatus: 'not_run',
           skipReason: `Resolved box is empty or out of image bounds (${bx0},${by0})-(${bx1},${by1}); clamped to (${x0},${y0})-(${x1},${y1}); image=${imgWidth}x${imgHeight}`,
           resolvedBox: { x: bx0, y: by0, width: bx1 - bx0, height: by1 - by0, coordinateSpace: region.coordinateSpace ?? 'expected' },
           imageSize: { width: imgWidth, height: imgHeight },
@@ -346,16 +428,39 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
         }
       });
 
-      // Always write artifact — even for passing regions (proves what was measured)
+      // Always write overlay diagnostic artifact
       const artifactPath = await writeOverlayArtifact(ctx, region.id, png, x0, y0, x1, y1, avoidColors, colorThreshold, clearance, nearestAvoidColorDistancePx);
 
+      // Criterion audit artifacts: annotated full-screen + generous crops (original pixels)
+      const GENEROUS_MARGIN = Math.max(100, clearance + 60);
+      const annotatedActualPath = await writeAnnotatedFullScreen(ctx, region.id, x0, y0, x1, y1);
+      const expectedCropPath = await writeGenerousCrop(
+        ctx.expectedPng,
+        path.join(ctx.outputDir, `overlap-legibility-${region.id}-expected-crop.png`),
+        x0, y0, x1, y1, GENEROUS_MARGIN
+      );
+      const actualCropPath = await writeGenerousCrop(
+        png,
+        path.join(ctx.outputDir, `overlap-legibility-${region.id}-actual-crop.png`),
+        x0, y0, x1, y1, GENEROUS_MARGIN
+      );
+
       const regionStatus: OverlapLegibilityRegionResult['status'] = hasViolation ? 'caveat' : 'pass';
+      const measurementStatus: OverlapLegibilityRegionResult['measurementStatus'] = hasViolation ? 'caveat' : 'pass';
+
+      const criterionArtifacts: OverlapLegibilityRegionResult['criterionArtifacts'] = {};
+      if (annotatedActualPath) criterionArtifacts.annotatedActualScreen = annotatedActualPath;
+      if (expectedCropPath) criterionArtifacts.expectedCrop = expectedCropPath;
+      if (actualCropPath) criterionArtifacts.actualCrop = actualCropPath;
 
       regionResults.push({
         id: region.id,
         roiId: region.roiId,
         checked: true,
         status: regionStatus,
+        targetStatus: 'not_checked',
+        measurementStatus,
+        judgeAuditStatus: 'not_run',
         overlapPercent,
         nearestAvoidColorDistancePx,
         coloredPixelCountInBox: matchCount,
@@ -363,8 +468,31 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
         minClearancePx: clearance,
         artifactPath: artifactPath ?? null,
         resolvedBox: { x: x0, y: y0, width: x1 - x0, height: y1 - y0, coordinateSpace: 'expected' },
-        imageSize: { width: imgWidth, height: imgHeight }
+        imageSize: { width: imgWidth, height: imgHeight },
+        ...(Object.keys(criterionArtifacts).length > 0 ? { criterionArtifacts } : {})
       });
+
+      // Build criterion audit bundle for this region
+      const deterministicSummary = hasViolation
+        ? (proximityViolation && overlapPercent <= maxAllowed
+            ? `Clearance violation: avoid-color pixels within ${clearance}px of the box (nearest: ${nearestAvoidColorDistancePx?.toFixed(1) ?? 'N/A'}px). Overlap: ${(overlapPercent * 100).toFixed(2)}%.`
+            : `Overlap violation: ${(overlapPercent * 100).toFixed(2)}% overlap with avoid-colors (max ${(maxAllowed * 100).toFixed(1)}%). Nearest avoid-color: ${nearestAvoidColorDistancePx?.toFixed(1) ?? 'N/A'}px.`)
+        : `No violation. Overlap: ${(overlapPercent * 100).toFixed(2)}% (max ${(maxAllowed * 100).toFixed(1)}%). Nearest avoid-color: ${nearestAvoidColorDistancePx?.toFixed(1) ?? 'N/A'}px.`;
+
+      const bundle: CriterionAuditBundle = {
+        criterionId: region.id,
+        criterionLabel: region.label ?? region.id,
+        resolvedBox: { x0, y0, x1, y1 },
+        deterministicSummary,
+        artifacts: {
+          fullActualScreen: ctx.actualImagePath,
+          ...(annotatedActualPath ? { annotatedActualScreen: annotatedActualPath } : {}),
+          ...(expectedCropPath ? { expectedCrop: expectedCropPath } : {}),
+          ...(actualCropPath ? { actualCrop: actualCropPath } : {}),
+          ...(artifactPath ? { diagnosticArtifact: artifactPath } : {})
+        }
+      };
+      criterionAuditBundles.push(bundle);
 
       if (hasViolation) {
         const reason = proximityViolation && overlapPercent <= maxAllowed
@@ -403,7 +531,8 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
       overlapLegibilitySummary: {
         enabled: true,
         regions: regionResults
-      }
+      },
+      criterionAuditBundles: criterionAuditBundles.length > 0 ? criterionAuditBundles : undefined
     };
   }
 }

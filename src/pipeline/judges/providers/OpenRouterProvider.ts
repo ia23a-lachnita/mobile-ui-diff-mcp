@@ -1,8 +1,28 @@
 import fs from 'fs/promises';
 import { IModelJudgeProvider } from '../IModelJudge';
 import { Evidence, EvidenceBundle } from '../../types';
+import { CriterionAuditBundle, CriterionJudgeResult } from '../../../types';
 import { VALID_CHANGE_VECTORS } from '../../constants';
 import { EVIDENCE_JSON_SCHEMA } from './evidenceSchema';
+
+const CRITERION_JUDGE_SCHEMA = {
+  name: 'CriterionJudgeResult',
+  strict: true,
+  schema: {
+    $schema: 'http://json-schema.org/draft-07/schema#',
+    type: 'object',
+    required: ['criterionId', 'targetStatus', 'judgeAuditStatus', 'reasoning', 'confidence'],
+    properties: {
+      criterionId: { type: 'string' },
+      targetStatus: { type: 'string', enum: ['matched', 'not_matched', 'ambiguous'] },
+      measurementCredible: { type: 'boolean' },
+      judgeAuditStatus: { type: 'string', enum: ['pass', 'caveat', 'fail', 'target_mismatch'] },
+      reasoning: { type: 'string' },
+      confidence: { type: 'number', minimum: 0, maximum: 1 }
+    },
+    additionalProperties: false
+  }
+};
 
 export class OpenRouterProvider implements IModelJudgeProvider {
   readonly providerName = 'openrouter';
@@ -122,6 +142,153 @@ export class OpenRouterProvider implements IModelJudgeProvider {
     ];
 
     return this.callWithRetry(messages, bundle.roiId);
+  }
+
+  async analyzeCriterion(packet: CriterionAuditBundle): Promise<CriterionJudgeResult> {
+    const { criterionId, criterionLabel, criterionDescription, deterministicSummary, artifacts } = packet;
+
+    const prompt = [
+      'You are a visual criterion judge for a mobile UI diff pipeline.',
+      '',
+      `CRITERION ID: ${criterionId}`,
+      `CRITERION: ${criterionLabel}`,
+      ...(criterionDescription ? [`DESCRIPTION: ${criterionDescription}`] : []),
+      '',
+      'YOUR TASK (execute in order):',
+      '1. Look at the ANNOTATED ACTUAL SCREEN (image 3). Locate the highlighted box (drawn with a bright magenta/pink border).',
+      `2. Determine whether the highlighted box actually covers the intended element: "${criterionLabel}".`,
+      '   - If the box covers a WRONG element (e.g., the wrong text, a different widget), set targetStatus: "not_matched" and judgeAuditStatus: "target_mismatch".',
+      '   - If the box location is ambiguous and you cannot be certain which element it targets, set targetStatus: "ambiguous".',
+      '   - If the box correctly covers the intended element, set targetStatus: "matched".',
+      '3. ONLY if targetStatus is "matched": evaluate whether the target element is legible and not visually compromised.',
+      '   - Set judgeAuditStatus: "pass" if the element looks correct and unobstructed.',
+      '   - Set judgeAuditStatus: "caveat" if there is minor visual crowding or overlap.',
+      '   - Set judgeAuditStatus: "fail" if the element is clearly obstructed or illegible.',
+      '   - Also assess whether the deterministic measurement is credible (measurementCredible: true/false).',
+      '',
+      'IMAGE ORDER:',
+      '  1. EXPECTED SCREEN (design reference or generous expected crop)',
+      '  2. ACTUAL SCREEN (generous actual crop, original pixels — no overlays)',
+      '  3. ANNOTATED ACTUAL SCREEN (full actual with highlighted target box — USE THIS to see WHERE the box points)',
+      '  4. DIAGNOSTIC ARTIFACT (deterministic overlap overlay — supporting evidence only, may be omitted)',
+      '',
+      'DETERMINISTIC MEASUREMENT SUMMARY:',
+      deterministicSummary ?? '  (none)',
+      '',
+      'CRITICAL RULES:',
+      '  • Do NOT evaluate unrelated UI differences — only evaluate this criterion.',
+      '  • The annotated actual screen (image 3) is the primary source for target validation.',
+      '  • If you cannot clearly see the annotated actual screen, set targetStatus: "ambiguous".',
+      '  • target_mismatch means the highlighted box is pointing at the wrong element — do not use it for legibility failures.',
+    ].join('\n');
+
+    const imagePaths = [
+      artifacts.expectedCrop,
+      artifacts.actualCrop,
+      artifacts.annotatedActualScreen,
+      artifacts.diagnosticArtifact
+    ].filter(Boolean) as string[];
+
+    let images: string[] = [];
+    try {
+      images = await Promise.all(
+        imagePaths.map(async (p) => {
+          try {
+            const buf = await fs.readFile(p);
+            return `data:image/png;base64,${buf.toString('base64')}`;
+          } catch {
+            return null;
+          }
+        })
+      ).then((results) => results.filter(Boolean) as string[]);
+    } catch {
+      // proceed text-only
+    }
+
+    const messages: any[] = [
+      {
+        role: 'user',
+        content: images.length > 0
+          ? [
+              { type: 'text', text: prompt },
+              ...images.map((img) => ({ type: 'image_url', image_url: { url: img } }))
+            ]
+          : prompt
+      }
+    ];
+
+    return this.callCriterionWithRetry(messages, criterionId);
+  }
+
+  private async callCriterionWithRetry(messages: any[], criterionId: string, attempt = 0): Promise<CriterionJudgeResult> {
+    let responseText = '';
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      let response: Response;
+      try {
+        response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: this.model,
+            messages,
+            response_format: { type: 'json_schema', json_schema: CRITERION_JUDGE_SCHEMA }
+          }),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`OpenRouter API error ${response.status}: ${text}`);
+      }
+
+      const data = await response.json() as any;
+      responseText = data?.choices?.[0]?.message?.content ?? '';
+    } catch (err: any) {
+      return {
+        criterionId,
+        targetStatus: 'ambiguous',
+        judgeAuditStatus: 'unavailable',
+        reasoning: err?.name === 'AbortError'
+          ? `Criterion judge timed out after ${this.timeoutMs}ms`
+          : `Criterion judge failed: ${err?.message ?? String(err)}`,
+        confidence: 0
+      };
+    }
+
+    const VALID_TARGET_STATUS = new Set(['matched', 'not_matched', 'ambiguous']);
+    const VALID_JUDGE_AUDIT_STATUS = new Set(['pass', 'caveat', 'fail', 'target_mismatch']);
+    try {
+      const parsed = JSON.parse(responseText);
+      if (!VALID_TARGET_STATUS.has(parsed.targetStatus)) throw new Error(`Invalid targetStatus: ${parsed.targetStatus}`);
+      if (!VALID_JUDGE_AUDIT_STATUS.has(parsed.judgeAuditStatus)) throw new Error(`Invalid judgeAuditStatus: ${parsed.judgeAuditStatus}`);
+      return {
+        criterionId: parsed.criterionId ?? criterionId,
+        targetStatus: parsed.targetStatus,
+        measurementCredible: typeof parsed.measurementCredible === 'boolean' ? parsed.measurementCredible : undefined,
+        judgeAuditStatus: parsed.judgeAuditStatus,
+        reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : '',
+        confidence: typeof parsed.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence)) : 0.5
+      };
+    } catch (parseErr: any) {
+      if (this.retryOnParseError && attempt < this.maxRetries) {
+        return this.callCriterionWithRetry(messages, criterionId, attempt + 1);
+      }
+      return {
+        criterionId,
+        targetStatus: 'ambiguous',
+        judgeAuditStatus: 'unavailable',
+        reasoning: `Criterion judge returned unparseable response: ${parseErr?.message ?? 'parse error'}`,
+        confidence: 0
+      };
+    }
   }
 
   private async callWithRetry(messages: any[], roiId: string, attempt = 0): Promise<Evidence[]> {

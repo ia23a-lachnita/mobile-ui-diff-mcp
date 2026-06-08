@@ -7,6 +7,7 @@ import { EvidenceBundleBuilder } from './EvidenceBundleBuilder';
 import { ConflictResolver } from './ConflictResolver';
 import { VerdictEngine } from './VerdictEngine';
 import { ModelJudgeAnalyzer, ModelJudgesConfig } from './judges/ModelJudgeAnalyzer';
+import { CriterionJudgeAnalyzer, buildCriterionProvider } from './judges/CriterionJudgeAnalyzer';
 import { ReferenceContextAnalyzer } from './analyzers/ReferenceContextAnalyzer';
 import { IAnalyzer } from './analyzers/IAnalyzer';
 import { InvalidCaptureAnalyzer } from './analyzers/InvalidCaptureAnalyzer';
@@ -470,10 +471,12 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   for (let i = 0; i < remainingStage1.length; i++) {
     perAnalyzerMs[remainingStage1[i].name] = remainingResults[i].durationMs;
   }
+  let criterionAuditBundles: import('../types').CriterionAuditBundle[] = [];
   for (const r of remainingResults) {
     warnings.push(...r.warnings);
     if (r.visualCaveats) visualCaveats.push(...r.visualCaveats);
     if (r.overlapLegibilitySummary) overlapLegibilitySummary = r.overlapLegibilitySummary;
+    if (r.criterionAuditBundles) criterionAuditBundles.push(...r.criterionAuditBundles);
   }
 
   // ---- Inline ROI quality analysis (faithful port from original compareImages.ts) ----
@@ -774,6 +777,39 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     warnings.push('Model judges disabled without explicitSkipReason. Set explicitSkipReason to confirm metric-only mode, or enable judges for visual parity.');
   }
 
+  // ---- Stage 2.5: Criterion audit judges for overlap legibility regions ----
+  // Runs after the main ModelJudgeAnalyzer. Each criterion judge validates that the configured box
+  // covers the intended target element before trusting the deterministic measurement.
+  if (criterionAuditBundles.length > 0 && modelJudgesInput?.enabled && !isInvalidCapture) {
+    const primaryCfg = (modelJudgesInput as any).primary as { provider: 'openrouter' | 'nvidia'; model: string } | undefined;
+    if (primaryCfg) {
+      const timeoutMs = (modelJudgesInput as any).timeoutMs ?? 45000;
+      const maxRetries = (modelJudgesInput as any).maxRetries ?? 1;
+      const retryOnParseError = (modelJudgesInput as any).retryOnParseError !== false;
+      const criterionProvider = buildCriterionProvider(primaryCfg, timeoutMs, maxRetries, retryOnParseError);
+      if (criterionProvider && overlapLegibilitySummary) {
+        const criterionAnalyzer = new CriterionJudgeAnalyzer();
+        const criterionResults = await criterionAnalyzer.run(criterionAuditBundles, criterionProvider);
+        // Merge criterion judge results into overlapLegibilitySummary
+        overlapLegibilitySummary = {
+          enabled: true,
+          regions: overlapLegibilitySummary.regions.map((region) => {
+            const cr = criterionResults.get(region.id);
+            if (!cr) return region;
+            const invalidTarget = cr.targetStatus === 'not_matched' || cr.targetStatus === 'ambiguous';
+            return {
+              ...region,
+              targetStatus: cr.targetStatus,
+              judgeAuditStatus: cr.judgeAuditStatus,
+              measurementStatus: invalidTarget ? ('not_evaluated' as const) : region.measurementStatus,
+              status: invalidTarget ? ('invalid_target' as const) : region.status
+            };
+          })
+        };
+      }
+    }
+  }
+
   // ---- Stage 3: Conflict resolution (runs before audit status so blocked caveats are filtered out) ----
   const conflictResolver = new ConflictResolver(referenceContextInput);
   const conflictResult = conflictResolver.resolve(graph);
@@ -872,6 +908,29 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     acceptanceStatus = 'metric_only';
   }
 
+  // Override acceptanceStatus when any overlap legibility region has invalid_target.
+  // A wrong-box measurement cannot be trusted — the run must not be accepted.
+  const invalidTargetRegions = overlapLegibilitySummary?.regions.filter((r) => r.status === 'invalid_target') ?? [];
+  if (invalidTargetRegions.length > 0) {
+    if (acceptanceStatus === 'accepted' || acceptanceStatus === 'metric_only') {
+      acceptanceStatus = 'rejected';
+    }
+    if (!actionRequired) {
+      const ids = invalidTargetRegions.map((r) => `'${r.id}'`).join(', ');
+      actionRequired = {
+        type: 'invalid_overlap_target',
+        severity: 'blocking',
+        message: `Overlap/legibility measurement target(s) could not be validated: ${ids}. The configured box may be pointing at the wrong UI element.`,
+        recommendedUserPrompt: 'Review the overlap legibility configuration. The annotated artifact shows where the configured box is pointing. Adjust the box coordinates to cover the intended UI element, then re-run.',
+        suggestedFixes: [
+          'Inspect the annotated artifact (overlap-legibility-*-annotated.png) to see where the box is pointing',
+          'Adjust the box coordinates in overlapLegibility.regions to cover the intended UI element',
+          'Re-run to confirm targetStatus becomes "matched"'
+        ]
+      };
+    }
+  }
+
   // vlmAnalysisStatus — describes legacy Ollama VLM path separately from model judges
   let vlmAnalysisStatus: VlmAnalysisStatus;
   if (!shouldUseVlm) {
@@ -949,7 +1008,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   }
 
   // ---- Stage 4: Verdict ----
-  const reportStatus: DiffReport['status'] = isInvalidCapture ? 'fail' : pixelDiff.diffPercent <= maxDiffPercent ? 'pass' : 'fail';
+  // Invalid measurement targets must fail the run — the measurement cannot be trusted.
+  const reportStatus: DiffReport['status'] = isInvalidCapture ? 'fail' : invalidTargetRegions.length > 0 ? 'fail' : pixelDiff.diffPercent <= maxDiffPercent ? 'pass' : 'fail';
   const verdictEngine = new VerdictEngine();
   let agentActionContract = verdictEngine.buildAgentActionContract(
     graph,
