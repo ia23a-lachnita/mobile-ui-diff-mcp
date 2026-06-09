@@ -423,6 +423,15 @@ describe('Test C — criterion judge packet construction', () => {
     expect(capturedPackets.length).toBeGreaterThan(0);
     const packet = capturedPackets[0];
 
+    // Packet must include the full expected screen path (design reference)
+    expect(packet.artifacts.fullExpectedScreen).toBeTruthy();
+    await expect(fs.access(packet.artifacts.fullExpectedScreen!)).resolves.toBeUndefined();
+    // Full expected screen must be a real PNG
+    const expectedScreenBuf = await fs.readFile(packet.artifacts.fullExpectedScreen!);
+    const expectedScreenPng = PNG.sync.read(expectedScreenBuf);
+    expect(expectedScreenPng.width).toBe(IMG_W);
+    expect(expectedScreenPng.height).toBe(IMG_H);
+
     // Packet must include the full actual screen path (not just a crop)
     expect(packet.artifacts.fullActualScreen).toBeTruthy();
     await expect(fs.access(packet.artifacts.fullActualScreen!)).resolves.toBeUndefined();
@@ -812,5 +821,470 @@ describe('Test F — old architecture guard: overlap packets must include full-s
       }
     }
     expect(hasMagentaPixel).toBe(true);
+  });
+});
+
+// ── Test G: visual_parity + required hard-fail when criterion audit unavailable ─
+
+describe('Test G — visual_parity required: hard-fail when primary lacks analyzeCriterion', () => {
+  it('rejects run with invalid_overlap_target when primary provider has no analyzeCriterion in visual_parity mode', async () => {
+    // Provider without analyzeCriterion (metric_only / legacy provider)
+    MockedProvider.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([])
+        // No analyzeCriterion
+      };
+    } as any);
+
+    const expectedPath = await writeFile('expected.png', makeWhitePng());
+    const actualPath = await writeFile('actual.png', makeMacroRingImage());
+    const outDir = path.join(tmpDir, 'out-g');
+    await fs.mkdir(outDir, { recursive: true });
+
+    const configPath = await writeConfig('today', {
+      expectedImage: expectedPath,
+      outputDir: outDir,
+      maxDiffPercent: 1,
+      visualAuditMode: 'visual_parity',
+      modelJudges: {
+        enabled: true,
+        required: true,
+        primary: { provider: 'openrouter', model: 'test-model' }
+      },
+      overlapLegibility: {
+        regions: [{
+          id: 'kcal-left-pill',
+          label: '980 kcal left pill',
+          coordinateSpace: 'normalized',
+          box: CORRECT_BOX,
+          avoidColors: ['#00c800'],
+          maxOverlapPercent: 5,
+          severity: 'high'
+        }]
+      }
+    });
+
+    const result = await runScreenUiDiff({
+      screen: 'today', configPath, actualImage: actualPath, runName: 'run-054-g'
+    });
+
+    // Must be rejected — criterion audit required but unavailable
+    expect(result.acceptanceStatus).not.toBe('accepted');
+    expect(result.actionRequired?.type).toBe('invalid_overlap_target');
+    expect(result.actionRequired?.severity).toBe('blocking');
+    expect(result.agentActionContract?.canEditApp).toBe(false);
+  });
+
+  it('no hard-fail when visualAuditMode is metric_only even if primary lacks analyzeCriterion', async () => {
+    MockedProvider.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([])
+        // No analyzeCriterion
+      };
+    } as any);
+
+    const expectedPath = await writeFile('expected.png', makeWhitePng());
+    const actualPath = await writeFile('actual.png', makeMacroRingImage());
+    const outDir = path.join(tmpDir, 'out-g2');
+    await fs.mkdir(outDir, { recursive: true });
+
+    const configPath = await writeConfig('today', {
+      expectedImage: expectedPath,
+      outputDir: outDir,
+      maxDiffPercent: 1,
+      visualAuditMode: 'metric_only',
+      modelJudges: {
+        enabled: true,
+        required: false,
+        primary: { provider: 'openrouter', model: 'test-model' }
+      },
+      overlapLegibility: {
+        regions: [{
+          id: 'kcal-left-pill',
+          label: '980 kcal left pill',
+          coordinateSpace: 'normalized',
+          box: CORRECT_BOX,
+          avoidColors: ['#00c800'],
+          maxOverlapPercent: 5,
+          severity: 'warning'
+        }]
+      }
+    });
+
+    const result = await runScreenUiDiff({
+      screen: 'today', configPath, actualImage: actualPath, runName: 'run-054-g2'
+    });
+
+    // metric_only: not_checked is allowed
+    const region = result.overlapLegibilitySummary?.regions.find((r) => r.id === 'kcal-left-pill');
+    expect(region!.targetStatus).toBe('not_checked');
+    // Must NOT set invalid_overlap_target from criterion audit alone
+    expect(result.actionRequired?.type).not.toBe('invalid_overlap_target');
+  });
+});
+
+// ── Test H: reviewer disagreement → final targetStatus ambiguous ───────────────
+
+import { NvidiaProvider } from '../../src/pipeline/judges/providers/NvidiaProvider';
+
+const MockedNvidiaProvider = vi.mocked(NvidiaProvider);
+
+describe('Test H — reviewer disagreement: primary matched + reviewer not_matched → ambiguous', () => {
+  it('final targetStatus is ambiguous when primary says matched but reviewer says not_matched', async () => {
+    // Primary: matched
+    MockedProvider.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([]),
+        analyzeCriterion: vi.fn().mockResolvedValue({
+          criterionId: 'kcal-left-pill',
+          targetStatus: 'matched',
+          judgeAuditStatus: 'pass',
+          reasoning: 'Box correctly covers the pill.',
+          confidence: 0.85
+        } satisfies CriterionJudgeResult)
+      };
+    } as any);
+
+    // Reviewer: not_matched (disagrees)
+    MockedNvidiaProvider.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([]),
+        analyzeCriterion: vi.fn().mockResolvedValue({
+          criterionId: 'kcal-left-pill',
+          targetStatus: 'not_matched',
+          judgeAuditStatus: 'target_mismatch',
+          reasoning: 'Box appears to cover the central calorie text, not the pill.',
+          confidence: 0.80
+        } satisfies CriterionJudgeResult)
+      };
+    } as any);
+
+    const expectedPath = await writeFile('expected.png', makeWhitePng());
+    const actualPath = await writeFile('actual.png', makeMacroRingImage());
+    const outDir = path.join(tmpDir, 'out-h');
+    await fs.mkdir(outDir, { recursive: true });
+
+    process.env.NVIDIA_API_KEY = 'test-nvidia-key-h';
+
+    const configPath = await writeConfig('today', {
+      expectedImage: expectedPath,
+      outputDir: outDir,
+      maxDiffPercent: 1,
+      visualAuditMode: 'metric_only',
+      modelJudges: {
+        enabled: true,
+        required: false,
+        primary: { provider: 'openrouter', model: 'test-model' },
+        reviewer: { provider: 'nvidia', model: 'test-nvidia-model' }
+      },
+      overlapLegibility: {
+        regions: [{
+          id: 'kcal-left-pill',
+          label: '980 kcal left pill',
+          coordinateSpace: 'normalized',
+          box: CORRECT_BOX,
+          avoidColors: ['#00c800'],
+          maxOverlapPercent: 5,
+          severity: 'high'
+        }]
+      }
+    });
+
+    const result = await runScreenUiDiff({
+      screen: 'today', configPath, actualImage: actualPath, runName: 'run-054-h'
+    });
+
+    const region = result.overlapLegibilitySummary?.regions.find((r) => r.id === 'kcal-left-pill');
+    expect(region).toBeDefined();
+
+    // Disagreement: final must be ambiguous (not matched, not not_matched)
+    expect(region!.targetStatus).toBe('ambiguous');
+
+    // Per-provider results must be stored
+    expect(region!.primaryCriterionResult?.targetStatus).toBe('matched');
+    expect(region!.reviewerCriterionResult?.targetStatus).toBe('not_matched');
+
+    // Ambiguous → invalid_target → rejected
+    expect(region!.status).toBe('invalid_target');
+    expect(region!.measurementStatus).toBe('not_evaluated');
+    expect(result.acceptanceStatus).not.toBe('accepted');
+
+    // criterionJudgesSummary must reflect both providers ran
+    expect(result.criterionJudgesSummary).toBeDefined();
+    const entry = result.criterionJudgesSummary?.entries.find((e) => e.criterionId === 'kcal-left-pill');
+    expect(entry).toBeDefined();
+    expect(entry!.primaryTargetStatus).toBe('matched');
+    expect(entry!.reviewerTargetStatus).toBe('not_matched');
+    expect(entry!.finalTargetStatus).toBe('ambiguous');
+  });
+
+  it('final targetStatus is matched when both primary and reviewer agree on matched', async () => {
+    MockedProvider.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([]),
+        analyzeCriterion: vi.fn().mockResolvedValue({
+          criterionId: 'kcal-left-pill',
+          targetStatus: 'matched',
+          judgeAuditStatus: 'pass',
+          reasoning: 'Correct target.',
+          confidence: 0.9
+        } satisfies CriterionJudgeResult)
+      };
+    } as any);
+
+    MockedNvidiaProvider.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([]),
+        analyzeCriterion: vi.fn().mockResolvedValue({
+          criterionId: 'kcal-left-pill',
+          targetStatus: 'matched',
+          judgeAuditStatus: 'pass',
+          reasoning: 'Confirmed correct target.',
+          confidence: 0.88
+        } satisfies CriterionJudgeResult)
+      };
+    } as any);
+
+    const expectedPath = await writeFile('expected.png', makeWhitePng());
+    const actualPath = await writeFile('actual.png', makeMacroRingImage());
+    const outDir = path.join(tmpDir, 'out-h2');
+    await fs.mkdir(outDir, { recursive: true });
+
+    process.env.NVIDIA_API_KEY = 'test-nvidia-key-h2';
+
+    const configPath = await writeConfig('today', {
+      expectedImage: expectedPath,
+      outputDir: outDir,
+      maxDiffPercent: 1,
+      visualAuditMode: 'metric_only',
+      modelJudges: {
+        enabled: true,
+        required: false,
+        primary: { provider: 'openrouter', model: 'test-model' },
+        reviewer: { provider: 'nvidia', model: 'test-nvidia-model' }
+      },
+      overlapLegibility: {
+        regions: [{
+          id: 'kcal-left-pill',
+          label: '980 kcal left pill',
+          coordinateSpace: 'normalized',
+          box: CORRECT_BOX,
+          avoidColors: ['#00c800'],
+          maxOverlapPercent: 5,
+          severity: 'high'
+        }]
+      }
+    });
+
+    const result = await runScreenUiDiff({
+      screen: 'today', configPath, actualImage: actualPath, runName: 'run-054-h2'
+    });
+
+    const region = result.overlapLegibilitySummary?.regions.find((r) => r.id === 'kcal-left-pill');
+    expect(region!.targetStatus).toBe('matched');
+    expect(region!.status).not.toBe('invalid_target');
+    expect(result.actionRequired?.type).not.toBe('invalid_overlap_target');
+  });
+});
+
+// ── Test I: target config → criterionDescription contains constraints ──────────
+
+describe('Test I — target config: criterionDescription carries mustNotMatch and expectedText', () => {
+  it('packet criterionDescription includes mustNotMatch constraints from target config', async () => {
+    const capturedPackets: CriterionAuditBundle[] = [];
+
+    MockedProvider.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([]),
+        analyzeCriterion: vi.fn().mockImplementation(async (packet: CriterionAuditBundle) => {
+          capturedPackets.push(packet);
+          return {
+            criterionId: packet.criterionId,
+            targetStatus: 'matched',
+            judgeAuditStatus: 'pass',
+            reasoning: 'Target contract satisfied.',
+            confidence: 0.9
+          } satisfies CriterionJudgeResult;
+        })
+      };
+    } as any);
+
+    const expectedPath = await writeFile('expected.png', makeWhitePng());
+    const actualPath = await writeFile('actual.png', makeMacroRingImage());
+    const outDir = path.join(tmpDir, 'out-i');
+    await fs.mkdir(outDir, { recursive: true });
+
+    const configPath = await writeConfig('today', {
+      expectedImage: expectedPath,
+      outputDir: outDir,
+      maxDiffPercent: 1,
+      visualAuditMode: 'metric_only',
+      modelJudges: {
+        enabled: true,
+        required: false,
+        primary: { provider: 'openrouter', model: 'test-model' }
+      },
+      overlapLegibility: {
+        regions: [{
+          id: 'kcal-left-pill',
+          label: '980 kcal left pill',
+          coordinateSpace: 'normalized',
+          box: CORRECT_BOX,
+          avoidColors: ['#00c800'],
+          maxOverlapPercent: 5,
+          severity: 'high',
+          target: {
+            expectedText: '980 kcal left',
+            anchorDescription: 'rounded kcal-left pill below the center calorie number',
+            mustNotMatch: ['1,420', 'of 2,400'],
+            onMismatch: 'fail'
+          }
+        }]
+      }
+    });
+
+    await runScreenUiDiff({
+      screen: 'today', configPath, actualImage: actualPath, runName: 'run-054-i'
+    });
+
+    expect(capturedPackets.length).toBeGreaterThan(0);
+    const packet = capturedPackets[0];
+
+    // criterionDescription must be populated from the target config
+    expect(packet.criterionDescription).toBeTruthy();
+    expect(packet.criterionDescription).toContain('980 kcal left');
+    expect(packet.criterionDescription).toContain('1,420');
+    expect(packet.criterionDescription).toContain('of 2,400');
+    expect(packet.criterionDescription).toContain('rounded kcal-left pill');
+
+    // mustNotMatch constraint must appear
+    expect(packet.criterionDescription).toMatch(/must not match|Must NOT match/i);
+  });
+
+  it('packet criterionDescription is undefined when no target config is set', async () => {
+    const capturedPackets: CriterionAuditBundle[] = [];
+
+    MockedProvider.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([]),
+        analyzeCriterion: vi.fn().mockImplementation(async (packet: CriterionAuditBundle) => {
+          capturedPackets.push(packet);
+          return {
+            criterionId: packet.criterionId,
+            targetStatus: 'matched',
+            judgeAuditStatus: 'pass',
+            reasoning: 'OK',
+            confidence: 0.9
+          } satisfies CriterionJudgeResult;
+        })
+      };
+    } as any);
+
+    const expectedPath = await writeFile('expected.png', makeWhitePng());
+    const actualPath = await writeFile('actual.png', makeMacroRingImage());
+    const outDir = path.join(tmpDir, 'out-i2');
+    await fs.mkdir(outDir, { recursive: true });
+
+    const configPath = await writeConfig('today', {
+      expectedImage: expectedPath,
+      outputDir: outDir,
+      maxDiffPercent: 1,
+      visualAuditMode: 'metric_only',
+      modelJudges: {
+        enabled: true,
+        required: false,
+        primary: { provider: 'openrouter', model: 'test-model' }
+      },
+      overlapLegibility: {
+        regions: [{
+          id: 'kcal-left-pill',
+          label: '980 kcal left pill',
+          coordinateSpace: 'normalized',
+          box: CORRECT_BOX,
+          avoidColors: ['#00c800'],
+          maxOverlapPercent: 5
+        }]
+      }
+    });
+
+    await runScreenUiDiff({
+      screen: 'today', configPath, actualImage: actualPath, runName: 'run-054-i2'
+    });
+
+    expect(capturedPackets.length).toBeGreaterThan(0);
+    // No target config → criterionDescription should be undefined
+    expect(capturedPackets[0].criterionDescription).toBeUndefined();
+  });
+});
+
+// ── Test J: criterionJudgesSummary report fields ──────────────────────────────
+
+describe('Test J — criterionJudgesSummary report fields', () => {
+  it('report includes criterionJudgesSummary with per-region entries after criterion audit', async () => {
+    MockedProvider.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([]),
+        analyzeCriterion: vi.fn().mockResolvedValue({
+          criterionId: 'kcal-left-pill',
+          targetStatus: 'matched',
+          judgeAuditStatus: 'pass',
+          reasoning: 'Correct target.',
+          confidence: 0.9
+        } satisfies CriterionJudgeResult)
+      };
+    } as any);
+
+    const expectedPath = await writeFile('expected.png', makeWhitePng());
+    const actualPath = await writeFile('actual.png', makeMacroRingImage());
+    const outDir = path.join(tmpDir, 'out-j');
+    await fs.mkdir(outDir, { recursive: true });
+
+    const configPath = await writeConfig('today', {
+      expectedImage: expectedPath,
+      outputDir: outDir,
+      maxDiffPercent: 1,
+      visualAuditMode: 'metric_only',
+      modelJudges: {
+        enabled: true,
+        required: false,
+        primary: { provider: 'openrouter', model: 'test-model' }
+      },
+      overlapLegibility: {
+        regions: [{
+          id: 'kcal-left-pill',
+          label: '980 kcal left pill',
+          coordinateSpace: 'normalized',
+          box: CORRECT_BOX,
+          avoidColors: ['#00c800'],
+          maxOverlapPercent: 5,
+          severity: 'high'
+        }]
+      }
+    });
+
+    const result = await runScreenUiDiff({
+      screen: 'today', configPath, actualImage: actualPath, runName: 'run-054-j'
+    });
+
+    // criterionJudgesSummary must exist
+    expect(result.criterionJudgesSummary).toBeDefined();
+    const summary = result.criterionJudgesSummary!;
+
+    expect(summary.totalRegions).toBe(1);
+    expect(summary.attempted).toBe(1);
+    expect(summary.hadSuccess).toBe(true);
+    expect(summary.errorCount).toBe(0);
+    expect(summary.entries).toHaveLength(1);
+
+    const entry = summary.entries[0];
+    expect(entry.criterionId).toBe('kcal-left-pill');
+    expect(entry.finalTargetStatus).toBe('matched');
+    expect(entry.finalJudgeAuditStatus).toBe('pass');
+    expect(entry.artifactPathsSent.length).toBeGreaterThan(0);
+
+    // Report JSON must persist criterionJudgesSummary
+    const reportJson = JSON.parse(await fs.readFile(result.run.reportPath, 'utf-8'));
+    expect(reportJson.criterionJudgesSummary).toBeDefined();
+    expect(reportJson.criterionJudgesSummary.entries[0].criterionId).toBe('kcal-left-pill');
   });
 });

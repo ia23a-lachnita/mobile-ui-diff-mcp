@@ -55,6 +55,13 @@ export interface CompareImagesInput {
       minClearancePx?: number;
       maxOverlapPercent?: number;
       severity?: 'critical' | 'high' | 'medium' | 'low' | 'warning';
+      target?: {
+        expectedText?: string;
+        anchorDescription?: string;
+        mustContainText?: string[];
+        mustNotMatch?: string[];
+        onMismatch?: 'fail' | 'warn';
+      };
     }>;
   };
 }

@@ -263,6 +263,17 @@ async function writeGenerousCrop(
   }
 }
 
+function buildCriterionDescription(region: { label?: string; target?: { expectedText?: string; anchorDescription?: string; mustContainText?: string[]; mustNotMatch?: string[] } }): string | undefined {
+  const t = region.target;
+  if (!t) return undefined;
+  const parts: string[] = [];
+  if (t.expectedText) parts.push(`Expected text: "${t.expectedText}"`);
+  if (t.anchorDescription) parts.push(`Anchor: ${t.anchorDescription}`);
+  if (t.mustContainText?.length) parts.push(`Must contain: ${t.mustContainText.map((s) => `"${s}"`).join(', ')}`);
+  if (t.mustNotMatch?.length) parts.push(`Must NOT match (wrong element if visible): ${t.mustNotMatch.map((s) => `"${s}"`).join(', ')}`);
+  return parts.length > 0 ? parts.join('\n') : undefined;
+}
+
 export class OverlapLegibilityAnalyzer implements IAnalyzer {
   readonly name = 'OverlapLegibilityAnalyzer';
   readonly stage = 'stage1_deterministic' as const;
@@ -482,9 +493,11 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
       const bundle: CriterionAuditBundle = {
         criterionId: region.id,
         criterionLabel: region.label ?? region.id,
+        criterionDescription: buildCriterionDescription(region as any),
         resolvedBox: { x0, y0, x1, y1 },
         deterministicSummary,
         artifacts: {
+          fullExpectedScreen: ctx.expectedImagePath,
           fullActualScreen: ctx.actualImagePath,
           ...(annotatedActualPath ? { annotatedActualScreen: annotatedActualPath } : {}),
           ...(expectedCropPath ? { expectedCrop: expectedCropPath } : {}),

@@ -46,7 +46,9 @@ import {
   VisualCaveat,
   RunTimings,
   ModelJudgesSummary,
-  ModelJudgesProviderSummary
+  ModelJudgesProviderSummary,
+  CriterionJudgesSummary,
+  CriterionJudgeSummaryEntry
 } from '../types';
 
 // ---- helpers (ported directly from original compareImages.ts) ----
@@ -472,6 +474,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     perAnalyzerMs[remainingStage1[i].name] = remainingResults[i].durationMs;
   }
   let criterionAuditBundles: import('../types').CriterionAuditBundle[] = [];
+  let criterionJudgesSummaryData: CriterionJudgesSummary | undefined;
   for (const r of remainingResults) {
     warnings.push(...r.warnings);
     if (r.visualCaveats) visualCaveats.push(...r.visualCaveats);
@@ -778,34 +781,113 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   }
 
   // ---- Stage 2.5: Criterion audit judges for overlap legibility regions ----
-  // Runs after the main ModelJudgeAnalyzer. Each criterion judge validates that the configured box
-  // covers the intended target element before trusting the deterministic measurement.
+  // Runs after the main ModelJudgeAnalyzer. Both primary and reviewer validate that each
+  // configured box covers the intended target element before trusting the deterministic measurement.
   if (criterionAuditBundles.length > 0 && modelJudgesInput?.enabled && !isInvalidCapture) {
     const primaryCfg = (modelJudgesInput as any).primary as { provider: 'openrouter' | 'nvidia'; model: string } | undefined;
-    if (primaryCfg) {
-      const timeoutMs = (modelJudgesInput as any).timeoutMs ?? 45000;
-      const maxRetries = (modelJudgesInput as any).maxRetries ?? 1;
-      const retryOnParseError = (modelJudgesInput as any).retryOnParseError !== false;
-      const criterionProvider = buildCriterionProvider(primaryCfg, timeoutMs, maxRetries, retryOnParseError);
-      if (criterionProvider && overlapLegibilitySummary) {
-        const criterionAnalyzer = new CriterionJudgeAnalyzer();
-        const criterionResults = await criterionAnalyzer.run(criterionAuditBundles, criterionProvider);
-        // Merge criterion judge results into overlapLegibilitySummary
-        overlapLegibilitySummary = {
-          enabled: true,
-          regions: overlapLegibilitySummary.regions.map((region) => {
-            const cr = criterionResults.get(region.id);
-            if (!cr) return region;
-            const invalidTarget = cr.targetStatus === 'not_matched' || cr.targetStatus === 'ambiguous';
-            return {
-              ...region,
-              targetStatus: cr.targetStatus,
-              judgeAuditStatus: cr.judgeAuditStatus,
-              measurementStatus: invalidTarget ? ('not_evaluated' as const) : region.measurementStatus,
-              status: invalidTarget ? ('invalid_target' as const) : region.status
-            };
-          })
+    const reviewerCfg = (modelJudgesInput as any).reviewer as { provider: 'openrouter' | 'nvidia'; model: string } | undefined;
+    const timeoutMs = (modelJudgesInput as any).timeoutMs ?? 45000;
+    const maxRetries = (modelJudgesInput as any).maxRetries ?? 1;
+    const retryOnParseError = (modelJudgesInput as any).retryOnParseError !== false;
+    const isRequired = (modelJudgesInput as any).required !== false;
+
+    const primaryCriterionProvider = primaryCfg ? buildCriterionProvider(primaryCfg, timeoutMs, maxRetries, retryOnParseError) : null;
+    const reviewerCriterionProvider = reviewerCfg ? buildCriterionProvider(reviewerCfg, timeoutMs, maxRetries, retryOnParseError) : null;
+
+    // visual_parity + required: hard-fail when criterion audit cannot run.
+    // Override model_judges_failed if criterion audit availability is the root cause — both are
+    // blocking but the criterion message is more specific about what needs fixing.
+    const criterionAuditPreflightBlocked = actionRequired?.type === 'model_judges_failed' || !actionRequired;
+    if (visualAuditMode === 'visual_parity' && isRequired && criterionAuditPreflightBlocked) {
+      const primaryCanAudit = primaryCriterionProvider?.analyzeCriterion != null;
+      const reviewerCanAudit = !reviewerCfg || reviewerCriterionProvider?.analyzeCriterion != null;
+      if (!primaryCanAudit || !reviewerCanAudit) {
+        const which = !primaryCanAudit ? 'primary' : 'reviewer';
+        actionRequired = {
+          type: 'invalid_overlap_target',
+          severity: 'blocking',
+          message: `visualAuditMode is visual_parity and modelJudges.required is true, but the ${which} provider does not support criterion audit (analyzeCriterion). Overlap legibility targets cannot be validated.`,
+          recommendedUserPrompt: 'Configure a provider that supports criterion-specific judging (OpenRouter or NVIDIA with valid API key), or set visualAuditMode:metric_only to opt out of criterion audit.',
+          suggestedFixes: [
+            `Set ${which === 'primary' ? 'OPENROUTER_API_KEY or NVIDIA_API_KEY' : 'reviewer API key'} environment variable`,
+            "Set visualAuditMode:'metric_only' to skip the criterion audit requirement"
+          ]
         };
+      }
+    }
+
+    if (primaryCriterionProvider && overlapLegibilitySummary) {
+      const criterionAnalyzer = new CriterionJudgeAnalyzer();
+      const criterionResults = await criterionAnalyzer.run(
+        criterionAuditBundles,
+        primaryCriterionProvider,
+        reviewerCriterionProvider ?? undefined
+      );
+
+      const summaryEntries: CriterionJudgeSummaryEntry[] = [];
+
+      overlapLegibilitySummary = {
+        enabled: true,
+        regions: overlapLegibilitySummary.regions.map((region) => {
+          const dual = criterionResults.get(region.id);
+          if (!dual) return region;
+          const { primary, reviewer, final } = dual;
+          const invalidTarget = final.targetStatus === 'not_matched' || final.targetStatus === 'ambiguous';
+
+          const bundle = criterionAuditBundles.find((b) => b.criterionId === region.id);
+          const artifactPathsSent = bundle ? Object.values(bundle.artifacts).filter(Boolean) as string[] : [];
+
+          summaryEntries.push({
+            criterionId: region.id,
+            attempted: primary.judgeAuditStatus !== 'not_run',
+            hadSuccess: primary.targetStatus !== 'ambiguous' && primary.judgeAuditStatus !== 'unavailable' && primary.judgeAuditStatus !== 'not_run',
+            errorCount: (primary.judgeAuditStatus === 'unavailable' ? 1 : 0) + (reviewer?.judgeAuditStatus === 'unavailable' ? 1 : 0),
+            primaryTargetStatus: primary.targetStatus,
+            reviewerTargetStatus: reviewer?.targetStatus,
+            finalTargetStatus: final.targetStatus,
+            finalMeasurementStatus: invalidTarget ? 'not_evaluated' : region.measurementStatus,
+            finalJudgeAuditStatus: final.judgeAuditStatus,
+            artifactPathsSent
+          });
+
+          return {
+            ...region,
+            targetStatus: final.targetStatus,
+            judgeAuditStatus: final.judgeAuditStatus,
+            measurementStatus: invalidTarget ? ('not_evaluated' as const) : region.measurementStatus,
+            status: invalidTarget ? ('invalid_target' as const) : region.status,
+            primaryCriterionResult: primary,
+            ...(reviewer ? { reviewerCriterionResult: reviewer } : {})
+          };
+        })
+      };
+
+      criterionJudgesSummaryData = {
+        totalRegions: criterionAuditBundles.length,
+        attempted: summaryEntries.filter((e) => e.attempted).length,
+        hadSuccess: summaryEntries.some((e) => e.hadSuccess),
+        errorCount: summaryEntries.reduce((sum, e) => sum + e.errorCount, 0),
+        entries: summaryEntries
+      };
+
+      // visual_parity + required: not_checked after audit ran means criterion could not run
+      if (visualAuditMode === 'visual_parity' && isRequired && !actionRequired) {
+        const notChecked = overlapLegibilitySummary.regions.filter(
+          (r) => r.targetStatus === 'not_checked' && r.checked
+        );
+        if (notChecked.length > 0) {
+          const ids = notChecked.map((r) => `'${r.id}'`).join(', ');
+          actionRequired = {
+            type: 'invalid_overlap_target',
+            severity: 'blocking',
+            message: `visual_parity mode requires criterion audit for all regions, but ${ids} could not be audited (targetStatus: not_checked). Criterion audit was skipped or unavailable.`,
+            recommendedUserPrompt: 'Ensure provider API keys are set and criterion audit is supported, or set visualAuditMode:metric_only to opt out.',
+            suggestedFixes: [
+              'Set OPENROUTER_API_KEY or NVIDIA_API_KEY environment variable',
+              "Set visualAuditMode:'metric_only' to skip the criterion audit requirement"
+            ]
+          };
+        }
       }
     }
   }
@@ -1151,6 +1233,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     ...(blockedModelFindings.length > 0 ? { blockedModelFindings } : {}),
     ...(modelJudgesSummary ? { modelJudgesSummary } : {}),
     ...(overlapLegibilitySummary ? { overlapLegibilitySummary } : {}),
+    ...(criterionJudgesSummaryData ? { criterionJudgesSummary: criterionJudgesSummaryData } : {}),
     timings,
     artifacts: {
       expected: pixelDiff.processedExpectedPath,

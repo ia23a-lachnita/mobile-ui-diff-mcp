@@ -182,6 +182,14 @@ export const modelJudgesSchema = z.object({
   retryOnParseError: z.boolean().optional()
 }).optional();
 
+export const criterionTargetSchema = z.object({
+  expectedText: z.string().optional(),
+  anchorDescription: z.string().optional(),
+  mustContainText: z.array(z.string()).optional(),
+  mustNotMatch: z.array(z.string()).optional(),
+  onMismatch: z.enum(['fail', 'warn']).optional()
+});
+
 export const overlapLegibilityRegionSchema = z.object({
   id: z.string().min(1),
   label: z.string().optional(),
@@ -196,7 +204,8 @@ export const overlapLegibilityRegionSchema = z.object({
   avoidColors: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
   minClearancePx: z.number().nonnegative().optional(),
   maxOverlapPercent: z.number().min(0).max(100).optional(),
-  severity: z.enum(['critical', 'high', 'medium', 'low', 'warning']).optional()
+  severity: z.enum(['critical', 'high', 'medium', 'low', 'warning']).optional(),
+  target: criterionTargetSchema.optional()
 });
 
 export const overlapLegibilitySchema = z.object({
