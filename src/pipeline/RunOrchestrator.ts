@@ -469,7 +469,18 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         const raw = JSON.parse(await fs.readFile(resolveAbs(input.targetMapPath), 'utf-8'));
         const result = semanticTargetMapSchema.safeParse(raw);
         if (!result.success) {
-          warnings.push(`targetMapPath: invalid semantic target map — ${result.error.issues[0]?.message ?? 'schema error'}. Flutter anchor resolution skipped.`);
+          // Invalid target map breaks the validation contract — blocking, not a warning.
+          actionRequired = {
+            type: 'invalid_target_map',
+            severity: 'blocking',
+            message: `targetMapPath contains an invalid semantic target map: ${result.error.issues[0]?.message ?? 'schema error'}. Flutter anchor validation contract is broken.`,
+            recommendedUserPrompt: 'Fix the semantic target map schema errors before running visual diff.',
+            suggestedFixes: [
+              'Validate the target map JSON against the semantic target map schema',
+              'Check for missing required fields (version, screen, targets)',
+              'Ensure all target criteria have required fields (id, domain)'
+            ]
+          };
         } else {
           targetMap = result.data;
         }
@@ -548,7 +559,15 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
 
         const anchorDumpW = anchorDump.dump.device.screenshotWidthPx;
         const anchorDumpH = anchorDump.dump.device.screenshotHeightPx;
-        const needsTransform = anchorDumpW !== targetWidth || anchorDumpH !== targetHeight;
+
+        // Use actual loaded screenshot dimensions as the authoritative source-space size.
+        // anchorDumpW/H may be mediaQueryDerived and not always equal the ADB screenshot.
+        const srcW = actualSourceWidth;
+        const srcH = actualSourceHeight;
+        if (Math.abs(anchorDumpW - srcW) > 2 || Math.abs(anchorDumpH - srcH) > 2) {
+          warnings.push(`Flutter anchor dump dimensions (${anchorDumpW}×${anchorDumpH}) differ from actual screenshot dimensions (${srcW}×${srcH}). Using actual screenshot dimensions for coordinate transform.`);
+        }
+        const needsTransform = srcW !== targetWidth || srcH !== targetHeight;
 
         const anchorOverlapRegions: NonNullable<CompareImagesInput['overlapLegibility']>['regions'] = [];
         for (const resolved of resolution.results) {
@@ -557,8 +576,9 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
           if (!target) continue;
 
           // Scale from actual-source pixel space to expected/comparison pixel space.
+          // srcW/H are the actual screenshot dimensions — not the anchor dump's mediaQueryDerived values.
           const rectComp = scaleRectToComparison(
-            resolved.rect, anchorDumpW, anchorDumpH, targetWidth, targetHeight
+            resolved.rect, srcW, srcH, targetWidth, targetHeight
           );
 
           // Record both rects in mapping metadata for report/debugging.
@@ -992,7 +1012,14 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
 
     if (primaryCriterionProvider && overlapLegibilitySummary) {
       const cacheCtx: CriterionCacheContext | undefined = primaryCfg
-        ? { provider: primaryCfg.provider, model: primaryCfg.model, promptVersion: 'v1', targetMapVersion: (input as any).targetMapVersion ?? '1' }
+        ? {
+            provider: primaryCfg.provider,
+            model: primaryCfg.model,
+            reviewerProvider: reviewerCfg?.provider,
+            reviewerModel: reviewerCfg?.model,
+            promptVersion: 'v1',
+            targetMapVersion: (input as any).targetMapVersion ?? '1'
+          }
         : undefined;
       const criterionAnalyzer = new CriterionJudgeAnalyzer();
       const { results: criterionResults, cacheSummary: cs } = await criterionAnalyzer.run(

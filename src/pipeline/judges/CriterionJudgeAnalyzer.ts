@@ -15,6 +15,9 @@ export interface CriterionDualResult {
 export interface CriterionCacheContext {
   provider: string;
   model: string;
+  /** Reviewer identity — included in key so a reviewer change invalidates cached final results. */
+  reviewerProvider?: string;
+  reviewerModel?: string;
   promptVersion: string;
   targetMapVersion: string;
 }
@@ -49,8 +52,9 @@ async function hashFile(p: string | undefined): Promise<string> {
 
 async function buildCacheKey(bundle: CriterionAuditBundle, ctx: CriterionCacheContext): Promise<JudgeCacheKey> {
   return {
-    provider: ctx.provider,
-    model: ctx.model,
+    // Include reviewer identity so that changing reviewer invalidates the cached merged result.
+    provider: ctx.reviewerProvider ? `${ctx.provider}+${ctx.reviewerProvider}` : ctx.provider,
+    model: ctx.reviewerModel ? `${ctx.model}+${ctx.reviewerModel}` : ctx.model,
     promptVersion: ctx.promptVersion,
     targetId: bundle.criterionId,
     criterionIds: [bundle.criterionId],
@@ -128,6 +132,17 @@ function mergeCriterionResults(primary: CriterionJudgeResult, reviewer?: Criteri
 }
 
 export class CriterionJudgeAnalyzer {
+  /**
+   * Run criterion audit for each bundle.
+   *
+   * Cache scope: the JudgeCache passed in is a per-run in-memory deduplication cache.
+   * It deduplicates identical bundles within a single pipeline run but does NOT persist
+   * across runs. Cross-run caching (skip LLM when pixels are unchanged) is not yet
+   * implemented and is not claimed by this implementation.
+   *
+   * Batching: bundles are processed one at a time (no multi-criteria batching per request).
+   * Batching multiple criteria into a single provider call is not yet implemented.
+   */
   async run(
     bundles: CriterionAuditBundle[],
     primaryProvider: IModelJudgeProvider,

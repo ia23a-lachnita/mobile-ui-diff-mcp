@@ -164,4 +164,43 @@ describe('waitForAnchorArtifact', () => {
 
     expect(result.status).toBe('anchor_artifact_timeout');
   });
+
+  it('direct file path still requires done file or stable size before parsing', async () => {
+    const jsonPath = path.join(tmpDir, 'flutter-anchors.json');
+    const donePath = path.join(tmpDir, 'flutter-anchors.done');
+
+    // Write JSON first, no done file yet — direct path must still poll
+    await fs.writeFile(jsonPath, makeValidDumpJson(), 'utf-8');
+
+    let doneFlagWritten = false;
+    const writeTimer = setTimeout(async () => {
+      doneFlagWritten = true;
+      await fs.writeFile(donePath, '', 'utf-8');
+    }, 250);
+
+    const result = await waitForAnchorArtifact({
+      artifactDir: jsonPath,  // direct file path, not a directory
+      timeoutMs: 3000,
+      pollIntervalMs: 50,
+      stablePollCount: 2
+    });
+
+    clearTimeout(writeTimer);
+    // Should succeed after readiness check (done flag OR stable size)
+    expect(result.status).toBe('ready');
+    expect(result.parsed).toBeDefined();
+  });
+
+  it('direct file path times out when file never becomes ready', async () => {
+    const jsonPath = path.join(tmpDir, 'flutter-anchors.json');
+
+    // File does not exist — direct path must time out
+    const result = await waitForAnchorArtifact({
+      artifactDir: jsonPath,
+      timeoutMs: 300,
+      pollIntervalMs: 50
+    });
+
+    expect(result.status).toBe('anchor_artifact_timeout');
+  });
 });

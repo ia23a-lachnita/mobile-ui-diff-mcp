@@ -183,7 +183,8 @@ export interface ActionRequired {
     | 'missing_flutter_anchor'
     | 'target_not_visible'
     | 'invalid_anchor_dump'
-    | 'anchor_artifact_timeout';
+    | 'anchor_artifact_timeout'
+    | 'invalid_target_map';
   severity: 'blocking';
   message: string;
   recommendedUserPrompt: string;

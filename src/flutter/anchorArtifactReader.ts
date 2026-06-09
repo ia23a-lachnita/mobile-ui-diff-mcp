@@ -87,11 +87,9 @@ export async function waitForAnchorArtifact(opts: AnchorArtifactReaderOptions): 
     baseDir = artifactDir;
   }
 
-  // Direct file path: parse immediately without polling.
-  if (jsonPath === artifactDir) {
-    return attemptParse(jsonPath);
-  }
-
+  // Both directory and direct file paths go through the same readiness polling loop.
+  // Direct file paths look for an adjacent .done file in the same directory (baseDir =
+  // path.dirname(artifactDir)), so the protocol is the same regardless of path form.
   const deadline = Date.now() + timeoutMs;
 
   let consecutiveStable = 0;

@@ -120,8 +120,9 @@ describe('flutterAnchorDumpSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('accepts extra anchor-level fields (Calorix extended DTO)', () => {
-    // Calorix may emit extra diagnostic fields on anchors — these must not be rejected.
+  it('strips extra anchor-level fields (Calorix extended DTO) rather than passing them through', () => {
+    // Calorix may emit extra diagnostic fields. They must parse successfully but be stripped
+    // from the result — we must not allow raw framework objects to propagate.
     const dump = makeValidDump();
     const anchors = [
       {
@@ -129,11 +130,38 @@ describe('flutterAnchorDumpSchema', () => {
         rectLogical: { x: 12, y: 100, width: 80, height: 24 },
         visible: true,
         visibility: { visibleFraction: 1.0, offscreen: false, clippedByViewport: false, covered: false, notes: [] },
-        renderObject: { size: { width: 80, height: 24 } }  // extra Calorix diagnostic field
+        renderObject: { size: { width: 80, height: 24 } }
       }
     ];
     const result = flutterAnchorDumpSchema.safeParse({ ...dump, anchors });
     expect(result.success).toBe(true);
+    // renderObject must be stripped — it must not appear in the parsed output.
+    if (result.success) {
+      expect((result.data.anchors[0] as any).renderObject).toBeUndefined();
+    }
+  });
+
+  it('strips renderObject and other framework-like fields from anchor entries', () => {
+    const dump = makeValidDump();
+    const anchors = [
+      {
+        id: 'today.kcalLeftPill',
+        rectLogical: { x: 12, y: 100, width: 80, height: 24 },
+        visible: true,
+        visibility: { visibleFraction: 1.0 },
+        renderObject: { diagnostics: ['size: Size(80.0, 24.0)'] },
+        context: { widget: 'Container' },
+        owner: { debugDoingLayout: false }
+      }
+    ];
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, anchors });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const anchor = result.data.anchors[0] as any;
+      expect(anchor.renderObject).toBeUndefined();
+      expect(anchor.context).toBeUndefined();
+      expect(anchor.owner).toBeUndefined();
+    }
   });
 
   it('accepts Calorix visibility DTO shape (offscreen/clippedByViewport/covered/notes)', () => {
