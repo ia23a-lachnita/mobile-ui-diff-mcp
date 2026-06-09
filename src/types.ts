@@ -174,7 +174,7 @@ export interface VlmAvailability {
 }
 
 export interface ActionRequired {
-  type: 'vlm_unavailable' | 'invalid_capture' | 'model_judges_unavailable' | 'model_judges_failed';
+  type: 'vlm_unavailable' | 'invalid_capture' | 'model_judges_unavailable' | 'model_judges_failed' | 'invalid_overlap_target';
   severity: 'blocking';
   message: string;
   recommendedUserPrompt: string;
@@ -483,7 +483,13 @@ export interface OverlapLegibilityRegionResult {
   id: string;
   roiId?: string;
   checked: boolean;
-  status: 'pass' | 'caveat' | 'error' | 'skipped';
+  status: 'pass' | 'caveat' | 'error' | 'skipped' | 'invalid_target';
+  /** Whether the judge confirmed the configured box covers the intended UI element. */
+  targetStatus?: 'matched' | 'not_matched' | 'ambiguous' | 'not_checked';
+  /** Deterministic overlap/clearance outcome. Set to not_evaluated when targetStatus is not_matched or ambiguous. */
+  measurementStatus?: 'pass' | 'caveat' | 'fail' | 'not_evaluated';
+  /** Criterion-specific judge verdict on legibility and measurement credibility. */
+  judgeAuditStatus?: 'pass' | 'caveat' | 'fail' | 'target_mismatch' | 'unavailable' | 'not_run';
   skipReason?: string;
   overlapPercent?: number;
   nearestAvoidColorDistancePx?: number | null;
@@ -494,11 +500,87 @@ export interface OverlapLegibilityRegionResult {
   resolvedBox?: { x: number; y: number; width: number; height: number; coordinateSpace: string };
   roiBox?: { x: number; y: number; width: number; height: number };
   imageSize?: { width: number; height: number };
+  /** Paths to criterion audit images used by the criterion judge. */
+  criterionArtifacts?: {
+    annotatedActualScreen?: string;
+    expectedCrop?: string;
+    actualCrop?: string;
+  };
+  /** Primary provider criterion result (set after Stage 2.5). */
+  primaryCriterionResult?: CriterionJudgeResult;
+  /** Reviewer provider criterion result (set after Stage 2.5 when reviewer is configured). */
+  reviewerCriterionResult?: CriterionJudgeResult;
 }
 
 export interface OverlapLegibilitySummary {
   enabled: true;
   regions: OverlapLegibilityRegionResult[];
+}
+
+/** Target contract for a criterion audit — describes the intended element the configured box should cover. */
+export interface CriterionTargetConfig {
+  /** The exact text the target element should display (e.g. "980 kcal left"). */
+  expectedText?: string;
+  /** Human description of the anchor element (e.g. "rounded kcal-left pill below center number"). */
+  anchorDescription?: string;
+  /** Text strings that the targeted element must contain. If none visible, box may be wrong. */
+  mustContainText?: string[];
+  /** Text strings that must NOT be visible in the targeted element. Presence means wrong box. */
+  mustNotMatch?: string[];
+}
+
+/** A criterion-focused judge audit packet for one overlap/legibility region. */
+export interface CriterionAuditBundle {
+  criterionId: string;
+  criterionLabel: string;
+  criterionDescription?: string;
+  resolvedBox?: { x0: number; y0: number; x1: number; y1: number };
+  deterministicSummary?: string;
+  artifacts: {
+    /** Full expected screen (design reference, original pixels). Judges compare against actual. */
+    fullExpectedScreen?: string;
+    /** Full actual screen (original pixels). Judges use this for full context. */
+    fullActualScreen?: string;
+    /** Full actual screen with the configured box highlighted in a bright magenta border. */
+    annotatedActualScreen?: string;
+    /** Generous-margin crop from the expected image (original pixels, no overlays). */
+    expectedCrop?: string;
+    /** Generous-margin crop from the actual image (original pixels, no overlays). */
+    actualCrop?: string;
+    /** Deterministic overlap/clearance diagnostic artifact — supporting evidence only. */
+    diagnosticArtifact?: string;
+  };
+}
+
+/** Result returned by the criterion judge for one overlap/legibility region. */
+export interface CriterionJudgeResult {
+  criterionId: string;
+  targetStatus: 'matched' | 'not_matched' | 'ambiguous' | 'not_checked';
+  measurementCredible?: boolean;
+  judgeAuditStatus: 'pass' | 'caveat' | 'fail' | 'target_mismatch' | 'unavailable' | 'not_run';
+  reasoning: string;
+  confidence: number;
+}
+
+export interface CriterionJudgeSummaryEntry {
+  criterionId: string;
+  attempted: boolean;
+  hadSuccess: boolean;
+  errorCount: number;
+  primaryTargetStatus?: CriterionJudgeResult['targetStatus'];
+  reviewerTargetStatus?: CriterionJudgeResult['targetStatus'];
+  finalTargetStatus: CriterionJudgeResult['targetStatus'];
+  finalMeasurementStatus?: OverlapLegibilityRegionResult['measurementStatus'];
+  finalJudgeAuditStatus: CriterionJudgeResult['judgeAuditStatus'];
+  artifactPathsSent: string[];
+}
+
+export interface CriterionJudgesSummary {
+  totalRegions: number;
+  attempted: number;
+  hadSuccess: boolean;
+  errorCount: number;
+  entries: CriterionJudgeSummaryEntry[];
 }
 
 export interface ModelJudgesProviderSummary {
@@ -590,6 +672,7 @@ export interface DiffReport {
   visualCaveats?: VisualCaveat[];
   modelJudgesSummary?: ModelJudgesSummary;
   overlapLegibilitySummary?: OverlapLegibilitySummary;
+  criterionJudgesSummary?: CriterionJudgesSummary;
   blockedModelFindings?: Array<{ claimId: string; reason: string; sourceFact?: string }>;
   warnings?: string[];
   reportJsonPath?: string;

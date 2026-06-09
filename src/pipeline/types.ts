@@ -74,4 +74,5 @@ export interface AnalyzerResult {
   judgeHadSuccessfulResults?: boolean;
   judgeProviderRunSummary?: JudgeProviderRunSummary;
   overlapLegibilitySummary?: import('../types').OverlapLegibilitySummary;
+  criterionAuditBundles?: import('../types').CriterionAuditBundle[];
 }
