@@ -33,7 +33,16 @@ export interface DeviceDto {
 
 export interface AnchorVisibility {
   visibleFraction: number;
-  isOffscreen: boolean;
+  /** Calorix canonical: widget is outside the visible viewport. */
+  offscreen?: boolean;
+  /** Calorix: widget rect is clipped by the viewport boundary. */
+  clippedByViewport?: boolean;
+  /** Calorix: widget is occluded by another widget. */
+  covered?: boolean;
+  /** Calorix: diagnostic notes from the widget inspector. */
+  notes?: string[];
+  /** Legacy: equivalent to offscreen. Kept for backward compat. */
+  isOffscreen?: boolean;
 }
 
 export interface AnchorDto {
@@ -73,7 +82,12 @@ export interface AnchorMappingMetadata {
   viewInsetsPresent: boolean;
   insetsApplied: boolean;
   rectLogical: RectLogical;
+  /** DPR-converted physical pixel rect in actual-source space (before comparison resize). */
   rectActualPx: RectPx;
+  /** Scaled to expected/comparison pixel space — this is what gets injected into overlapLegibility. */
+  rectComparisonPx?: RectPx;
+  /** True when actual and expected image dimensions differ and a scaling transform was applied. */
+  transformActualToComparison?: boolean;
 }
 
 // ─── Semantic Target Map ────────────────────────────────────────────────────
@@ -103,6 +117,12 @@ export interface TargetCriterion {
   minClearancePx?: number;
   maxOverlapPercent?: number;
   severity?: 'critical' | 'high' | 'medium' | 'low' | 'warning';
+  /** Human description of the anchor element for the criterion judge. */
+  anchorDescription?: string;
+  /** Text strings that the targeted element must contain. */
+  mustContainText?: string[];
+  /** Text strings that must NOT be visible in the targeted element. */
+  mustNotMatch?: string[];
 }
 
 export interface SemanticTarget {

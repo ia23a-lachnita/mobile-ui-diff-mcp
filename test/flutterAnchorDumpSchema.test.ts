@@ -120,19 +120,68 @@ describe('flutterAnchorDumpSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects extra anchor-level fields (strict mode)', () => {
+  it('accepts extra anchor-level fields (Calorix extended DTO)', () => {
+    // Calorix may emit extra diagnostic fields on anchors — these must not be rejected.
     const dump = makeValidDump();
     const anchors = [
       {
         id: 'today.kcalLeftPill',
         rectLogical: { x: 12, y: 100, width: 80, height: 24 },
         visible: true,
-        visibility: { visibleFraction: 1.0, isOffscreen: false },
-        renderObject: { size: { width: 80, height: 24 } }  // framework object — should be rejected
+        visibility: { visibleFraction: 1.0, offscreen: false, clippedByViewport: false, covered: false, notes: [] },
+        renderObject: { size: { width: 80, height: 24 } }  // extra Calorix diagnostic field
       }
     ];
     const result = flutterAnchorDumpSchema.safeParse({ ...dump, anchors });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts Calorix visibility DTO shape (offscreen/clippedByViewport/covered/notes)', () => {
+    const dump = makeValidDump();
+    const anchors = [
+      {
+        id: 'today.kcalLeftPill',
+        rectLogical: { x: 12, y: 100, width: 80, height: 24 },
+        visible: true,
+        visibility: {
+          visibleFraction: 0.85,
+          offscreen: false,
+          clippedByViewport: true,
+          covered: false,
+          notes: ['partially clipped by bottom navbar']
+        }
+      }
+    ];
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, anchors });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts legacy isOffscreen field for backward compat', () => {
+    const dump = makeValidDump();
+    const anchors = [
+      {
+        id: 'today.kcalLeftPill',
+        rectLogical: { x: 12, y: 100, width: 80, height: 24 },
+        visible: true,
+        visibility: { visibleFraction: 1.0, isOffscreen: false }
+      }
+    ];
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, anchors });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts visibility with only visibleFraction (minimal Calorix shape)', () => {
+    const dump = makeValidDump();
+    const anchors = [
+      {
+        id: 'today.kcalLeftPill',
+        rectLogical: { x: 12, y: 100, width: 80, height: 24 },
+        visible: false,
+        visibility: { visibleFraction: 0 }
+      }
+    ];
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, anchors });
+    expect(result.success).toBe(true);
   });
 
   it('accepts anchors array with no entries', () => {

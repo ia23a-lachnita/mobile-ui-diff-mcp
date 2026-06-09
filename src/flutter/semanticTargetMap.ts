@@ -14,7 +14,10 @@ const targetCriterionSchema = z.object({
   avoidColors: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
   minClearancePx: z.number().nonnegative().optional(),
   maxOverlapPercent: z.number().min(0).max(100).optional(),
-  severity: z.enum(['critical', 'high', 'medium', 'low', 'warning']).optional()
+  severity: z.enum(['critical', 'high', 'medium', 'low', 'warning']).optional(),
+  anchorDescription: z.string().optional(),
+  mustContainText: z.array(z.string()).optional(),
+  mustNotMatch: z.array(z.string()).optional()
 });
 
 const semanticTargetSchema = z.object({

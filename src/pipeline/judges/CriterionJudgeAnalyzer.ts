@@ -1,13 +1,22 @@
+import fs from 'fs/promises';
 import { CriterionAuditBundle, CriterionJudgeResult } from '../../types';
 import { IModelJudgeProvider } from './IModelJudge';
 import { OpenRouterProvider } from './providers/OpenRouterProvider';
 import { NvidiaProvider } from './providers/NvidiaProvider';
+import { JudgeCache, JudgeCacheKey, CacheSummary, hashContent } from '../../flutter/judgeCache';
 
 export interface CriterionDualResult {
   primary: CriterionJudgeResult;
   reviewer?: CriterionJudgeResult;
   /** Merged final result after applying disagreement logic. */
   final: CriterionJudgeResult;
+}
+
+export interface CriterionCacheContext {
+  provider: string;
+  model: string;
+  promptVersion: string;
+  targetMapVersion: string;
 }
 
 export function buildCriterionProvider(
@@ -27,6 +36,34 @@ export function buildCriterionProvider(
     return new NvidiaProvider(apiKey, cfg.model, timeoutMs, maxRetries, retryOnParseError);
   }
   return null;
+}
+
+async function hashFile(p: string | undefined): Promise<string> {
+  if (!p) return 'none';
+  try {
+    return hashContent(await fs.readFile(p));
+  } catch {
+    return 'unreadable';
+  }
+}
+
+async function buildCacheKey(bundle: CriterionAuditBundle, ctx: CriterionCacheContext): Promise<JudgeCacheKey> {
+  return {
+    provider: ctx.provider,
+    model: ctx.model,
+    promptVersion: ctx.promptVersion,
+    targetId: bundle.criterionId,
+    criterionIds: [bundle.criterionId],
+    actualImageHash: await hashFile(bundle.artifacts.fullActualScreen),
+    actualCropHash: await hashFile(bundle.artifacts.actualCrop),
+    anchorRectHash: bundle.resolvedBox
+      ? hashContent(`${bundle.resolvedBox.x0},${bundle.resolvedBox.y0},${bundle.resolvedBox.x1},${bundle.resolvedBox.y1}`)
+      : 'no-rect',
+    expectedImageHash: await hashFile(bundle.artifacts.expectedCrop),
+    sourceFactsHash: bundle.deterministicSummary ? hashContent(bundle.deterministicSummary) : 'no-facts',
+    deterministicMeasurementHash: bundle.deterministicSummary ?? 'none',
+    targetMapVersion: ctx.targetMapVersion
+  };
 }
 
 async function runSingleCriterion(
@@ -94,17 +131,53 @@ export class CriterionJudgeAnalyzer {
   async run(
     bundles: CriterionAuditBundle[],
     primaryProvider: IModelJudgeProvider,
-    reviewerProvider?: IModelJudgeProvider
-  ): Promise<Map<string, CriterionDualResult>> {
+    reviewerProvider?: IModelJudgeProvider,
+    cache?: JudgeCache,
+    cacheCtx?: CriterionCacheContext
+  ): Promise<{ results: Map<string, CriterionDualResult>; cacheSummary: CacheSummary }> {
     const results = new Map<string, CriterionDualResult>();
+    const cacheSummary: CacheSummary = { attempted: 0, cached: 0, skipped: 0, fresh: 0 };
 
     for (const bundle of bundles) {
+      cacheSummary.attempted++;
+
+      // Check cache before calling provider
+      if (cache && cacheCtx) {
+        const key = await buildCacheKey(bundle, cacheCtx);
+        const hit = cache.get(key);
+        if (hit) {
+          cacheSummary.cached++;
+          const cachedResult: CriterionJudgeResult = {
+            criterionId: bundle.criterionId,
+            targetStatus: hit.targetStatus ?? 'matched',
+            judgeAuditStatus: hit.judgeAuditStatus,
+            reasoning: `[cache hit] cached at ${new Date(hit.cachedAt).toISOString()}`,
+            confidence: hit.confidence ?? 1,
+            fromCache: true
+          };
+          results.set(bundle.criterionId, { primary: cachedResult, final: cachedResult });
+          continue;
+        }
+      }
+
+      cacheSummary.fresh++;
       const primary = await runSingleCriterion(bundle, primaryProvider);
       const reviewer = reviewerProvider ? await runSingleCriterion(bundle, reviewerProvider) : undefined;
       const final = mergeCriterionResults(primary, reviewer);
       results.set(bundle.criterionId, { primary, reviewer, final });
+
+      // Store in cache for subsequent runs
+      if (cache && cacheCtx) {
+        const key = await buildCacheKey(bundle, cacheCtx);
+        cache.set(key, {
+          judgeAuditStatus: final.judgeAuditStatus,
+          targetStatus: final.targetStatus,
+          confidence: final.confidence,
+          cachedAt: Date.now()
+        });
+      }
     }
 
-    return results;
+    return { results, cacheSummary };
   }
 }

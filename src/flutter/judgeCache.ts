@@ -16,7 +16,9 @@ export interface JudgeCacheKey {
 }
 
 export interface CachedJudgeResult {
-  judgeAuditStatus: 'pass' | 'caveat' | 'fail' | 'target_mismatch' | 'unavailable';
+  judgeAuditStatus: 'pass' | 'caveat' | 'fail' | 'target_mismatch' | 'unavailable' | 'not_run';
+  targetStatus?: 'matched' | 'not_matched' | 'ambiguous' | 'not_checked';
+  confidence?: number;
   inheritedFromRun?: string;
   cachedAt: number;
   /** The canonical key string used for storage. */

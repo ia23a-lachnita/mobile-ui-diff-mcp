@@ -174,7 +174,16 @@ export interface VlmAvailability {
 }
 
 export interface ActionRequired {
-  type: 'vlm_unavailable' | 'invalid_capture' | 'model_judges_unavailable' | 'model_judges_failed' | 'invalid_overlap_target';
+  type:
+    | 'vlm_unavailable'
+    | 'invalid_capture'
+    | 'model_judges_unavailable'
+    | 'model_judges_failed'
+    | 'invalid_overlap_target'
+    | 'missing_flutter_anchor'
+    | 'target_not_visible'
+    | 'invalid_anchor_dump'
+    | 'anchor_artifact_timeout';
   severity: 'blocking';
   message: string;
   recommendedUserPrompt: string;
@@ -560,6 +569,8 @@ export interface CriterionJudgeResult {
   judgeAuditStatus: 'pass' | 'caveat' | 'fail' | 'target_mismatch' | 'unavailable' | 'not_run';
   reasoning: string;
   confidence: number;
+  /** True when this result was served from the in-memory judge cache (no provider call made). */
+  fromCache?: boolean;
 }
 
 export interface CriterionJudgeSummaryEntry {
@@ -675,7 +686,7 @@ export interface DiffReport {
   criterionJudgesSummary?: CriterionJudgesSummary;
   targetResolutionSummary?: import('./flutter/types').TargetResolutionSummary;
   measurementBoxSource?: 'flutter_anchor' | 'manual_fallback' | 'none';
-  cacheSummary?: { attempted: number; cached: number; skipped: number };
+  cacheSummary?: { attempted: number; cached: number; skipped: number; fresh?: number };
   blockedModelFindings?: Array<{ claimId: string; reason: string; sourceFact?: string }>;
   warnings?: string[];
   reportJsonPath?: string;

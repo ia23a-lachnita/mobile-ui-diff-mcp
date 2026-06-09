@@ -216,8 +216,8 @@ describe('run-057 Phase 5 — Flutter anchor pipeline integration', () => {
     });
   });
 
-  describe('Assertion F: graceful degradation — anchor artifact timeout', () => {
-    it('run completes without crash when flutterAnchorsPath points to empty dir (timeout)', async () => {
+  describe('Assertion F: required anchor timeout is blocking', () => {
+    it('sets actionRequired:anchor_artifact_timeout when required targets cannot load anchor dump', async () => {
       const img = makeUniformPng(IMG_W, IMG_H);
       const expectedPath = await writeFile('expected3.png', img);
       const actualPath = await writeFile('actual3.png', img);
@@ -254,6 +254,10 @@ describe('run-057 Phase 5 — Flutter anchor pipeline integration', () => {
       // warnings must mention the anchor artifact failure
       const warnings = run.warnings ?? [];
       expect(warnings.some((w) => w.includes('flutterAnchorsPath'))).toBe(true);
+      // Target map has required:true targets → timeout is blocking, not warning-only
+      expect(run.actionRequired).toBeDefined();
+      expect(run.actionRequired!.type).toBe('anchor_artifact_timeout');
+      expect(run.actionRequired!.severity).toBe('blocking');
     }, 45000);
   });
 

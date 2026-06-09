@@ -7,7 +7,8 @@ import { EvidenceBundleBuilder } from './EvidenceBundleBuilder';
 import { ConflictResolver } from './ConflictResolver';
 import { VerdictEngine } from './VerdictEngine';
 import { ModelJudgeAnalyzer, ModelJudgesConfig } from './judges/ModelJudgeAnalyzer';
-import { CriterionJudgeAnalyzer, buildCriterionProvider } from './judges/CriterionJudgeAnalyzer';
+import { CriterionJudgeAnalyzer, buildCriterionProvider, CriterionCacheContext } from './judges/CriterionJudgeAnalyzer';
+import { JudgeCache } from '../flutter/judgeCache';
 import { ReferenceContextAnalyzer } from './analyzers/ReferenceContextAnalyzer';
 import { IAnalyzer } from './analyzers/IAnalyzer';
 import { InvalidCaptureAnalyzer } from './analyzers/InvalidCaptureAnalyzer';
@@ -59,6 +60,26 @@ function clamp(value: number, min: number, max: number): number {
 
 function ceilPixel(value: number): number {
   return Math.ceil(value - 1e-9);
+}
+
+function scaleRectToComparison(
+  rect: { x: number; y: number; width: number; height: number },
+  actualW: number, actualH: number,
+  targetW: number, targetH: number
+): { x: number; y: number; width: number; height: number } {
+  if (actualW === targetW && actualH === targetH) return rect;
+  const scaleX = targetW / Math.max(1, actualW);
+  const scaleY = targetH / Math.max(1, actualH);
+  const x = Math.floor(rect.x * scaleX);
+  const y = Math.floor(rect.y * scaleY);
+  const right = Math.ceil((rect.x + rect.width) * scaleX);
+  const bottom = Math.ceil((rect.y + rect.height) * scaleY);
+  return {
+    x: Math.max(0, x),
+    y: Math.max(0, y),
+    width: Math.max(1, right - x),
+    height: Math.max(1, bottom - y)
+  };
 }
 
 function boxesIntersect(a: BoxLike, b: BoxLike): boolean {
@@ -332,6 +353,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   const warnings: string[] = [];
   const vlmUnavailableWarning = 'VLM analysis was requested but unavailable. Region analysis fell back to error/fallback statuses. Run vlm_health or start Ollama.';
   let actionRequired: ActionRequired | null = null;
+  const judgeCache = new JudgeCache();
+  let criterionCacheSummary: import('../flutter/judgeCache').CacheSummary | undefined;
 
   // ---- Stage 0: ArtifactBuilder (image loading, resize, dir setup) ----
   const artifactBuilder = new ArtifactBuilder();
@@ -431,12 +454,11 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
 
   // ---- Stage 0.75: Flutter anchor resolution ----
   // Loads the semantic target map and anchor dump, resolves targets to physical
-  // pixel rects, and injects flutter_anchor rects as overlapLegibility regions.
-  // Must run before Stage 1c so OverlapLegibilityAnalyzer sees the injected regions.
+  // pixel rects, transforms them to comparison/expected space, and injects as
+  // overlapLegibility regions. Must run before Stage 1c.
   let targetResolutionSummary: import('../flutter/types').TargetResolutionSummary | undefined;
   if (input.targetMapPath || input.flutterAnchorsPath) {
     try {
-      const { parseFlutterAnchorDump } = await import('../flutter/anchorDumpParser');
       const { resolveTargets } = await import('../flutter/targetResolver');
       const { semanticTargetMapSchema } = await import('../flutter/semanticTargetMap');
       const { waitForAnchorArtifact } = await import('../flutter/anchorArtifactReader');
@@ -462,6 +484,25 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         });
         if (artifact.status !== 'ready' || !artifact.parsed) {
           warnings.push(`flutterAnchorsPath: anchor artifact not ready (${artifact.status}). Flutter anchor resolution skipped.`);
+          // Required targets cannot be resolved without anchor data — blocking failure.
+          if (!actionRequired && targetMap.targets.some((t) => t.locator.required)) {
+            const failType = artifact.status === 'anchor_artifact_timeout'
+              ? 'anchor_artifact_timeout' as const
+              : 'invalid_anchor_dump' as const;
+            actionRequired = {
+              type: failType,
+              severity: 'blocking',
+              message: `Flutter anchor artifact failed to load (${artifact.status}). Required targets cannot be resolved without anchor data.`,
+              recommendedUserPrompt: 'Ensure flutter-anchors.json is emitted before running the diff. Verify Calorix is configured to export anchor artifacts.',
+              suggestedFixes: [
+                'Verify flutterAnchorsPath points to the correct output directory',
+                'Ensure the Flutter app is running and anchor export is enabled',
+                artifact.status === 'anchor_artifact_timeout'
+                  ? 'Increase the anchor artifact timeout (currently 30s)'
+                  : 'Verify the flutter-anchors.json content matches the expected Calorix schema'
+              ]
+            };
+          }
         } else {
           anchorDump = artifact.parsed;
         }
@@ -471,22 +512,79 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         const resolution = resolveTargets(targetMap, anchorDump);
         targetResolutionSummary = resolution;
 
+        // Required target failures are blocking — warn for optional failures.
+        if (!actionRequired) {
+          const requiredFailures = resolution.results.filter((r) => {
+            if (r.source !== 'unresolved') return false;
+            const t = targetMap!.targets.find((t) => t.id === r.targetId);
+            return t?.locator.required === true;
+          });
+          if (requiredFailures.length > 0) {
+            const hasMissing = requiredFailures.some((r) => r.anchorMissing);
+            const failType = hasMissing ? 'missing_flutter_anchor' as const : 'target_not_visible' as const;
+            const failedIds = requiredFailures.map((r) => r.targetId).join(', ');
+            actionRequired = {
+              type: failType,
+              severity: 'blocking',
+              message: `Required flutter anchor target(s) could not be resolved: ${failedIds}. ${hasMissing ? 'Anchor ID(s) not found in dump.' : 'Anchor(s) not visible on screen (visibleFraction below threshold).'}`,
+              recommendedUserPrompt: hasMissing
+                ? 'Add the missing anchor IDs to the Flutter widget tree and ensure Calorix exports them.'
+                : 'Navigate to the screen state where all required targets are visible before running visual diff.',
+              suggestedFixes: hasMissing
+                ? ['Add missing anchor keys to the Flutter widget tree', 'Verify anchorId values in target map match Flutter widget keys']
+                : ['Scroll to bring required elements into view before capturing', 'Mark optional targets as required:false if they may not always be visible']
+            };
+          }
+        }
+
+        // Warn for optional unresolved targets.
+        for (const r of resolution.results) {
+          if (r.source !== 'unresolved') continue;
+          const t = targetMap.targets.find((tt) => tt.id === r.targetId);
+          if (t?.locator.required === false) {
+            warnings.push(`Optional flutter anchor target '${r.targetId}' could not be resolved (${r.anchorMissing ? 'anchor missing' : 'not visible'}). Skipped.`);
+          }
+        }
+
+        const anchorDumpW = anchorDump.dump.device.screenshotWidthPx;
+        const anchorDumpH = anchorDump.dump.device.screenshotHeightPx;
+        const needsTransform = anchorDumpW !== targetWidth || anchorDumpH !== targetHeight;
+
         const anchorOverlapRegions: NonNullable<CompareImagesInput['overlapLegibility']>['regions'] = [];
         for (const resolved of resolution.results) {
           if (resolved.source !== 'flutter_anchor' || !resolved.rect) continue;
           const target = targetMap.targets.find((t) => t.id === resolved.targetId);
           if (!target) continue;
+
+          // Scale from actual-source pixel space to expected/comparison pixel space.
+          const rectComp = scaleRectToComparison(
+            resolved.rect, anchorDumpW, anchorDumpH, targetWidth, targetHeight
+          );
+
+          // Record both rects in mapping metadata for report/debugging.
+          if (resolved.mappingMetadata) {
+            (resolved.mappingMetadata as any).rectComparisonPx = rectComp;
+            (resolved.mappingMetadata as any).transformActualToComparison = needsTransform;
+          }
+
           for (const criterion of target.criteria) {
             if (criterion.domain !== 'legibility.overlap') continue;
-            anchorOverlapRegions!.push({
+            anchorOverlapRegions.push({
               id: criterion.id,
-              box: resolved.rect,
+              label: target.id,
+              box: rectComp,
               coordinateSpace: 'expected',
               avoidColors: criterion.avoidColors,
               minClearancePx: criterion.minClearancePx,
               maxOverlapPercent: criterion.maxOverlapPercent,
-              severity: criterion.severity
-            });
+              severity: criterion.severity,
+              target: {
+                expectedText: target.expectedText,
+                anchorDescription: criterion.anchorDescription,
+                mustContainText: criterion.mustContainText,
+                mustNotMatch: criterion.mustNotMatch
+              }
+            } as any);
           }
         }
 
@@ -893,12 +991,18 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     }
 
     if (primaryCriterionProvider && overlapLegibilitySummary) {
+      const cacheCtx: CriterionCacheContext | undefined = primaryCfg
+        ? { provider: primaryCfg.provider, model: primaryCfg.model, promptVersion: 'v1', targetMapVersion: (input as any).targetMapVersion ?? '1' }
+        : undefined;
       const criterionAnalyzer = new CriterionJudgeAnalyzer();
-      const criterionResults = await criterionAnalyzer.run(
+      const { results: criterionResults, cacheSummary: cs } = await criterionAnalyzer.run(
         criterionAuditBundles,
         primaryCriterionProvider,
-        reviewerCriterionProvider ?? undefined
+        reviewerCriterionProvider ?? undefined,
+        judgeCache,
+        cacheCtx
       );
+      criterionCacheSummary = cs;
 
       const summaryEntries: CriterionJudgeSummaryEntry[] = [];
 
@@ -1310,6 +1414,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     ...(modelJudgesSummary ? { modelJudgesSummary } : {}),
     ...(overlapLegibilitySummary ? { overlapLegibilitySummary } : {}),
     ...(criterionJudgesSummaryData ? { criterionJudgesSummary: criterionJudgesSummaryData } : {}),
+    ...(criterionCacheSummary ? { cacheSummary: criterionCacheSummary } : {}),
     ...(targetResolutionSummary ? { targetResolutionSummary } : {}),
     ...(targetResolutionSummary
       ? { measurementBoxSource: targetResolutionSummary.resolvedViaFlutterAnchor > 0 ? ('flutter_anchor' as const) : ('none' as const) }

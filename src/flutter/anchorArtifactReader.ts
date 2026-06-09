@@ -4,7 +4,11 @@ import { parseFlutterAnchorDump } from './anchorDumpParser';
 import type { AnchorArtifactResult, ParsedAnchorDump } from './types';
 
 export interface AnchorArtifactReaderOptions {
-  /** Directory containing flutter-anchors.json and optionally flutter-anchors.done */
+  /**
+   * Path to the Flutter anchor artifact. Accepts either:
+   *   - A directory containing flutter-anchors.json (and optionally flutter-anchors.done)
+   *   - A direct path to the flutter-anchors.json file itself
+   */
   artifactDir: string;
   /** Total wait budget in ms (default: 15000) */
   timeoutMs?: number;
@@ -65,14 +69,36 @@ export async function waitForAnchorArtifact(opts: AnchorArtifactReaderOptions): 
     stablePollCount = 2
   } = opts;
 
-  const jsonPath = path.join(artifactDir, JSON_FILE);
+  // Support direct file path as well as directory.
+  let jsonPath: string;
+  let baseDir: string;
+  try {
+    const stat = await fs.stat(artifactDir);
+    if (stat.isFile()) {
+      jsonPath = artifactDir;
+      baseDir = path.dirname(artifactDir);
+    } else {
+      jsonPath = path.join(artifactDir, JSON_FILE);
+      baseDir = artifactDir;
+    }
+  } catch {
+    // Path does not exist yet — assume directory, polling will wait for file to appear.
+    jsonPath = path.join(artifactDir, JSON_FILE);
+    baseDir = artifactDir;
+  }
+
+  // Direct file path: parse immediately without polling.
+  if (jsonPath === artifactDir) {
+    return attemptParse(jsonPath);
+  }
+
   const deadline = Date.now() + timeoutMs;
 
   let consecutiveStable = 0;
   let lastSize: number | null = null;
 
   while (Date.now() < deadline) {
-    const done = await doneFileExists(artifactDir);
+    const done = await doneFileExists(baseDir);
     const size = await fileSize(jsonPath);
 
     if (done && size !== null && size > 0) {
@@ -101,7 +127,7 @@ export async function waitForAnchorArtifact(opts: AnchorArtifactReaderOptions): 
 
   return {
     status: 'anchor_artifact_timeout',
-    error: `Timed out after ${timeoutMs}ms waiting for ${JSON_FILE} in ${artifactDir}`
+    error: `Timed out after ${timeoutMs}ms waiting for ${JSON_FILE} in ${baseDir}`
   };
 }
 

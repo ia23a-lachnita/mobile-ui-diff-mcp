@@ -20,10 +20,18 @@ const deviceDtoSchema = z.object({
   viewInsetsLogical: insetLogicalSchema
 });
 
+// Accepts the Calorix visibility DTO shape (offscreen/clippedByViewport/covered/notes)
+// and the legacy isOffscreen field for backward compat. visibleFraction is the only required field.
 const anchorVisibilitySchema = z.object({
   visibleFraction: z.number().min(0).max(1),
-  isOffscreen: z.boolean()
-});
+  // Calorix canonical fields
+  offscreen: z.boolean().optional(),
+  clippedByViewport: z.boolean().optional(),
+  covered: z.boolean().optional(),
+  notes: z.array(z.string()).optional(),
+  // Legacy backward-compat field (Calorix emits offscreen, not isOffscreen)
+  isOffscreen: z.boolean().optional()
+}).passthrough();
 
 const rectLogicalSchema = z.object({
   x: z.number(),
@@ -32,18 +40,20 @@ const rectLogicalSchema = z.object({
   height: z.number()
 });
 
+// Not strict: Calorix anchor DTOs may carry extra diagnostic fields.
+// The root-level flutterAnchorDumpSchema stays strict to block raw framework objects.
 const anchorDtoSchema = z.object({
   id: z.string().min(1),
   label: z.string().optional(),
   rectLogical: rectLogicalSchema,
   visible: z.boolean(),
   visibility: anchorVisibilitySchema
-}).strict();
+}).passthrough();
 
 /**
- * Strict schema for the Flutter anchor dump DTO.
- * Rejects framework objects, missing coordinate metadata, or extra root-level
- * fields that suggest a raw framework serialization slipped through.
+ * Schema for the Flutter anchor dump DTO.
+ * Root level stays strict to reject raw framework serializations.
+ * Anchor entries are passthrough to accept Calorix's extended DTO shape.
  */
 export const flutterAnchorDumpSchema = z.object({
   framework: z.literal('flutter'),
