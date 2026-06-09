@@ -1,0 +1,154 @@
+import { describe, it, expect } from 'vitest';
+import { flutterAnchorDumpSchema } from '../src/flutter/anchorDumpSchema';
+
+function makeValidDump(overrides: Record<string, unknown> = {}) {
+  return {
+    framework: 'flutter',
+    screen: 'TodayScreen',
+    coordinateSpace: 'flutterLogical',
+    coordinateOrigin: 'topLeft',
+    device: {
+      screenshotWidthPx: 1080,
+      screenshotHeightPx: 2340,
+      devicePixelRatio: 3.0,
+      mediaQuerySizeLogical: { width: 360, height: 780 },
+      paddingLogical: { top: 47.0, left: 0, right: 0, bottom: 0 },
+      viewPaddingLogical: { top: 47.0, left: 0, right: 0, bottom: 0 },
+      viewInsetsLogical: { top: 0, left: 0, right: 0, bottom: 0 }
+    },
+    anchors: [
+      {
+        id: 'today.kcalLeftPill',
+        label: 'Kcal left pill',
+        rectLogical: { x: 12.0, y: 100.0, width: 80.0, height: 24.0 },
+        visible: true,
+        visibility: { visibleFraction: 1.0, isOffscreen: false }
+      }
+    ],
+    ...overrides
+  };
+}
+
+describe('flutterAnchorDumpSchema', () => {
+  it('accepts a valid dump', () => {
+    const result = flutterAnchorDumpSchema.safeParse(makeValidDump());
+    expect(result.success).toBe(true);
+  });
+
+  it('requires framework: "flutter"', () => {
+    const result = flutterAnchorDumpSchema.safeParse(makeValidDump({ framework: 'react-native' }));
+    expect(result.success).toBe(false);
+  });
+
+  it('requires coordinateSpace: "flutterLogical"', () => {
+    const result = flutterAnchorDumpSchema.safeParse(makeValidDump({ coordinateSpace: 'physical' }));
+    expect(result.success).toBe(false);
+  });
+
+  it('requires coordinateOrigin', () => {
+    const { coordinateOrigin: _, ...dump } = makeValidDump() as Record<string, unknown>;
+    const result = flutterAnchorDumpSchema.safeParse(dump);
+    expect(result.success).toBe(false);
+  });
+
+  it('requires device.devicePixelRatio', () => {
+    const dump = makeValidDump();
+    const { devicePixelRatio: _, ...deviceWithout } = dump.device as Record<string, unknown>;
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, device: deviceWithout });
+    expect(result.success).toBe(false);
+  });
+
+  it('requires device.paddingLogical', () => {
+    const dump = makeValidDump();
+    const { paddingLogical: _, ...deviceWithout } = dump.device as Record<string, unknown>;
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, device: deviceWithout });
+    expect(result.success).toBe(false);
+  });
+
+  it('requires device.viewPaddingLogical', () => {
+    const dump = makeValidDump();
+    const { viewPaddingLogical: _, ...deviceWithout } = dump.device as Record<string, unknown>;
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, device: deviceWithout });
+    expect(result.success).toBe(false);
+  });
+
+  it('requires device.viewInsetsLogical', () => {
+    const dump = makeValidDump();
+    const { viewInsetsLogical: _, ...deviceWithout } = dump.device as Record<string, unknown>;
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, device: deviceWithout });
+    expect(result.success).toBe(false);
+  });
+
+  it('requires device.screenshotWidthPx', () => {
+    const dump = makeValidDump();
+    const { screenshotWidthPx: _, ...deviceWithout } = dump.device as Record<string, unknown>;
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, device: deviceWithout });
+    expect(result.success).toBe(false);
+  });
+
+  it('requires device.screenshotHeightPx', () => {
+    const dump = makeValidDump();
+    const { screenshotHeightPx: _, ...deviceWithout } = dump.device as Record<string, unknown>;
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, device: deviceWithout });
+    expect(result.success).toBe(false);
+  });
+
+  it('requires anchor.visible boolean', () => {
+    const dump = makeValidDump();
+    const anchors = [
+      {
+        id: 'today.kcalLeftPill',
+        rectLogical: { x: 12, y: 100, width: 80, height: 24 },
+        // visible is missing
+        visibility: { visibleFraction: 1.0, isOffscreen: false }
+      }
+    ];
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, anchors });
+    expect(result.success).toBe(false);
+  });
+
+  it('requires anchor.visibility object', () => {
+    const dump = makeValidDump();
+    const anchors = [{ id: 'today.kcalLeftPill', rectLogical: { x: 12, y: 100, width: 80, height: 24 }, visible: true }];
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, anchors });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects extra root-level fields (strict mode)', () => {
+    const dump = makeValidDump({ renderTree: { type: 'widget', children: [] } });
+    const result = flutterAnchorDumpSchema.safeParse(dump);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects extra anchor-level fields (strict mode)', () => {
+    const dump = makeValidDump();
+    const anchors = [
+      {
+        id: 'today.kcalLeftPill',
+        rectLogical: { x: 12, y: 100, width: 80, height: 24 },
+        visible: true,
+        visibility: { visibleFraction: 1.0, isOffscreen: false },
+        renderObject: { size: { width: 80, height: 24 } }  // framework object — should be rejected
+      }
+    ];
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, anchors });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts anchors array with no entries', () => {
+    const result = flutterAnchorDumpSchema.safeParse(makeValidDump({ anchors: [] }));
+    expect(result.success).toBe(true);
+  });
+
+  it('requires device.devicePixelRatio to be positive', () => {
+    const dump = makeValidDump();
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, device: { ...dump.device, devicePixelRatio: 0 } });
+    expect(result.success).toBe(false);
+  });
+
+  it('requires screenshotWidthPx to be a positive integer', () => {
+    const dump = makeValidDump();
+    const result = flutterAnchorDumpSchema.safeParse({ ...dump, device: { ...dump.device, screenshotWidthPx: 1080.5 } });
+    expect(result.success).toBe(false);
+  });
+});
