@@ -60,7 +60,6 @@ export interface CompareImagesInput {
         anchorDescription?: string;
         mustContainText?: string[];
         mustNotMatch?: string[];
-        onMismatch?: 'fail' | 'warn';
       };
     }>;
   };

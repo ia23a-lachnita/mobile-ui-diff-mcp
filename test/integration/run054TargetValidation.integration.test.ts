@@ -16,6 +16,7 @@
  */
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { criterionTargetSchema } from '../../src/config/uiDiffConfig';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -1136,8 +1137,7 @@ describe('Test I — target config: criterionDescription carries mustNotMatch an
           target: {
             expectedText: '980 kcal left',
             anchorDescription: 'rounded kcal-left pill below the center calorie number',
-            mustNotMatch: ['1,420', 'of 2,400'],
-            onMismatch: 'fail'
+            mustNotMatch: ['1,420', 'of 2,400']
           }
         }]
       }
@@ -1286,5 +1286,26 @@ describe('Test J — criterionJudgesSummary report fields', () => {
     const reportJson = JSON.parse(await fs.readFile(result.run.reportPath, 'utf-8'));
     expect(reportJson.criterionJudgesSummary).toBeDefined();
     expect(reportJson.criterionJudgesSummary.entries[0].criterionId).toBe('kcal-left-pill');
+  });
+});
+
+// ── Test K: criterionTargetSchema no longer accepts onMismatch ────────────────
+
+describe('Test K — criterionTargetSchema rejects onMismatch', () => {
+  it('rejects target config containing onMismatch (field removed from schema)', () => {
+    const result = criterionTargetSchema.strict().safeParse({
+      expectedText: '980 kcal left',
+      onMismatch: 'warn'
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts valid target config without onMismatch', () => {
+    const result = criterionTargetSchema.strict().safeParse({
+      expectedText: '980 kcal left',
+      anchorDescription: 'rounded kcal-left pill',
+      mustNotMatch: ['1,420', 'of 2,400']
+    });
+    expect(result.success).toBe(true);
   });
 });

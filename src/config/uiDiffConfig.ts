@@ -186,8 +186,7 @@ export const criterionTargetSchema = z.object({
   expectedText: z.string().optional(),
   anchorDescription: z.string().optional(),
   mustContainText: z.array(z.string()).optional(),
-  mustNotMatch: z.array(z.string()).optional(),
-  onMismatch: z.enum(['fail', 'warn']).optional()
+  mustNotMatch: z.array(z.string()).optional()
 });
 
 export const overlapLegibilityRegionSchema = z.object({

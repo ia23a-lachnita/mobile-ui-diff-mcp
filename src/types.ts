@@ -527,8 +527,6 @@ export interface CriterionTargetConfig {
   mustContainText?: string[];
   /** Text strings that must NOT be visible in the targeted element. Presence means wrong box. */
   mustNotMatch?: string[];
-  /** What to do when target does not match: 'fail' (default) rejects; 'warn' records warning. */
-  onMismatch?: 'fail' | 'warn';
 }
 
 /** A criterion-focused judge audit packet for one overlap/legibility region. */
