@@ -673,6 +673,9 @@ export interface DiffReport {
   modelJudgesSummary?: ModelJudgesSummary;
   overlapLegibilitySummary?: OverlapLegibilitySummary;
   criterionJudgesSummary?: CriterionJudgesSummary;
+  targetResolutionSummary?: import('./flutter/types').TargetResolutionSummary;
+  measurementBoxSource?: 'flutter_anchor' | 'manual_fallback' | 'none';
+  cacheSummary?: { attempted: number; cached: number; skipped: number };
   blockedModelFindings?: Array<{ claimId: string; reason: string; sourceFact?: string }>;
   warnings?: string[];
   reportJsonPath?: string;

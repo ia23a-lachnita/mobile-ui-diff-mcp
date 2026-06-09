@@ -46,6 +46,8 @@ export interface RunMobileUiDiffInput {
   modelJudges?: ModelJudgesConfig;
   visualAuditMode?: 'visual_parity' | 'metric_only';
   overlapLegibility?: CompareImagesInput['overlapLegibility'];
+  targetMapPath?: string;
+  flutterAnchorsPath?: string;
 }
 
 export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<DiffReport> {
@@ -106,7 +108,9 @@ export async function runMobileUiDiff(input: RunMobileUiDiffInput): Promise<Diff
     referenceContext: input.referenceContext,
     modelJudges: input.modelJudges,
     visualAuditMode: input.visualAuditMode,
-    overlapLegibility: input.overlapLegibility
+    overlapLegibility: input.overlapLegibility,
+    targetMapPath: input.targetMapPath,
+    flutterAnchorsPath: input.flutterAnchorsPath
   });
 
   if (preCaptureResults?.length) {

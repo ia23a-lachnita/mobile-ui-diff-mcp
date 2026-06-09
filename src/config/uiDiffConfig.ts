@@ -242,7 +242,9 @@ export const uiDiffScreenSchema = z.object({
   referenceContext: referenceContextSchema,
   modelJudges: modelJudgesSchema,
   visualAuditMode: z.enum(['visual_parity', 'metric_only']).optional(),
-  overlapLegibility: overlapLegibilitySchema
+  overlapLegibility: overlapLegibilitySchema,
+  targetMapPath: z.string().optional(),
+  flutterAnchorsPath: z.string().optional()
 });
 
 export const uiDiffConfigSchema = z.object({

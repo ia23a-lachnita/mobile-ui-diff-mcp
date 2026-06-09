@@ -429,6 +429,82 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
   warnings.push(...(refCtxResult.warnings ?? []));
   const referenceContextSummary = refCtxResult.referenceContextSummary;
 
+  // ---- Stage 0.75: Flutter anchor resolution ----
+  // Loads the semantic target map and anchor dump, resolves targets to physical
+  // pixel rects, and injects flutter_anchor rects as overlapLegibility regions.
+  // Must run before Stage 1c so OverlapLegibilityAnalyzer sees the injected regions.
+  let targetResolutionSummary: import('../flutter/types').TargetResolutionSummary | undefined;
+  if (input.targetMapPath || input.flutterAnchorsPath) {
+    try {
+      const { parseFlutterAnchorDump } = await import('../flutter/anchorDumpParser');
+      const { resolveTargets } = await import('../flutter/targetResolver');
+      const { semanticTargetMapSchema } = await import('../flutter/semanticTargetMap');
+      const { waitForAnchorArtifact } = await import('../flutter/anchorArtifactReader');
+      const { resolveAbsolutePath: resolveAbs } = await import('../utils/fs');
+
+      let targetMap: import('../flutter/semanticTargetMap').SemanticTargetMapParsed | null = null;
+      if (input.targetMapPath) {
+        const raw = JSON.parse(await fs.readFile(resolveAbs(input.targetMapPath), 'utf-8'));
+        const result = semanticTargetMapSchema.safeParse(raw);
+        if (!result.success) {
+          warnings.push(`targetMapPath: invalid semantic target map — ${result.error.issues[0]?.message ?? 'schema error'}. Flutter anchor resolution skipped.`);
+        } else {
+          targetMap = result.data;
+        }
+      }
+
+      let anchorDump: import('../flutter/types').ParsedAnchorDump | null = null;
+      if (input.flutterAnchorsPath && targetMap) {
+        const artifact = await waitForAnchorArtifact({
+          artifactDir: resolveAbs(input.flutterAnchorsPath),
+          timeoutMs: 30000,
+          pollIntervalMs: 500
+        });
+        if (artifact.status !== 'ready' || !artifact.parsed) {
+          warnings.push(`flutterAnchorsPath: anchor artifact not ready (${artifact.status}). Flutter anchor resolution skipped.`);
+        } else {
+          anchorDump = artifact.parsed;
+        }
+      }
+
+      if (targetMap && anchorDump) {
+        const resolution = resolveTargets(targetMap, anchorDump);
+        targetResolutionSummary = resolution;
+
+        const anchorOverlapRegions: NonNullable<CompareImagesInput['overlapLegibility']>['regions'] = [];
+        for (const resolved of resolution.results) {
+          if (resolved.source !== 'flutter_anchor' || !resolved.rect) continue;
+          const target = targetMap.targets.find((t) => t.id === resolved.targetId);
+          if (!target) continue;
+          for (const criterion of target.criteria) {
+            if (criterion.domain !== 'legibility.overlap') continue;
+            anchorOverlapRegions!.push({
+              id: criterion.id,
+              box: resolved.rect,
+              coordinateSpace: 'expected',
+              avoidColors: criterion.avoidColors,
+              minClearancePx: criterion.minClearancePx,
+              maxOverlapPercent: criterion.maxOverlapPercent,
+              severity: criterion.severity
+            });
+          }
+        }
+
+        if (anchorOverlapRegions.length > 0) {
+          const existingOverlap = ctx.config.overlapLegibility ?? {};
+          const existingRegions = existingOverlap.regions ?? [];
+          (ctx.config as any).overlapLegibility = {
+            ...existingOverlap,
+            enabled: true,
+            regions: [...existingRegions, ...anchorOverlapRegions]
+          };
+        }
+      }
+    } catch (err: any) {
+      warnings.push(`Flutter anchor resolution failed: ${err?.message ?? String(err)}`);
+    }
+  }
+
   // ---- Stage 1a: InvalidCaptureAnalyzer (must run first to gate everything) ----
   const invalidCaptureAnalyzer = new InvalidCaptureAnalyzer();
   const invalidCaptureResult = await invalidCaptureAnalyzer.run(ctx, graph);
@@ -1234,6 +1310,10 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     ...(modelJudgesSummary ? { modelJudgesSummary } : {}),
     ...(overlapLegibilitySummary ? { overlapLegibilitySummary } : {}),
     ...(criterionJudgesSummaryData ? { criterionJudgesSummary: criterionJudgesSummaryData } : {}),
+    ...(targetResolutionSummary ? { targetResolutionSummary } : {}),
+    ...(targetResolutionSummary
+      ? { measurementBoxSource: targetResolutionSummary.resolvedViaFlutterAnchor > 0 ? ('flutter_anchor' as const) : ('none' as const) }
+      : {}),
     timings,
     artifacts: {
       expected: pixelDiff.processedExpectedPath,

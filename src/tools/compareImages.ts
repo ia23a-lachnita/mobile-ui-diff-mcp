@@ -43,6 +43,10 @@ export interface CompareImagesInput {
   referenceContext?: ReferenceContextConfig;
   modelJudges?: ModelJudgesConfig;
   visualAuditMode?: 'visual_parity' | 'metric_only';
+  /** Path to a semantic target map JSON (flutter_anchor locators). */
+  targetMapPath?: string;
+  /** Path to the flutter anchor artifact directory or flutter-anchors.json file. */
+  flutterAnchorsPath?: string;
   overlapLegibility?: {
     enabled?: boolean;
     regions?: Array<{

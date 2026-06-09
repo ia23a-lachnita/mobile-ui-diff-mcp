@@ -40,6 +40,8 @@ export interface RunScreenUiDiffInput {
   modelJudges?: ModelJudgesConfig;
   visualAuditMode?: 'visual_parity' | 'metric_only';
   overlapLegibility?: CompareImagesInput['overlapLegibility'];
+  targetMapPath?: string;
+  flutterAnchorsPath?: string;
 }
 
 export interface RunScreenUiDiffDelta {
@@ -285,7 +287,9 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     referenceContext: input.referenceContext ?? screenConfig.referenceContext,
     modelJudges: input.modelJudges ?? screenConfig.modelJudges,
     visualAuditMode: input.visualAuditMode ?? screenConfig.visualAuditMode,
-    overlapLegibility: input.overlapLegibility ?? screenConfig.overlapLegibility
+    overlapLegibility: input.overlapLegibility ?? screenConfig.overlapLegibility,
+    targetMapPath: input.targetMapPath ?? screenConfig.targetMapPath,
+    flutterAnchorsPath: input.flutterAnchorsPath ?? screenConfig.flutterAnchorsPath
   };
 
   const includeVlmAnalysis = merged.includeVlmAnalysis ?? false;
@@ -417,7 +421,9 @@ export async function runScreenUiDiff(input: RunScreenUiDiffInput): Promise<RunS
     referenceContext: merged.referenceContext,
     modelJudges: merged.modelJudges,
     visualAuditMode: merged.visualAuditMode,
-    overlapLegibility: merged.overlapLegibility
+    overlapLegibility: merged.overlapLegibility,
+    targetMapPath: merged.targetMapPath,
+    flutterAnchorsPath: merged.flutterAnchorsPath
   });
 
   const reportPath = path.join(resolvedRunOutputDir, 'report.json');
