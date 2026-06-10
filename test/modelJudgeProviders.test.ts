@@ -130,6 +130,41 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
     expect(result[0].source).toBe('adversarialReviewer');
   });
 
+  it('preserves diagnostic metadata from polarity error evidence', async () => {
+    const responseBody = JSON.stringify({
+      evidence: [{
+        claimId: 'provider-structured-error',
+        subject: 'roi:macro-ring-hero',
+        polarity: 'error',
+        claim: 'Provider emitted a structured error packet',
+        confidence: 0,
+        source: 'modelJudge',
+        measurements: {
+          error: 'schema_parse_error',
+          failureReason: 'schema_parse_error',
+          rawResponsePreview: '{"evidence":[{"claimId":"bad"}]}',
+          schemaErrorPreview: 'item provider-structured-error failed schema validation',
+          lastFailureReason: 'invalid_json',
+          diagnosticIntegrity: 'adapter_defect'
+        }
+      }]
+    });
+
+    mockFetch.mockResolvedValueOnce(makeOkResponse(responseBody));
+    const provider = new OpenRouterProvider('test-key', 'test-model');
+    const result = await provider.analyze(makeBundle(), []);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].measurements).toMatchObject({
+      error: 'schema_parse_error',
+      failureReason: 'schema_parse_error',
+      rawResponsePreview: '{"evidence":[{"claimId":"bad"}]}',
+      schemaErrorPreview: 'item provider-structured-error failed schema validation',
+      lastFailureReason: 'invalid_json',
+      diagnosticIntegrity: 'adapter_defect'
+    });
+  });
+
   it('preserves source role: sourceAwareReviewer', async () => {
     const responseBody = JSON.stringify({
       evidence: [{
@@ -255,7 +290,28 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
     const provider = new OpenRouterProvider('test-key', 'test-model', 45000, 1, true);
     const result = await provider.analyze(makeBundle('roi-a'), []);
     expect(mockFetch).toHaveBeenCalledTimes(2); // initial + 1 retry
-    expect(result[0].measurements).toMatchObject({ error: 'parse_error_after_retry' });
+    expect(result[0].measurements).toMatchObject({
+      error: 'retry_exhausted',
+      failureReason: 'retry_exhausted',
+      rawResponsePreview: badResponse.slice(0, 200)
+    });
+    expect(String(result[0].measurements?.schemaErrorPreview)).toContain('polarity');
+  });
+
+  it('schema mismatch without retry preserves schema_parse_error diagnostic', async () => {
+    const badResponse = JSON.stringify({
+      evidence: [{ claimId: 'no-polarity', claim: 'Something', confidence: 0.9 }]
+    });
+    mockFetch.mockResolvedValue(makeOkResponse(badResponse));
+    const provider = new OpenRouterProvider('test-key', 'test-model', 45000, 1, false);
+    const result = await provider.analyze(makeBundle('roi-schema'), []);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result[0].measurements).toMatchObject({
+      error: 'schema_parse_error',
+      failureReason: 'schema_parse_error',
+      rawResponsePreview: badResponse.slice(0, 200)
+    });
+    expect(String(result[0].measurements?.schemaErrorPreview)).toContain('polarity');
   });
 
   it('invalid polarity triggers parse error', async () => {
@@ -265,7 +321,11 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
     mockFetch.mockResolvedValue(makeOkResponse(badResponse));
     const provider = new OpenRouterProvider('test-key', 'test-model', 45000, 1, true);
     const result = await provider.analyze(makeBundle('roi-b'), []);
-    expect(result[0].measurements).toMatchObject({ error: 'parse_error_after_retry' });
+    expect(result[0].measurements).toMatchObject({
+      error: 'retry_exhausted',
+      failureReason: 'retry_exhausted',
+      rawResponsePreview: badResponse.slice(0, 200)
+    });
   });
 
   it('maxRetries=0 returns parse error without retrying', async () => {
@@ -276,7 +336,11 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
     const provider = new OpenRouterProvider('test-key', 'test-model', 45000, 0, true);
     const result = await provider.analyze(makeBundle('roi-c'), []);
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(result[0].measurements).toMatchObject({ error: 'parse_error_after_retry' });
+    expect(result[0].measurements).toMatchObject({
+      error: 'schema_parse_error',
+      failureReason: 'schema_parse_error',
+      rawResponsePreview: badResponse.slice(0, 200)
+    });
   });
 
   it('retryOnParseError=false skips retry on parse error', async () => {
@@ -287,7 +351,11 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
     const provider = new OpenRouterProvider('test-key', 'test-model', 45000, 1, false);
     const result = await provider.analyze(makeBundle('roi-d'), []);
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(result[0].measurements).toMatchObject({ error: 'parse_error_after_retry' });
+    expect(result[0].measurements).toMatchObject({
+      error: 'schema_parse_error',
+      failureReason: 'schema_parse_error',
+      rawResponsePreview: badResponse.slice(0, 200)
+    });
   });
 
   it('high-confidence mismatch without explicit blocking:true is non-blocking', async () => {

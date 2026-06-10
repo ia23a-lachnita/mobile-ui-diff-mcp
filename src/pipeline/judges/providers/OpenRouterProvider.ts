@@ -53,6 +53,55 @@ const CRITERION_BATCH_JUDGE_SCHEMA = {
   }
 };
 
+const RAW_PREVIEW_LIMIT = 200;
+const ENVELOPE_PREVIEW_LIMIT = 500;
+
+function safeJsonPreview(value: unknown, maxLength = RAW_PREVIEW_LIMIT): string {
+  if (typeof value === 'string') {
+    return value.length > 0 ? value.slice(0, maxLength) : '<empty_response>';
+  }
+  const seen = new WeakSet<object>();
+  const text = JSON.stringify(value, (key, innerValue) => {
+    if (/authorization|api[-_]?key|token|secret|password/i.test(key)) return '<redacted>';
+    if (typeof innerValue === 'string' && innerValue.length > maxLength) return `${innerValue.slice(0, maxLength)}...<truncated>`;
+    if (innerValue && typeof innerValue === 'object') {
+      if (seen.has(innerValue)) return '<circular>';
+      seen.add(innerValue);
+    }
+    return innerValue;
+  });
+  return (text ?? String(value)).slice(0, maxLength);
+}
+
+function providerErrorEvidence(input: {
+  roiId: string;
+  claim: string;
+  error: string;
+  failureReason: string;
+  rawResponsePreview: string;
+  schemaErrorPreview?: string;
+  lastFailureReason?: string;
+  diagnosticIntegrity?: 'adapter_defect' | 'internal_missing_error_detail';
+}): Evidence[] {
+  return [{
+    source: 'modelJudge',
+    claimId: `openrouter-error-${input.failureReason}-${input.roiId}`,
+    subject: `roi:${input.roiId}`,
+    claim: input.claim,
+    confidence: 0,
+    authority: 'model' as const,
+    polarity: 'error' as any,
+    measurements: {
+      error: input.error,
+      failureReason: input.failureReason,
+      rawResponsePreview: input.rawResponsePreview,
+      ...(input.schemaErrorPreview ? { schemaErrorPreview: input.schemaErrorPreview.slice(0, RAW_PREVIEW_LIMIT) } : {}),
+      ...(input.lastFailureReason ? { lastFailureReason: input.lastFailureReason } : {}),
+      ...(input.diagnosticIntegrity ? { diagnosticIntegrity: input.diagnosticIntegrity } : {})
+    }
+  } as Evidence];
+}
+
 export class OpenRouterProvider implements IModelJudgeProvider {
   readonly providerName = 'openrouter';
 
@@ -512,6 +561,7 @@ export class OpenRouterProvider implements IModelJudgeProvider {
 
   private async callWithRetry(messages: any[], roiId: string, attempt = 0): Promise<Evidence[]> {
     let responseText = '';
+    let responseEnvelope: any;
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -540,23 +590,43 @@ export class OpenRouterProvider implements IModelJudgeProvider {
       }
 
       const data = await response.json() as any;
-      responseText = data?.choices?.[0]?.message?.content ?? '';
+      responseEnvelope = data;
+      const content = data?.choices?.[0]?.message?.content;
+      if (typeof content !== 'string') {
+        return providerErrorEvidence({
+          roiId,
+          claim: 'OpenRouter response envelope did not contain choices[0].message.content',
+          error: 'provider_response_missing_content',
+          failureReason: 'provider_response_missing_content',
+          rawResponsePreview: safeJsonPreview(data, ENVELOPE_PREVIEW_LIMIT)
+        });
+      }
+      if (content.length === 0) {
+        return providerErrorEvidence({
+          roiId,
+          claim: 'OpenRouter returned empty structured judge content',
+          error: 'empty_response',
+          failureReason: 'empty_response',
+          rawResponsePreview: '<empty_response>'
+        });
+      }
+      responseText = content;
     } catch (err: any) {
       const isTimeout = err?.name === 'AbortError';
-      return [{
-        source: 'modelJudge',
-        claimId: `openrouter-error-${roiId}`,
-        subject: `roi:${roiId}`,
+      const message = err?.message ?? String(err);
+      return providerErrorEvidence({
+        roiId,
         claim: isTimeout
           ? `OpenRouter analysis timed out after ${this.timeoutMs}ms`
-          : `OpenRouter analysis failed: ${err?.message ?? String(err)}`,
-        confidence: 0,
-        authority: 'model' as const,
-        measurements: { error: err?.message ?? String(err) }
-      }];
+          : `OpenRouter analysis failed: ${message}`,
+        error: message,
+        failureReason: isTimeout ? 'timeout' : 'provider_request_failed',
+        rawResponsePreview: responseEnvelope ? safeJsonPreview(responseEnvelope, ENVELOPE_PREVIEW_LIMIT) : safeJsonPreview(message)
+      });
     }
 
     const VALID_POLARITY = new Set(['match', 'mismatch', 'uncertainty', 'error']);
+    const rawPreview = responseText.length > 0 ? safeJsonPreview(responseText) : '<empty_response>';
     try {
       const parsed = JSON.parse(responseText);
       const items: any[] = Array.isArray(parsed) ? parsed : (parsed.evidence ?? parsed.items ?? []);
@@ -568,7 +638,32 @@ export class OpenRouterProvider implements IModelJudgeProvider {
           throw new Error(`item '${item.claimId}' has missing or invalid polarity: ${JSON.stringify(item.polarity)}`);
         }
         // polarity:'error' items are provider errors, not visual evidence
-        if (item.polarity === 'error') continue;
+        if (item.polarity === 'error') {
+          evidence.push({
+            source: typeof item.source === 'string' && item.source ? item.source : 'modelJudge',
+            claimId: `openrouter-error-${roiId}-${item.claimId}`,
+            subject: item.subject ?? `roi:${roiId}`,
+            claim: String(item.claim),
+            confidence: 0,
+            authority: 'model' as const,
+            polarity: 'error' as any,
+            measurements: {
+              error: String(item.measurements?.error ?? item.claim),
+              failureReason: String(item.measurements?.failureReason ?? 'provider_error'),
+              rawResponsePreview: String(item.measurements?.rawResponsePreview ?? rawPreview).slice(0, RAW_PREVIEW_LIMIT),
+              ...(typeof item.measurements?.schemaErrorPreview === 'string'
+                ? { schemaErrorPreview: item.measurements.schemaErrorPreview.slice(0, RAW_PREVIEW_LIMIT) }
+                : {}),
+              ...(typeof item.measurements?.lastFailureReason === 'string'
+                ? { lastFailureReason: item.measurements.lastFailureReason }
+                : {}),
+              ...(item.measurements?.diagnosticIntegrity === 'adapter_defect' || item.measurements?.diagnosticIntegrity === 'internal_missing_error_detail'
+                ? { diagnosticIntegrity: item.measurements.diagnosticIntegrity }
+                : {})
+            }
+          } as Evidence);
+          continue;
+        }
         evidence.push({
           source: typeof item.source === 'string' && item.source ? item.source : 'modelJudge',
           claimId: `openrouter-${roiId}-${item.claimId}`,
@@ -586,25 +681,45 @@ export class OpenRouterProvider implements IModelJudgeProvider {
           measurements: item.measurements
         });
       }
+      if (evidence.length === 0) {
+        return providerErrorEvidence({
+          roiId,
+          claim: 'OpenRouter returned no usable evidence items after an attempted judge call',
+          error: 'provider_returned_no_evidence',
+          failureReason: 'provider_returned_no_evidence',
+          rawResponsePreview: rawPreview,
+          diagnosticIntegrity: 'adapter_defect'
+        });
+      }
       return evidence;
     } catch (parseErr: any) {
+      const schemaErrorPreview = parseErr?.message ?? 'parse error';
+      if (parseErr instanceof SyntaxError) {
+        return providerErrorEvidence({
+          roiId,
+          claim: `OpenRouter returned invalid JSON: ${schemaErrorPreview}`,
+          error: 'invalid_json',
+          failureReason: 'invalid_json',
+          rawResponsePreview: rawPreview,
+          schemaErrorPreview
+        });
+      }
       if (this.retryOnParseError && attempt < this.maxRetries) {
         return this.callWithRetry(messages, roiId, attempt + 1);
       }
-      const rawPreview = responseText.length > 0 ? responseText.slice(0, 200) : '<empty_response>';
-      return [{
-        source: 'modelJudge',
-        claimId: `openrouter-parse-error-${roiId}`,
-        subject: `roi:${roiId}`,
-        claim: `OpenRouter returned unparseable response after ${attempt + 1} attempt(s): ${parseErr?.message ?? 'parse error'}`,
-        confidence: 0,
-        authority: 'model' as const,
-        measurements: {
-          error: 'parse_error_after_retry',
-          failureReason: parseErr?.message ?? 'parse error',
-          rawResponsePreview: rawPreview
-        }
-      }];
+      const exhausted = this.retryOnParseError && this.maxRetries > 0 && attempt >= this.maxRetries;
+      const failureReason = exhausted ? 'retry_exhausted' : 'schema_parse_error';
+      return providerErrorEvidence({
+        roiId,
+        claim: exhausted
+          ? `OpenRouter structured output parse failed after ${attempt + 1} attempt(s): ${schemaErrorPreview}`
+          : `OpenRouter structured output parse failed: ${schemaErrorPreview}`,
+        error: failureReason,
+        failureReason,
+        rawResponsePreview: rawPreview,
+        schemaErrorPreview,
+        ...(exhausted ? { lastFailureReason: 'schema_parse_error' } : {})
+      });
     }
   }
 }

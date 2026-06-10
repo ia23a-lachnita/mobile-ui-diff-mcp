@@ -131,7 +131,7 @@ describe('ensureJudgeErrorHasDiagnostics invariant', () => {
     expect(ensureJudgeErrorHasDiagnostics(err)).toEqual(err);
   });
 
-  it('fills in unknown_empty_failure when failureReason is missing', () => {
+  it('marks internal diagnostic gaps without treating missing detail as provider root cause', () => {
     const err = {
       source: 'modelJudgeRuntime' as const,
       kind: 'provider_error' as const,
@@ -143,6 +143,7 @@ describe('ensureJudgeErrorHasDiagnostics invariant', () => {
     const normalized = ensureJudgeErrorHasDiagnostics(err);
     expect(normalized.failureReason).toBe('unknown_empty_failure');
     expect(normalized.rawResponsePreview).toBe('<missing_error_detail>');
+    expect((normalized as any).diagnosticIntegrity).toBe('internal_missing_error_detail');
   });
 
   it('fills rawResponsePreview sentinel when only failureReason is provided', () => {
@@ -158,13 +159,14 @@ describe('ensureJudgeErrorHasDiagnostics invariant', () => {
     const normalized = ensureJudgeErrorHasDiagnostics(err);
     expect(normalized.failureReason).toBe('timeout');
     expect(normalized.rawResponsePreview).toBe('<missing_error_detail>');
+    expect((normalized as any).diagnosticIntegrity).toBe('internal_missing_error_detail');
   });
 });
 
 // ── Scenario 1: Primary returns [] (empty evidence array) ────────────────────
 
 describe('Calorix silent failure: primary analyze() returns empty array', () => {
-  it('report must not have undefined error fields for required primary judge', async () => {
+  it('modelJudgeAnalyzer.convertsEmptyEvidenceArrayAfterAttemptIntoProviderErrorEvidence', async () => {
     // Primary returns [] — valid parse, no items, no explicit error
     MockedOpenRouter.mockImplementation(function () {
       return { analyze: vi.fn().mockResolvedValue([]) };
@@ -207,14 +209,67 @@ describe('Calorix silent failure: primary analyze() returns empty array', () => 
 
     const primaryFailed = failedRois.find((r) => r.provider === 'openrouter');
     expect(primaryFailed).toBeDefined();
-    expect(primaryFailed!.failureReason).toBe('unknown_empty_failure');
-    expect(primaryFailed!.rawResponsePreview).toBe('<missing_error_detail>');
+    expect(primaryFailed!.failureReason).toBe('provider_returned_no_evidence');
+    expect(primaryFailed!.rawResponsePreview).toBe('<provider_adapter_returned_empty_array>');
+    expect((primaryFailed as any).diagnosticIntegrity).toBe('adapter_defect');
 
     // ── suggestedFixes must NOT contain required:false in visual_parity ────
     const fixes = report.actionRequired?.suggestedFixes ?? [];
     for (const fix of fixes) {
       expect(fix).not.toMatch(/required.*false|make.*required.*optional|disable.*required/i);
     }
+  });
+
+  it('reportContract.neverEmitsMissingErrorDetailForAttemptedJudgeFailure', async () => {
+    MockedOpenRouter.mockImplementation(function () {
+      return { analyze: vi.fn().mockResolvedValue([]) };
+    } as any);
+
+    process.env.OPENROUTER_API_KEY = 'test-key-contract';
+    delete process.env.NVIDIA_API_KEY;
+
+    const expectedPath = await writeFile('expected-contract.png', makeGrayPng());
+    const configPath = await buildCalorixConfig(expectedPath);
+
+    const report = await runScreenUiDiff({
+      screen: 'today',
+      configPath,
+      actualImage: await writeFile('actual-contract.png', makeSlightlyDifferentPng()),
+      runName: 'run-report-contract'
+    });
+
+    expect(report.modelJudgesSummary?.failedRois.length).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify(report)).not.toContain('<missing_error_detail>');
+    expect(JSON.stringify(report)).not.toContain('unknown_empty_failure');
+  });
+
+  it('visualParity.requiredJudgeOperationalFailureBlocksAcceptance', async () => {
+    MockedOpenRouter.mockImplementation(function () {
+      return { analyze: vi.fn().mockResolvedValue([]) };
+    } as any);
+
+    process.env.OPENROUTER_API_KEY = 'test-key-blocks-acceptance';
+    delete process.env.NVIDIA_API_KEY;
+
+    const expectedPath = await writeFile('expected-blocking.png', makeGrayPng());
+    const configPath = await buildCalorixConfig(expectedPath);
+
+    const report = await runScreenUiDiff({
+      screen: 'today',
+      configPath,
+      actualImage: await writeFile('actual-blocking.png', makeSlightlyDifferentPng()),
+      runName: 'run-required-blocks'
+    });
+
+    expect(report.modelJudgesSummary?.required).toBe(true);
+    expect(report.visualAuditStatus).toBe('error');
+    expect(report.acceptanceStatus).not.toMatch(/accepted|pass/);
+    expect(report.actionRequired?.type).toBe('model_judges_failed');
+    expect(report.actionRequired?.message).toMatch(/required|judge|failed|evidence/i);
+
+    const failedRoi = report.modelJudgesSummary?.failedRois.find((r) => r.provider === 'openrouter');
+    expect(failedRoi?.failureReason).toBe('provider_returned_no_evidence');
+    expect(failedRoi?.rawResponsePreview).toBe('<provider_adapter_returned_empty_array>');
   });
 
 });
@@ -404,8 +459,9 @@ describe('Calorix silent failure: required reviewer analyze() returns empty arra
     const failedRois = report.modelJudgesSummary?.failedRois ?? [];
     const reviewerFailed = failedRois.find((r) => r.provider === 'nvidia');
     expect(reviewerFailed).toBeDefined();
-    expect(reviewerFailed!.failureReason).toBe('unknown_empty_failure');
-    expect(reviewerFailed!.rawResponsePreview).toBe('<missing_error_detail>');
+    expect(reviewerFailed!.failureReason).toBe('provider_returned_no_evidence');
+    expect(reviewerFailed!.rawResponsePreview).toBe('<provider_adapter_returned_empty_array>');
+    expect((reviewerFailed as any).diagnosticIntegrity).toBe('adapter_defect');
   });
 
   it('reviewer returns malformed error evidence — failureReason and rawResponsePreview still present', async () => {

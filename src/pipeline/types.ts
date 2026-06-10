@@ -51,6 +51,9 @@ export interface JudgeProviderError {
   message: string;
   failureReason?: string;
   rawResponsePreview?: string;
+  schemaErrorPreview?: string;
+  lastFailureReason?: string;
+  diagnosticIntegrity?: 'adapter_defect' | 'internal_missing_error_detail';
 }
 
 export interface JudgeProviderRunSummary {

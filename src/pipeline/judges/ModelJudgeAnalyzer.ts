@@ -16,13 +16,35 @@ function isProviderErrorEvidence(e: Evidence): boolean {
  * preventing the report from containing status:error with no explanation.
  */
 export function ensureJudgeErrorHasDiagnostics(err: JudgeProviderError): JudgeProviderError {
+  const hasRawPreview = typeof err.rawResponsePreview === 'string' && err.rawResponsePreview.length > 0;
+  const hasFailureReason = typeof err.failureReason === 'string' && err.failureReason.length > 0;
+  const hasDiagnosticGap = !hasRawPreview || !hasFailureReason;
   return {
     ...err,
-    failureReason: err.failureReason ?? 'unknown_empty_failure',
-    rawResponsePreview:
-      typeof err.rawResponsePreview === 'string' && err.rawResponsePreview.length > 0
-        ? err.rawResponsePreview
-        : '<missing_error_detail>'
+    failureReason: hasFailureReason ? err.failureReason : 'unknown_empty_failure',
+    rawResponsePreview: hasRawPreview ? err.rawResponsePreview : '<missing_error_detail>',
+    ...(hasDiagnosticGap && !err.diagnosticIntegrity ? { diagnosticIntegrity: 'internal_missing_error_detail' as const } : {})
+  };
+}
+
+function attemptedProviderReturnedNoEvidenceError(input: {
+  provider: string;
+  model?: string;
+  roiId: string;
+  blocking: boolean;
+  role: 'Primary' | 'Reviewer';
+}): JudgeProviderError {
+  return {
+    source: 'modelJudgeRuntime',
+    kind: 'provider_error',
+    provider: input.provider,
+    ...(input.model ? { model: input.model } : {}),
+    roiId: input.roiId,
+    blocking: input.blocking,
+    message: `${input.role} judge '${input.provider}' returned no evidence after an attempted ROI/global judge call for ROI '${input.roiId}'`,
+    failureReason: 'provider_returned_no_evidence',
+    rawResponsePreview: '<provider_adapter_returned_empty_array>',
+    diagnosticIntegrity: 'adapter_defect'
   };
 }
 
@@ -299,7 +321,12 @@ export class ModelJudgeAnalyzer {
                   blocking: isRequired,
                   message: String(item.measurements?.error ?? item.claim),
                   ...(typeof item.measurements?.failureReason === 'string' ? { failureReason: item.measurements.failureReason } : {}),
-                  ...(typeof item.measurements?.rawResponsePreview === 'string' ? { rawResponsePreview: item.measurements.rawResponsePreview } : {})
+                  ...(typeof item.measurements?.rawResponsePreview === 'string' ? { rawResponsePreview: item.measurements.rawResponsePreview } : {}),
+                  ...(typeof item.measurements?.schemaErrorPreview === 'string' ? { schemaErrorPreview: item.measurements.schemaErrorPreview } : {}),
+                  ...(typeof item.measurements?.lastFailureReason === 'string' ? { lastFailureReason: item.measurements.lastFailureReason } : {}),
+                  ...(item.measurements?.diagnosticIntegrity === 'adapter_defect' || item.measurements?.diagnosticIntegrity === 'internal_missing_error_detail'
+                    ? { diagnosticIntegrity: item.measurements.diagnosticIntegrity }
+                    : {})
                 }));
                 warnings.push(`ModelJudgeAnalyzer: primary provider returned error for ROI '${bundle.roiId}': ${item.measurements?.error ?? item.claim}`);
               } else {
@@ -311,18 +338,14 @@ export class ModelJudgeAnalyzer {
             // Guard: provider returned neither evidence nor an explicit error — synthesize a diagnostic
             // entry so the report cannot contain status:error with empty failedRois.
             if (!bundleHadEvidence && !bundleHadError) {
-              judgeProviderErrors.push({
-                source: 'modelJudgeRuntime',
-                kind: 'provider_error',
+              judgeProviderErrors.push(attemptedProviderReturnedNoEvidenceError({
                 provider: cfg.primary.provider,
                 model: cfg.primary.model,
                 roiId: bundle.roiId,
                 blocking: isRequired,
-                message: `Primary judge '${cfg.primary.provider}' returned empty evidence for ROI '${bundle.roiId}'`,
-                failureReason: 'unknown_empty_failure',
-                rawResponsePreview: '<missing_error_detail>'
-              });
-              warnings.push(`ModelJudgeAnalyzer: primary provider returned empty evidence for ROI '${bundle.roiId}' (no items, no explicit error)`);
+                role: 'Primary'
+              }));
+              warnings.push(`ModelJudgeAnalyzer: primary provider returned no evidence for ROI '${bundle.roiId}' after an attempted call (adapter defect)`);
             }
           } catch (err: any) {
             judgeProviderErrors.push(ensureJudgeErrorHasDiagnostics({
@@ -369,7 +392,12 @@ export class ModelJudgeAnalyzer {
                   blocking: cfg.requireConsensusForCodeHints ?? false,
                   message: String(item.measurements?.error ?? item.claim),
                   ...(typeof item.measurements?.failureReason === 'string' ? { failureReason: item.measurements.failureReason } : {}),
-                  ...(typeof item.measurements?.rawResponsePreview === 'string' ? { rawResponsePreview: item.measurements.rawResponsePreview } : {})
+                  ...(typeof item.measurements?.rawResponsePreview === 'string' ? { rawResponsePreview: item.measurements.rawResponsePreview } : {}),
+                  ...(typeof item.measurements?.schemaErrorPreview === 'string' ? { schemaErrorPreview: item.measurements.schemaErrorPreview } : {}),
+                  ...(typeof item.measurements?.lastFailureReason === 'string' ? { lastFailureReason: item.measurements.lastFailureReason } : {}),
+                  ...(item.measurements?.diagnosticIntegrity === 'adapter_defect' || item.measurements?.diagnosticIntegrity === 'internal_missing_error_detail'
+                    ? { diagnosticIntegrity: item.measurements.diagnosticIntegrity }
+                    : {})
                 }));
                 warnings.push(`ModelJudgeAnalyzer: reviewer provider returned error for ROI '${bundle.roiId}': ${item.measurements?.error ?? item.claim}`);
                 reviewerUnavailable = true;
@@ -383,18 +411,14 @@ export class ModelJudgeAnalyzer {
             // but do NOT set reviewerUnavailable, so the "no usable evidence" actionRequired
             // branch fires (not the "unavailable" branch) and MODEL_DISAGREEMENT blocking is preserved.
             if (!bundleHadEvidence && !bundleHadError) {
-              judgeProviderErrors.push({
-                source: 'modelJudgeRuntime',
-                kind: 'provider_error',
+              judgeProviderErrors.push(attemptedProviderReturnedNoEvidenceError({
                 provider: cfg.reviewer.provider,
                 model: cfg.reviewer.model,
                 roiId: bundle.roiId,
                 blocking: cfg.requireConsensusForCodeHints ?? false,
-                message: `Reviewer judge '${cfg.reviewer.provider}' returned empty evidence for ROI '${bundle.roiId}'`,
-                failureReason: 'unknown_empty_failure',
-                rawResponsePreview: '<missing_error_detail>'
-              });
-              warnings.push(`ModelJudgeAnalyzer: reviewer provider returned empty evidence for ROI '${bundle.roiId}' (no items, no explicit error)`);
+                role: 'Reviewer'
+              }));
+              warnings.push(`ModelJudgeAnalyzer: reviewer provider returned no evidence for ROI '${bundle.roiId}' after an attempted call (adapter defect)`);
             }
           } catch (err: any) {
             judgeProviderErrors.push(ensureJudgeErrorHasDiagnostics({
