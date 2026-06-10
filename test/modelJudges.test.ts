@@ -369,7 +369,7 @@ describe('modelJudges schema accepts timeoutMs, maxRetries, retryOnParseError', 
 // Empty / unparseable OpenRouter response — failure diagnostics
 // ============================================================
 
-describe('ModelJudgeAnalyzer — empty/unparseable OpenRouter response', () => {
+describe('ModelJudgeAnalyzer — provider diagnostic preservation', () => {
   const mockFetch = vi.fn();
 
   beforeEach(() => {
@@ -381,7 +381,7 @@ describe('ModelJudgeAnalyzer — empty/unparseable OpenRouter response', () => {
     vi.unstubAllGlobals();
   });
 
-  it('empty response: status error, errorCount>=1, failureReason + rawResponsePreview in judgeProviderErrors, actionRequired model_judges_failed', async () => {
+  it('modelJudgeAnalyzer.preservesEmptyProviderResponseForAttemptedRoi', async () => {
     const savedKey = process.env.OPENROUTER_API_KEY;
     process.env.OPENROUTER_API_KEY = 'test-key';
 
@@ -416,10 +416,10 @@ describe('ModelJudgeAnalyzer — empty/unparseable OpenRouter response', () => {
       const errors = result.judgeProviderErrors ?? [];
       expect(errors.length).toBeGreaterThanOrEqual(1);
       const err = errors[0];
-      expect(err.failureReason ?? err.message).toBeTruthy();
-      expect(err.rawResponsePreview).toBeDefined();
-      // empty response → preview is the '<empty_response>' sentinel
+      expect(err.failureReason).toBe('empty_response');
       expect(err.rawResponsePreview).toBe('<empty_response>');
+      expect(err.failureReason).not.toBe('unknown_empty_failure');
+      expect(err.rawResponsePreview).not.toBe('<missing_error_detail>');
 
       // In visual_parity mode, required:false must NOT appear in suggestedFixes
       const fixes = result.actionRequired?.suggestedFixes ?? [];
@@ -430,7 +430,7 @@ describe('ModelJudgeAnalyzer — empty/unparseable OpenRouter response', () => {
     }
   });
 
-  it('unparseable JSON response: failureReason describes parse error and rawResponsePreview shows raw text', async () => {
+  it('modelJudgeAnalyzer.preservesInvalidJsonProviderResponseForAttemptedRoi', async () => {
     const savedKey = process.env.OPENROUTER_API_KEY;
     process.env.OPENROUTER_API_KEY = 'test-key';
 
@@ -457,8 +457,47 @@ describe('ModelJudgeAnalyzer — empty/unparseable OpenRouter response', () => {
       const errors = result.judgeProviderErrors ?? [];
       expect(errors.length).toBeGreaterThanOrEqual(1);
       const err = errors[0];
-      expect(err.failureReason).toBeTruthy();
+      expect(err.failureReason).toBe('invalid_json');
       expect(err.rawResponsePreview).toBe(badJson.slice(0, 200));
+      expect(err.failureReason).not.toBe('unknown_empty_failure');
+      expect(err.rawResponsePreview).not.toBe('<missing_error_detail>');
+    } finally {
+      if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
+      else delete process.env.OPENROUTER_API_KEY;
+    }
+  });
+
+  it('modelJudgeAnalyzer.preservesMissingContentProviderEnvelope', async () => {
+    const savedKey = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = 'test-key';
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: 'cmpl-missing-content', choices: [{ message: {} }], usage: { total_tokens: 12 } }),
+      text: async () => ''
+    });
+
+    try {
+      const judge = new ModelJudgeAnalyzer({
+        enabled: true,
+        required: true,
+        policy: 'always',
+        primary: { provider: 'openrouter', model: 'test-model' }
+      }, 'visual_parity');
+
+      const result = await judge.run(makeContext(), new EvidenceGraph(), makeBundles());
+
+      expect(result.actionRequired?.type).toBe('model_judges_failed');
+      expect(result.judgeProviderRunSummary?.primaryErrorCount).toBeGreaterThanOrEqual(1);
+
+      const errors = result.judgeProviderErrors ?? [];
+      expect(errors.length).toBeGreaterThanOrEqual(1);
+      const err = errors[0];
+      expect(err.failureReason).toBe('provider_response_missing_content');
+      expect(err.rawResponsePreview).toContain('cmpl-missing-content');
+      expect(err.rawResponsePreview).not.toContain('test-key');
+      expect(err.rawResponsePreview).not.toBe('<missing_error_detail>');
     } finally {
       if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
       else delete process.env.OPENROUTER_API_KEY;

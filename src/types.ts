@@ -614,7 +614,16 @@ export interface ModelJudgesSummary {
   policy: string;
   primary?: ModelJudgesProviderSummary;
   reviewer?: ModelJudgesProviderSummary;
-  failedRois: Array<{ roiId: string; provider: string; error: string; failureReason?: string; rawResponsePreview?: string }>;
+  failedRois: Array<{
+    roiId: string;
+    provider: string;
+    error: string;
+    failureReason?: string;
+    rawResponsePreview?: string;
+    schemaErrorPreview?: string;
+    lastFailureReason?: string;
+    diagnosticIntegrity?: 'adapter_defect' | 'internal_missing_error_detail';
+  }>;
 }
 
 export interface AgentActionContract {

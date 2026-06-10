@@ -1367,7 +1367,10 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
       provider: pe.provider,
       error: pe.message,
       ...(pe.failureReason !== undefined ? { failureReason: pe.failureReason } : {}),
-      ...(pe.rawResponsePreview !== undefined ? { rawResponsePreview: pe.rawResponsePreview } : {})
+      ...(pe.rawResponsePreview !== undefined ? { rawResponsePreview: pe.rawResponsePreview } : {}),
+      ...(pe.schemaErrorPreview !== undefined ? { schemaErrorPreview: pe.schemaErrorPreview } : {}),
+      ...(pe.lastFailureReason !== undefined ? { lastFailureReason: pe.lastFailureReason } : {}),
+      ...(pe.diagnosticIntegrity !== undefined ? { diagnosticIntegrity: pe.diagnosticIntegrity } : {})
     }));
     const primaryCfg = (cfg as any).primary;
     const reviewerCfg = (cfg as any).reviewer;
