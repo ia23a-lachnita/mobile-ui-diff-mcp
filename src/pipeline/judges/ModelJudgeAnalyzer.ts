@@ -352,9 +352,12 @@ export class ModelJudgeAnalyzer {
         for (const bundle of bundles) {
           try {
             const bundleEvidence = await provider.analyze(bundle, allEvidence);
+            let bundleHadEvidence = false;
+            let bundleHadError = false;
             for (const item of bundleEvidence) {
               if (isProviderErrorEvidence(item)) {
-                judgeProviderErrors.push({
+                bundleHadError = true;
+                judgeProviderErrors.push(ensureJudgeErrorHasDiagnostics({
                   source: 'modelJudgeRuntime',
                   kind: 'provider_error',
                   provider: cfg.reviewer.provider,
@@ -364,16 +367,34 @@ export class ModelJudgeAnalyzer {
                   message: String(item.measurements?.error ?? item.claim),
                   ...(typeof item.measurements?.failureReason === 'string' ? { failureReason: item.measurements.failureReason } : {}),
                   ...(typeof item.measurements?.rawResponsePreview === 'string' ? { rawResponsePreview: item.measurements.rawResponsePreview } : {})
-                });
+                }));
                 warnings.push(`ModelJudgeAnalyzer: reviewer provider returned error for ROI '${bundle.roiId}': ${item.measurements?.error ?? item.claim}`);
                 reviewerUnavailable = true;
               } else {
+                bundleHadEvidence = true;
                 reviewerEvidence.push(item);
                 reviewerHadSuccess = true;
               }
             }
+            // Guard: reviewer returned neither evidence nor an explicit error — add diagnostics
+            // but do NOT set reviewerUnavailable, so the "no usable evidence" actionRequired
+            // branch fires (not the "unavailable" branch) and MODEL_DISAGREEMENT blocking is preserved.
+            if (!bundleHadEvidence && !bundleHadError) {
+              judgeProviderErrors.push({
+                source: 'modelJudgeRuntime',
+                kind: 'provider_error',
+                provider: cfg.reviewer.provider,
+                model: cfg.reviewer.model,
+                roiId: bundle.roiId,
+                blocking: cfg.requireConsensusForCodeHints ?? false,
+                message: `Reviewer judge '${cfg.reviewer.provider}' returned empty evidence for ROI '${bundle.roiId}'`,
+                failureReason: 'unknown_empty_failure',
+                rawResponsePreview: '<missing_error_detail>'
+              });
+              warnings.push(`ModelJudgeAnalyzer: reviewer provider returned empty evidence for ROI '${bundle.roiId}' (no items, no explicit error)`);
+            }
           } catch (err: any) {
-            judgeProviderErrors.push({
+            judgeProviderErrors.push(ensureJudgeErrorHasDiagnostics({
               source: 'modelJudgeRuntime',
               kind: 'provider_error',
               provider: cfg.reviewer.provider,
@@ -381,7 +402,7 @@ export class ModelJudgeAnalyzer {
               roiId: bundle.roiId,
               blocking: cfg.requireConsensusForCodeHints ?? false,
               message: err?.message ?? String(err)
-            });
+            }));
             warnings.push(`ModelJudgeAnalyzer: reviewer provider failed for ROI '${bundle.roiId}': ${err?.message ?? String(err)}`);
             reviewerUnavailable = true;
           }

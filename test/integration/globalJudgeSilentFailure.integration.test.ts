@@ -219,16 +219,6 @@ describe('Calorix silent failure: primary analyze() returns empty array', () => 
     }
   });
 
-  it('OLD behavior would have failed this assertion (regression guard)', async () => {
-    // This comment documents what the pre-fix state looked like:
-    // - failedRois was [] because no JudgeProviderError was pushed for empty analyze()
-    // - failureReason was undefined
-    // - rawResponsePreview was undefined
-    // - errorCount was 0 (before Math.max fix)
-    // The assertions above now enforce the correct invariant.
-    // This test itself acts as the regression guard.
-    expect(true).toBe(true); // placeholder — the real guard is in the test above
-  });
 });
 
 // ── Scenario 2: Primary returns error evidence (invalid JSON / parse failure) ─
@@ -298,7 +288,7 @@ describe('Calorix silent failure: primary analyze() returns parse error evidence
     }
   });
 
-  it('report includes failureReason for empty_response sentinel (empty HTTP content)', async () => {
+  it('report includes empty_response sentinel (empty HTTP content)', async () => {
     // Mock simulates what callWithRetry returns for empty HTTP body (responseText = '')
     MockedOpenRouter.mockImplementation(function () {
       return {
@@ -346,5 +336,144 @@ describe('Calorix silent failure: primary analyze() returns parse error evidence
     for (const fix of fixes) {
       expect(fix).not.toMatch(/required.*false|make.*required.*optional|disable.*required/i);
     }
+  });
+});
+
+// ── Scenario 3: Reviewer required (requireConsensusForCodeHints:true), returns [] ─
+
+describe('Calorix silent failure: required reviewer analyze() returns empty array', () => {
+  it('reviewer failedRois carries failureReason and rawResponsePreview', async () => {
+    // Primary succeeds with a valid match evidence item
+    MockedOpenRouter.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([{
+          source: 'visualMismatchJudge',
+          claimId: 'openrouter-today-visual-ok',
+          subject: 'roi:today',
+          claim: 'Visual appearance matches expected mockup',
+          confidence: 0.85,
+          authority: 'model',
+          polarity: 'match',
+          blocking: false
+        }])
+      };
+    } as any);
+
+    // Reviewer returns [] — empty evidence array (unknown_empty_failure)
+    MockedNvidia.mockImplementation(function () {
+      return { analyze: vi.fn().mockResolvedValue([]) };
+    } as any);
+
+    process.env.OPENROUTER_API_KEY = 'test-key-reviewer-empty';
+    process.env.NVIDIA_API_KEY = 'test-key-nvidia-reviewer';
+
+    const expectedPath = await writeFile('expected4.png', makeGrayPng());
+    const configPath = await writeConfig('today', {
+      platform: 'none',
+      expectedImage: expectedPath,
+      outputDir: path.join(tmpDir, 'runs'),
+      visualAuditMode: 'visual_parity',
+      modelJudges: {
+        enabled: true,
+        required: true,
+        requireConsensusForCodeHints: true,
+        primary: { provider: 'openrouter', model: 'qwen/qwen3-vl-235b-a22b-instruct' },
+        reviewer: { provider: 'nvidia', model: 'nvidia/nemotron-nano-12b-v2-vl' }
+      }
+    });
+
+    const report = await runScreenUiDiff({
+      screen: 'today',
+      configPath,
+      actualImage: await writeFile('actual4.png', makeSlightlyDifferentPng()),
+      runName: 'run-reviewer-empty'
+    });
+
+    // Reviewer failure blocks when requireConsensusForCodeHints:true
+    expect(report.actionRequired).toBeDefined();
+    expect(report.actionRequired!.type).toBe('model_judges_failed');
+    expect(report.actionRequired!.severity).toBe('blocking');
+
+    // ── reviewer summary ───────────────────────────────────────────────────
+    const reviewer = report.modelJudgesSummary?.reviewer;
+    expect(reviewer).toBeDefined();
+    expect(reviewer!.attempted).toBe(true);
+    expect(reviewer!.hadSuccess).toBe(false);
+    expect(reviewer!.status).toBe('error');
+    expect(reviewer!.errorCount).toBeGreaterThanOrEqual(1);
+
+    // ── failedRois must carry reviewer diagnostic fields ───────────────────
+    const failedRois = report.modelJudgesSummary?.failedRois ?? [];
+    const reviewerFailed = failedRois.find((r) => r.provider === 'nvidia');
+    expect(reviewerFailed).toBeDefined();
+    expect(reviewerFailed!.failureReason).toBeDefined();
+    expect(reviewerFailed!.rawResponsePreview).toBeDefined();
+  });
+
+  it('reviewer returns malformed error evidence — failureReason and rawResponsePreview still present', async () => {
+    // Primary succeeds
+    MockedOpenRouter.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([{
+          source: 'visualMismatchJudge',
+          claimId: 'openrouter-today-visual-ok-2',
+          subject: 'roi:today',
+          claim: 'UI layout matches mockup',
+          confidence: 0.9,
+          authority: 'model',
+          polarity: 'match',
+          blocking: false
+        }])
+      };
+    } as any);
+
+    // Reviewer returns error evidence without failureReason/rawResponsePreview
+    // — ensureJudgeErrorHasDiagnostics must fill the sentinels
+    MockedNvidia.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([{
+          source: 'modelJudge',
+          claimId: 'nvidia-error-today',
+          subject: 'roi:today',
+          claim: 'Reviewer analysis failed',
+          confidence: 0,
+          authority: 'model',
+          measurements: { error: 'provider_timeout' }
+          // intentionally no failureReason or rawResponsePreview
+        }])
+      };
+    } as any);
+
+    process.env.OPENROUTER_API_KEY = 'test-key-reviewer-malformed';
+    process.env.NVIDIA_API_KEY = 'test-key-nvidia-malformed';
+
+    const expectedPath = await writeFile('expected5.png', makeGrayPng());
+    const configPath = await writeConfig('today', {
+      platform: 'none',
+      expectedImage: expectedPath,
+      outputDir: path.join(tmpDir, 'runs'),
+      visualAuditMode: 'visual_parity',
+      modelJudges: {
+        enabled: true,
+        required: true,
+        requireConsensusForCodeHints: true,
+        primary: { provider: 'openrouter', model: 'qwen/qwen3-vl-235b-a22b-instruct' },
+        reviewer: { provider: 'nvidia', model: 'nvidia/nemotron-nano-12b-v2-vl' }
+      }
+    });
+
+    const report = await runScreenUiDiff({
+      screen: 'today',
+      configPath,
+      actualImage: await writeFile('actual5.png', makeSlightlyDifferentPng()),
+      runName: 'run-reviewer-malformed'
+    });
+
+    const failedRois = report.modelJudgesSummary?.failedRois ?? [];
+    const reviewerFailed = failedRois.find((r) => r.provider === 'nvidia');
+    expect(reviewerFailed).toBeDefined();
+    // ensureJudgeErrorHasDiagnostics must have filled in sentinels
+    expect(reviewerFailed!.failureReason).toBeDefined();
+    expect(reviewerFailed!.rawResponsePreview).toBeDefined();
   });
 });
