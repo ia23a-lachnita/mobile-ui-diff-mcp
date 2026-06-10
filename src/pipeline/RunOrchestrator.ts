@@ -1365,7 +1365,9 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     const failedRois = (judgeProviderErrors ?? []).map((pe: any) => ({
       roiId: pe.roiId,
       provider: pe.provider,
-      error: pe.message
+      error: pe.message,
+      ...(pe.failureReason !== undefined ? { failureReason: pe.failureReason } : {}),
+      ...(pe.rawResponsePreview !== undefined ? { rawResponsePreview: pe.rawResponsePreview } : {})
     }));
     const primaryCfg = (cfg as any).primary;
     const reviewerCfg = (cfg as any).reviewer;
@@ -1397,7 +1399,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         // Guard: required judge must not show 'skipped' — convert to 'error'
         status = isProviderRequired && visualAuditMode === 'visual_parity' ? 'error' : 'skipped';
       }
-      return { provider: providerCfg.provider, model: providerCfg.model, status, evidenceCount, errorCount, hadSuccess, attempted };
+      const reportedErrorCount = status === 'error' ? Math.max(1, errorCount) : errorCount;
+      return { provider: providerCfg.provider, model: providerCfg.model, status, evidenceCount, errorCount: reportedErrorCount, hadSuccess, attempted };
     };
 
     modelJudgesSummary = {

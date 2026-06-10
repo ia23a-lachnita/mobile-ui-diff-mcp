@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ModelJudgeAnalyzer } from '../src/pipeline/judges/ModelJudgeAnalyzer';
 import { EvidenceGraph } from '../src/pipeline/EvidenceGraph';
 import { EvidenceBundle } from '../src/pipeline/types';
@@ -361,6 +361,107 @@ describe('modelJudges schema accepts timeoutMs, maxRetries, retryOnParseError', 
       expect(result.actionRequired?.type).toBe('model_judges_unavailable');
     } finally {
       if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
+    }
+  });
+});
+
+// ============================================================
+// Empty / unparseable OpenRouter response — failure diagnostics
+// ============================================================
+
+describe('ModelJudgeAnalyzer — empty/unparseable OpenRouter response', () => {
+  const mockFetch = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch);
+    mockFetch.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('empty response: status error, errorCount>=1, failureReason + rawResponsePreview in judgeProviderErrors, actionRequired model_judges_failed', async () => {
+    const savedKey = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = 'test-key';
+
+    // Return empty content on every call (initial + retry)
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { content: '' } }] }),
+      text: async () => ''
+    });
+
+    try {
+      const judge = new ModelJudgeAnalyzer({
+        enabled: true,
+        required: true,
+        policy: 'always',
+        primary: { provider: 'openrouter', model: 'test-model' }
+      }, 'visual_parity');
+
+      const result = await judge.run(makeContext(), new EvidenceGraph(), makeBundles());
+
+      // actionRequired must be model_judges_failed with useful diagnostics
+      expect(result.actionRequired?.type).toBe('model_judges_failed');
+      expect(result.actionRequired?.message).toBeTruthy();
+      expect(result.actionRequired?.recommendedUserPrompt).toBeTruthy();
+
+      // errorCount >= 1 (provider returned no usable evidence — error path)
+      const prs = result.judgeProviderRunSummary;
+      expect(prs?.primaryErrorCount).toBeGreaterThanOrEqual(1);
+
+      // judgeProviderErrors must carry failureReason and rawResponsePreview
+      const errors = result.judgeProviderErrors ?? [];
+      expect(errors.length).toBeGreaterThanOrEqual(1);
+      const err = errors[0];
+      expect(err.failureReason ?? err.message).toBeTruthy();
+      expect(err.rawResponsePreview).toBeDefined();
+      // empty response → preview is the '<empty_response>' sentinel
+      expect(err.rawResponsePreview).toBe('<empty_response>');
+
+      // In visual_parity mode, required:false must NOT appear in suggestedFixes
+      const fixes = result.actionRequired?.suggestedFixes ?? [];
+      expect(fixes.every((f) => !f.includes('required: false'))).toBe(true);
+    } finally {
+      if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
+      else delete process.env.OPENROUTER_API_KEY;
+    }
+  });
+
+  it('unparseable JSON response: failureReason describes parse error and rawResponsePreview shows raw text', async () => {
+    const savedKey = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = 'test-key';
+
+    const badJson = 'this is { not valid json >>>>';
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { content: badJson } }] }),
+      text: async () => badJson
+    });
+
+    try {
+      const judge = new ModelJudgeAnalyzer({
+        enabled: true,
+        required: true,
+        policy: 'always',
+        primary: { provider: 'openrouter', model: 'test-model' }
+      }, 'visual_parity');
+
+      const result = await judge.run(makeContext(), new EvidenceGraph(), makeBundles());
+
+      expect(result.actionRequired?.type).toBe('model_judges_failed');
+
+      const errors = result.judgeProviderErrors ?? [];
+      expect(errors.length).toBeGreaterThanOrEqual(1);
+      const err = errors[0];
+      expect(err.failureReason).toBeTruthy();
+      expect(err.rawResponsePreview).toBe(badJson.slice(0, 200));
+    } finally {
+      if (savedKey !== undefined) process.env.OPENROUTER_API_KEY = savedKey;
+      else delete process.env.OPENROUTER_API_KEY;
     }
   });
 });

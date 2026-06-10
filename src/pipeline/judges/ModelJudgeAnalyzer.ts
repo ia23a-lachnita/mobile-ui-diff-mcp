@@ -219,7 +219,6 @@ export class ModelJudgeAnalyzer {
             recommendedUserPrompt: `Set modelJudges.policy to 'always_audit' or 'always' when required:true in visual_parity mode.`,
             suggestedFixes: [
               "Set modelJudges.policy: 'always_audit' to ensure judges always execute",
-              "Set modelJudges.required: false to make judge execution optional",
               "Set visualAuditMode: 'metric_only' to opt out of the judge requirement"
             ]
           }
@@ -279,7 +278,9 @@ export class ModelJudgeAnalyzer {
                   model: cfg.primary.model,
                   roiId: bundle.roiId,
                   blocking: isRequired,
-                  message: String(item.measurements?.error ?? item.claim)
+                  message: String(item.measurements?.error ?? item.claim),
+                  ...(typeof item.measurements?.failureReason === 'string' ? { failureReason: item.measurements.failureReason } : {}),
+                  ...(typeof item.measurements?.rawResponsePreview === 'string' ? { rawResponsePreview: item.measurements.rawResponsePreview } : {})
                 });
                 warnings.push(`ModelJudgeAnalyzer: primary provider returned error for ROI '${bundle.roiId}': ${item.measurements?.error ?? item.claim}`);
               } else {
@@ -327,7 +328,9 @@ export class ModelJudgeAnalyzer {
                   model: cfg.reviewer.model,
                   roiId: bundle.roiId,
                   blocking: cfg.requireConsensusForCodeHints ?? false,
-                  message: String(item.measurements?.error ?? item.claim)
+                  message: String(item.measurements?.error ?? item.claim),
+                  ...(typeof item.measurements?.failureReason === 'string' ? { failureReason: item.measurements.failureReason } : {}),
+                  ...(typeof item.measurements?.rawResponsePreview === 'string' ? { rawResponsePreview: item.measurements.rawResponsePreview } : {})
                 });
                 warnings.push(`ModelJudgeAnalyzer: reviewer provider returned error for ROI '${bundle.roiId}': ${item.measurements?.error ?? item.claim}`);
                 reviewerUnavailable = true;
@@ -375,7 +378,7 @@ export class ModelJudgeAnalyzer {
                 suggestedFixes: [
                   'Verify primary API key is valid and not rate-limited',
                   'Run model_judges_health with deep:true to test provider connectivity',
-                  "Set modelJudges.required: false to make failures non-blocking"
+                  ...(!isVisualParity ? ["Set modelJudges.required: false to make failures non-blocking"] : [])
                 ]
               }
             : {
@@ -386,7 +389,7 @@ export class ModelJudgeAnalyzer {
                 suggestedFixes: [
                   'Run model_judges_health with deep:true to test provider connectivity',
                   'Verify API keys are valid and not rate-limited',
-                  "Set modelJudges.required: false to make failures non-blocking"
+                  ...(!isVisualParity ? ["Set modelJudges.required: false to make failures non-blocking"] : [])
                 ]
               };
         } else {
@@ -399,7 +402,7 @@ export class ModelJudgeAnalyzer {
             suggestedFixes: [
               'Verify model is configured correctly and the prompt/schema is accepted',
               'Run model_judges_health with deep:true to test provider schema validation',
-              "Set modelJudges.required: false to make failures non-blocking"
+              ...(!isVisualParity ? ["Set modelJudges.required: false to make failures non-blocking"] : [])
             ]
           };
         }

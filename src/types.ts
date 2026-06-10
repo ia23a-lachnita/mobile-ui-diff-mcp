@@ -614,7 +614,7 @@ export interface ModelJudgesSummary {
   policy: string;
   primary?: ModelJudgesProviderSummary;
   reviewer?: ModelJudgesProviderSummary;
-  failedRois: Array<{ roiId: string; provider: string; error: string }>;
+  failedRois: Array<{ roiId: string; provider: string; error: string; failureReason?: string; rawResponsePreview?: string }>;
 }
 
 export interface AgentActionContract {

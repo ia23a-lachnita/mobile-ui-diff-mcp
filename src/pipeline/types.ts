@@ -49,6 +49,8 @@ export interface JudgeProviderError {
   roiId: string;
   blocking: boolean;
   message: string;
+  failureReason?: string;
+  rawResponsePreview?: string;
 }
 
 export interface JudgeProviderRunSummary {

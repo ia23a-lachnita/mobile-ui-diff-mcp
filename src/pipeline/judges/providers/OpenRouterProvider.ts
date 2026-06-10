@@ -591,6 +591,7 @@ export class OpenRouterProvider implements IModelJudgeProvider {
       if (this.retryOnParseError && attempt < this.maxRetries) {
         return this.callWithRetry(messages, roiId, attempt + 1);
       }
+      const rawPreview = responseText.length > 0 ? responseText.slice(0, 200) : '<empty_response>';
       return [{
         source: 'modelJudge',
         claimId: `openrouter-parse-error-${roiId}`,
@@ -598,7 +599,11 @@ export class OpenRouterProvider implements IModelJudgeProvider {
         claim: `OpenRouter returned unparseable response after ${attempt + 1} attempt(s): ${parseErr?.message ?? 'parse error'}`,
         confidence: 0,
         authority: 'model' as const,
-        measurements: { error: 'parse_error_after_retry' }
+        measurements: {
+          error: 'parse_error_after_retry',
+          failureReason: parseErr?.message ?? 'parse error',
+          rawResponsePreview: rawPreview
+        }
       }];
     }
   }
