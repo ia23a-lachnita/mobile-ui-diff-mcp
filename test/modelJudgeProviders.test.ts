@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OpenRouterProvider } from '../src/pipeline/judges/providers/OpenRouterProvider';
 import { NvidiaProvider } from '../src/pipeline/judges/providers/NvidiaProvider';
 import { EvidenceBundle } from '../src/pipeline/types';
+import type { CriterionAuditBundle } from '../src/types';
 
 function makeBundle(roiId = 'macro-ring-hero'): EvidenceBundle {
   return {
@@ -491,5 +492,174 @@ describe('NvidiaProvider — real provider with mocked fetch', () => {
     const provider = new NvidiaProvider('test-key', 'test-model', 45000, 3, true);
     await provider.analyze(makeBundle('roi-retry'), []);
     expect(mockFetch).toHaveBeenCalledTimes(4); // initial + 3 retries
+  });
+});
+
+// ─── analyzeCriteriaBatch visual evidence ────────────────────────────────────
+
+function makeCriterionBundle(
+  criterionId: string,
+  artifactOverrides: Partial<CriterionAuditBundle['artifacts']> = {}
+): CriterionAuditBundle {
+  return {
+    criterionId,
+    targetId: 'target-a',
+    criterionLabel: `Label ${criterionId}`,
+    artifacts: { ...artifactOverrides }
+  };
+}
+
+function makeBatchOkResponse(criterionIds: string[]): ReturnType<typeof makeOkResponse> {
+  return makeOkResponse(JSON.stringify({
+    results: criterionIds.map(id => ({
+      criterionId: id,
+      targetStatus: 'matched',
+      judgeAuditStatus: 'pass',
+      reasoning: 'ok',
+      confidence: 0.9
+    }))
+  }));
+}
+
+// Helper: extract prompt text whether content is a string or multipart array
+function extractPromptText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return (content as any[]).find((c) => c.type === 'text')?.text ?? '';
+  }
+  return '';
+}
+
+describe('OpenRouterProvider — analyzeCriteriaBatch image evidence', () => {
+  const mockFetch = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch);
+    mockFetch.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('batch prompt IMAGE ORDER includes images 4 and 5 (crops)', async () => {
+    mockFetch.mockResolvedValueOnce(makeBatchOkResponse(['crit.a', 'crit.b']));
+    const provider = new OpenRouterProvider('key', 'model');
+    const packets = [
+      makeCriterionBundle('crit.a', { fullExpectedScreen: '/e.png', fullActualScreen: '/a.png', annotatedActualScreen: '/ann.png', expectedCrop: '/ec.png', actualCrop: '/ac.png' }),
+      makeCriterionBundle('crit.b', { fullExpectedScreen: '/e.png', fullActualScreen: '/a.png', annotatedActualScreen: '/ann.png', expectedCrop: '/ec.png', actualCrop: '/ac.png' })
+    ];
+
+    await provider.analyzeCriteriaBatch(packets);
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const textContent = extractPromptText(body.messages[0].content);
+    expect(textContent).toMatch(/4\. EXPECTED CROP/);
+    expect(textContent).toMatch(/5\. ACTUAL CROP/);
+  });
+
+  it('batch with shared diagnostic artifact includes image 6 in prompt', async () => {
+    mockFetch.mockResolvedValueOnce(makeBatchOkResponse(['crit.a', 'crit.b']));
+    const provider = new OpenRouterProvider('key', 'model');
+    const packets = [
+      makeCriterionBundle('crit.a', { fullExpectedScreen: '/e.png', fullActualScreen: '/a.png', annotatedActualScreen: '/ann.png', expectedCrop: '/ec.png', actualCrop: '/ac.png', diagnosticArtifact: '/diag.png' }),
+      makeCriterionBundle('crit.b', { fullExpectedScreen: '/e.png', fullActualScreen: '/a.png', annotatedActualScreen: '/ann.png', expectedCrop: '/ec.png', actualCrop: '/ac.png', diagnosticArtifact: '/diag.png' })
+    ];
+
+    await provider.analyzeCriteriaBatch(packets);
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const textContent = extractPromptText(body.messages[0].content);
+    expect(textContent).toMatch(/6\. DIAGNOSTIC ARTIFACT.*shared/i);
+    expect(textContent).toMatch(/DIAGNOSTIC ARTIFACT: image 6 \(shared\)/);
+  });
+
+  it('batch with different per-criterion diagnostics maps each to its own image index', async () => {
+    mockFetch.mockResolvedValueOnce(makeBatchOkResponse(['crit.a', 'crit.b']));
+    const provider = new OpenRouterProvider('key', 'model');
+    const packets = [
+      makeCriterionBundle('crit.a', { fullExpectedScreen: '/e.png', fullActualScreen: '/a.png', annotatedActualScreen: '/ann.png', expectedCrop: '/ec.png', actualCrop: '/ac.png', diagnosticArtifact: '/diagA.png' }),
+      makeCriterionBundle('crit.b', { fullExpectedScreen: '/e.png', fullActualScreen: '/a.png', annotatedActualScreen: '/ann.png', expectedCrop: '/ec.png', actualCrop: '/ac.png', diagnosticArtifact: '/diagB.png' })
+    ];
+
+    await provider.analyzeCriteriaBatch(packets);
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const textContent = extractPromptText(body.messages[0].content);
+    // Each criterion should reference its own image index (6 and 7)
+    expect(textContent).toMatch(/DIAGNOSTIC ARTIFACT: image 6/);
+    expect(textContent).toMatch(/DIAGNOSTIC ARTIFACT: image 7/);
+    // IMAGE ORDER should list both
+    expect(textContent).toMatch(/6\. DIAGNOSTIC ARTIFACT 1/);
+    expect(textContent).toMatch(/7\. DIAGNOSTIC ARTIFACT 2/);
+  });
+});
+
+describe('NvidiaProvider — analyzeCriteriaBatch image evidence', () => {
+  const mockFetch = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', mockFetch);
+    mockFetch.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('batch prompt IMAGE ORDER includes images 4 and 5 (crops)', async () => {
+    mockFetch.mockResolvedValueOnce(makeBatchOkResponse(['crit.a', 'crit.b']));
+    const provider = new NvidiaProvider('key', 'model');
+    const packets = [
+      makeCriterionBundle('crit.a', { fullExpectedScreen: '/e.png', fullActualScreen: '/a.png', annotatedActualScreen: '/ann.png', expectedCrop: '/ec.png', actualCrop: '/ac.png' }),
+      makeCriterionBundle('crit.b', { fullExpectedScreen: '/e.png', fullActualScreen: '/a.png', annotatedActualScreen: '/ann.png', expectedCrop: '/ec.png', actualCrop: '/ac.png' })
+    ];
+
+    await provider.analyzeCriteriaBatch(packets);
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const textContent = extractPromptText(body.messages[0].content);
+    expect(textContent).toMatch(/4\. EXPECTED CROP/);
+    expect(textContent).toMatch(/5\. ACTUAL CROP/);
+  });
+
+  it('batch with shared diagnostic includes image 6 in prompt and criterion mapping', async () => {
+    mockFetch.mockResolvedValueOnce(makeBatchOkResponse(['crit.x', 'crit.y']));
+    const provider = new NvidiaProvider('key', 'model');
+    const packets = [
+      makeCriterionBundle('crit.x', { fullExpectedScreen: '/e.png', fullActualScreen: '/a.png', annotatedActualScreen: '/ann.png', expectedCrop: '/ec.png', actualCrop: '/ac.png', diagnosticArtifact: '/diag.png' }),
+      makeCriterionBundle('crit.y', { fullExpectedScreen: '/e.png', fullActualScreen: '/a.png', annotatedActualScreen: '/ann.png', expectedCrop: '/ec.png', actualCrop: '/ac.png', diagnosticArtifact: '/diag.png' })
+    ];
+
+    await provider.analyzeCriteriaBatch(packets);
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const textContent = extractPromptText(body.messages[0].content);
+    expect(textContent).toMatch(/6\. DIAGNOSTIC ARTIFACT.*shared/i);
+  });
+});
+
+// ─── judgeCachePath contract ──────────────────────────────────────────────────
+
+describe('judgeCachePath — persistence is opt-in', () => {
+  it('CompareImagesInput.judgeCachePath is optional (undefined by default)', () => {
+    // Type-level: judgeCachePath is optional — an object without it must be assignable
+    const input: import('../src/tools/compareImages').CompareImagesInput = {
+      expectedImagePath: '/e.png',
+      actualImagePath: '/a.png'
+    };
+    expect(input.judgeCachePath).toBeUndefined();
+  });
+
+  it('JudgeCache with no path loaded stays empty — no disk read attempted on construction', async () => {
+    const { JudgeCache } = await import('../src/flutter/judgeCache');
+    const cache = new JudgeCache();
+    // Without calling loadFromFile, cache must be empty (in-memory only, no side effects)
+    const result = cache.get({
+      provider: 'openrouter', model: 'test', promptVersion: 'v1',
+      targetId: 'tgt', criterionIds: ['c1'], targetMapVersion: '1'
+    });
+    expect(result).toBeUndefined();
+    expect(cache.size()).toBe(0);
   });
 });

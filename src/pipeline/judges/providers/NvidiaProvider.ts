@@ -242,12 +242,45 @@ export class NvidiaProvider implements IModelJudgeProvider {
     if (packets.length === 0) return [];
     if (packets.length === 1) return [await this.analyzeCriterion!(packets[0])];
 
-    const criteriaList = packets.map((p, i) => [
-      `${i + 1}. CRITERION ID: ${p.criterionId}`,
-      `   LABEL: ${p.criterionLabel}`,
-      ...(p.criterionDescription ? [`   TARGET CONTRACT: ${p.criterionDescription}`] : []),
-      ...(p.deterministicSummary ? [`   DETERMINISTIC SUMMARY: ${p.deterministicSummary}`] : [])
-    ].join('\n')).join('\n\n');
+    // Collect unique diagnostic artifacts; if >1 unique value, map each to its prompt image index
+    const uniqueDiagnostics = [...new Set(
+      packets.map(p => p.artifacts.diagnosticArtifact).filter((d): d is string => !!d)
+    )];
+    const sharedDiagnostic = uniqueDiagnostics.length === 1 ? uniqueDiagnostics[0] : null;
+    const hasPerCriterionDiagnostics = uniqueDiagnostics.length > 1;
+
+    const criteriaList = packets.map((p, i) => {
+      const diagRef = (() => {
+        if (sharedDiagnostic) return '   DIAGNOSTIC ARTIFACT: image 6 (shared)';
+        if (hasPerCriterionDiagnostics && p.artifacts.diagnosticArtifact) {
+          const imgIdx = 6 + uniqueDiagnostics.indexOf(p.artifacts.diagnosticArtifact);
+          return `   DIAGNOSTIC ARTIFACT: image ${imgIdx}`;
+        }
+        return null;
+      })();
+      return [
+        `${i + 1}. CRITERION ID: ${p.criterionId}`,
+        `   LABEL: ${p.criterionLabel}`,
+        ...(p.criterionDescription ? [`   TARGET CONTRACT: ${p.criterionDescription}`] : []),
+        ...(p.deterministicSummary ? [`   DETERMINISTIC SUMMARY: ${p.deterministicSummary}`] : []),
+        ...(diagRef ? [diagRef] : [])
+      ].join('\n');
+    }).join('\n\n');
+
+    const imageOrderLines = [
+      '  1. FULL EXPECTED SCREEN (design reference)',
+      '  2. FULL ACTUAL SCREEN (current app render)',
+      '  3. ANNOTATED ACTUAL SCREEN (full actual with magenta box border — USE THIS for target validation)',
+      '  4. EXPECTED CROP (generous-margin crop from expected — for detail reference)',
+      '  5. ACTUAL CROP (generous-margin crop from actual — for detail reference)',
+    ];
+    if (sharedDiagnostic) {
+      imageOrderLines.push('  6. DIAGNOSTIC ARTIFACT (overlap overlay — shared across all criteria, may be omitted)');
+    } else if (hasPerCriterionDiagnostics) {
+      uniqueDiagnostics.forEach((_, idx) => {
+        imageOrderLines.push(`  ${6 + idx}. DIAGNOSTIC ARTIFACT ${idx + 1} (per-criterion — see mapping above)`);
+      });
+    }
 
     const prompt = [
       'You are a visual criterion judge for a mobile UI diff pipeline.',
@@ -267,9 +300,7 @@ export class NvidiaProvider implements IModelJudgeProvider {
       '5. Validate the target BEFORE assessing legibility for each criterion.',
       '',
       'IMAGE ORDER:',
-      '  1. FULL EXPECTED SCREEN (design reference)',
-      '  2. FULL ACTUAL SCREEN (current app render)',
-      '  3. ANNOTATED ACTUAL SCREEN (full actual with magenta box border — USE THIS for target validation)',
+      ...imageOrderLines,
       '',
       'CRITICAL RULES:',
       '  • You MUST return exactly one result object per criterion ID listed above.',
@@ -282,7 +313,10 @@ export class NvidiaProvider implements IModelJudgeProvider {
     const imagePaths = [
       first.artifacts.fullExpectedScreen,
       first.artifacts.fullActualScreen,
-      first.artifacts.annotatedActualScreen
+      first.artifacts.annotatedActualScreen,
+      first.artifacts.expectedCrop,
+      first.artifacts.actualCrop,
+      ...(sharedDiagnostic ? [sharedDiagnostic] : uniqueDiagnostics)
     ].filter(Boolean) as string[];
 
     let images: string[] = [];
