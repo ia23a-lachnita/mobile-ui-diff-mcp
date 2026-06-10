@@ -19,7 +19,10 @@ export function ensureJudgeErrorHasDiagnostics(err: JudgeProviderError): JudgePr
   return {
     ...err,
     failureReason: err.failureReason ?? 'unknown_empty_failure',
-    rawResponsePreview: err.rawResponsePreview ?? '<missing_error_detail>'
+    rawResponsePreview:
+      typeof err.rawResponsePreview === 'string' && err.rawResponsePreview.length > 0
+        ? err.rawResponsePreview
+        : '<missing_error_detail>'
   };
 }
 
