@@ -47,6 +47,8 @@ export interface CompareImagesInput {
   targetMapPath?: string;
   /** Path to the flutter anchor artifact directory or flutter-anchors.json file. */
   flutterAnchorsPath?: string;
+  /** Path to persist the criterion judge cache across runs. Defaults to .ui-diff/cache/criterion-judge-cache.json. */
+  judgeCachePath?: string;
   overlapLegibility?: {
     enabled?: boolean;
     regions?: Array<{

@@ -24,6 +24,35 @@ const CRITERION_JUDGE_SCHEMA = {
   }
 };
 
+const CRITERION_BATCH_JUDGE_SCHEMA = {
+  name: 'CriterionBatchJudgeResult',
+  strict: false,
+  schema: {
+    $schema: 'http://json-schema.org/draft-07/schema#',
+    type: 'object',
+    required: ['results'],
+    properties: {
+      results: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['criterionId', 'targetStatus', 'judgeAuditStatus', 'reasoning', 'confidence'],
+          properties: {
+            criterionId: { type: 'string' },
+            targetStatus: { type: 'string', enum: ['matched', 'not_matched', 'ambiguous'] },
+            measurementCredible: { type: 'boolean' },
+            judgeAuditStatus: { type: 'string', enum: ['pass', 'caveat', 'fail', 'target_mismatch'] },
+            reasoning: { type: 'string' },
+            confidence: { type: 'number', minimum: 0, maximum: 1 }
+          },
+          additionalProperties: false
+        }
+      }
+    },
+    additionalProperties: false
+  }
+};
+
 export class NvidiaProvider implements IModelJudgeProvider {
   readonly providerName = 'nvidia';
 
@@ -207,6 +236,154 @@ export class NvidiaProvider implements IModelJudgeProvider {
     ];
 
     return this.callCriterionWithRetry(messages, criterionId);
+  }
+
+  async analyzeCriteriaBatch(packets: CriterionAuditBundle[]): Promise<CriterionJudgeResult[]> {
+    if (packets.length === 0) return [];
+    if (packets.length === 1) return [await this.analyzeCriterion!(packets[0])];
+
+    const criteriaList = packets.map((p, i) => [
+      `${i + 1}. CRITERION ID: ${p.criterionId}`,
+      `   LABEL: ${p.criterionLabel}`,
+      ...(p.criterionDescription ? [`   TARGET CONTRACT: ${p.criterionDescription}`] : []),
+      ...(p.deterministicSummary ? [`   DETERMINISTIC SUMMARY: ${p.deterministicSummary}`] : [])
+    ].join('\n')).join('\n\n');
+
+    const prompt = [
+      'You are a visual criterion judge for a mobile UI diff pipeline.',
+      'You are evaluating MULTIPLE CRITERIA for the SAME TARGET ELEMENT in one call.',
+      'All criteria share the same highlighted box (same physical target element on screen).',
+      '',
+      'CRITERIA TO EVALUATE (evaluate each independently):',
+      criteriaList,
+      '',
+      'YOUR TASK FOR EACH CRITERION (execute in order):',
+      '1. Look at the ANNOTATED ACTUAL SCREEN (image 3). Locate the highlighted box (magenta/pink border).',
+      '2. Determine whether the highlighted box covers the intended element for that criterion.',
+      '   - targetStatus: "matched" / "not_matched" / "ambiguous"',
+      '   - judgeAuditStatus: "target_mismatch" if not_matched; else "pass"/"caveat"/"fail" for legibility.',
+      '3. Evaluate each criterion INDEPENDENTLY. Do not let one result influence another.',
+      '4. Do NOT report issues unrelated to the specific criterion being evaluated.',
+      '5. Validate the target BEFORE assessing legibility for each criterion.',
+      '',
+      'IMAGE ORDER:',
+      '  1. FULL EXPECTED SCREEN (design reference)',
+      '  2. FULL ACTUAL SCREEN (current app render)',
+      '  3. ANNOTATED ACTUAL SCREEN (full actual with magenta box border — USE THIS for target validation)',
+      '',
+      'CRITICAL RULES:',
+      '  • You MUST return exactly one result object per criterion ID listed above.',
+      '  • Do NOT omit any criterion ID from the results array.',
+      '  • Preserve the exact criterionId strings.',
+      '  • Do NOT report issues unrelated to each specific criterion.',
+    ].join('\n');
+
+    const first = packets[0];
+    const imagePaths = [
+      first.artifacts.fullExpectedScreen,
+      first.artifacts.fullActualScreen,
+      first.artifacts.annotatedActualScreen
+    ].filter(Boolean) as string[];
+
+    let images: string[] = [];
+    try {
+      images = await Promise.all(
+        imagePaths.map(async (p) => {
+          try {
+            const buf = await fs.readFile(p);
+            return `data:image/png;base64,${buf.toString('base64')}`;
+          } catch { return null; }
+        })
+      ).then((r) => r.filter(Boolean) as string[]);
+    } catch { /* proceed text-only */ }
+
+    const messages: any[] = [{
+      role: 'user',
+      content: images.length > 0
+        ? [{ type: 'text', text: prompt }, ...images.map((img) => ({ type: 'image_url', image_url: { url: img } }))]
+        : prompt
+    }];
+
+    return this.callBatchCriterionWithRetry(messages, packets);
+  }
+
+  private async callBatchCriterionWithRetry(messages: any[], packets: CriterionAuditBundle[], attempt = 0): Promise<CriterionJudgeResult[]> {
+    const criterionIds = packets.map((p) => p.criterionId);
+    const unavailableResults = (): CriterionJudgeResult[] => packets.map((p) => ({
+      criterionId: p.criterionId,
+      targetStatus: 'ambiguous' as const,
+      judgeAuditStatus: 'unavailable' as const,
+      reasoning: 'Batch criterion judge failed or timed out',
+      confidence: 0
+    }));
+
+    let responseText = '';
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      let response: Response;
+      try {
+        response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: this.model,
+            messages,
+            response_format: { type: 'json_schema', json_schema: CRITERION_BATCH_JUDGE_SCHEMA }
+          }),
+          signal: controller.signal
+        });
+      } finally { clearTimeout(timer); }
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`NVIDIA API error ${response.status}: ${text}`);
+      }
+      const data = await response.json() as any;
+      responseText = data?.choices?.[0]?.message?.content ?? '';
+    } catch (err: any) {
+      return packets.map((p) => ({
+        criterionId: p.criterionId,
+        targetStatus: 'ambiguous' as const,
+        judgeAuditStatus: 'unavailable' as const,
+        reasoning: err?.name === 'AbortError'
+          ? `Batch criterion judge timed out after ${this.timeoutMs}ms`
+          : `Batch criterion judge failed: ${err?.message ?? String(err)}`,
+        confidence: 0
+      }));
+    }
+
+    const VALID_TARGET = new Set(['matched', 'not_matched', 'ambiguous']);
+    const VALID_AUDIT = new Set(['pass', 'caveat', 'fail', 'target_mismatch']);
+    try {
+      const parsed = JSON.parse(responseText);
+      const items: any[] = Array.isArray(parsed.results) ? parsed.results : [];
+      const resultMap = new Map<string, CriterionJudgeResult>();
+      for (const item of items) {
+        if (!item.criterionId || !criterionIds.includes(item.criterionId)) continue;
+        if (!VALID_TARGET.has(item.targetStatus) || !VALID_AUDIT.has(item.judgeAuditStatus)) continue;
+        resultMap.set(item.criterionId, {
+          criterionId: item.criterionId,
+          targetStatus: item.targetStatus,
+          measurementCredible: typeof item.measurementCredible === 'boolean' ? item.measurementCredible : undefined,
+          judgeAuditStatus: item.judgeAuditStatus,
+          reasoning: typeof item.reasoning === 'string' ? item.reasoning : '',
+          confidence: typeof item.confidence === 'number' ? Math.max(0, Math.min(1, item.confidence)) : 0.5
+        });
+      }
+      return packets.map((p) => resultMap.get(p.criterionId) ?? {
+        criterionId: p.criterionId,
+        targetStatus: 'ambiguous' as const,
+        judgeAuditStatus: 'unavailable' as const,
+        reasoning: 'Batch result missing for this criterion',
+        confidence: 0
+      });
+    } catch (parseErr: any) {
+      if (this.retryOnParseError && attempt < this.maxRetries) {
+        return this.callBatchCriterionWithRetry(messages, packets, attempt + 1);
+      }
+      return unavailableResults();
+    }
   }
 
   private async callCriterionWithRetry(messages: any[], criterionId: string, attempt = 0): Promise<CriterionJudgeResult> {

@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs/promises';
+import path from 'path';
 
 export interface JudgeCacheKey {
   provider: string;
@@ -14,6 +15,23 @@ export interface JudgeCacheKey {
   sourceFactsHash: string;
   deterministicMeasurementHash: string;
   targetMapVersion: string;
+  /** Hash of the full expected screen sent to the judge. */
+  fullExpectedScreenHash?: string;
+  /** Hash of the full actual screen sent to the judge. */
+  fullActualScreenHash?: string;
+  /** Hash of the annotated actual screen (with box overlay). */
+  annotatedActualScreenHash?: string;
+  /** Hash of the deterministic diagnostic artifact image. */
+  diagnosticArtifactHash?: string;
+  /** Criterion description / target contract text. */
+  criterionDescription?: string;
+}
+
+export interface CachedJudgeProvenanceResult {
+  targetStatus: string;
+  judgeAuditStatus: string;
+  confidence?: number;
+  reasoning?: string;
 }
 
 export interface CachedJudgeResult {
@@ -24,6 +42,18 @@ export interface CachedJudgeResult {
   cachedAt: number;
   /** The canonical key string used for storage. */
   cacheKey: string;
+  /** Primary judge result preserved for provenance. */
+  primaryResult?: CachedJudgeProvenanceResult;
+  /** Reviewer judge result preserved for provenance (absent when no reviewer configured). */
+  reviewerResult?: CachedJudgeProvenanceResult;
+  /** Provider name used for the primary judge. */
+  primaryProvider?: string;
+  /** Model used for the primary judge. */
+  primaryModel?: string;
+  /** Provider name used for the reviewer judge (absent when no reviewer). */
+  reviewerProvider?: string;
+  /** Model used for the reviewer judge (absent when no reviewer). */
+  reviewerModel?: string;
 }
 
 export interface JudgeCacheEntry extends CachedJudgeResult {
@@ -35,6 +65,12 @@ export interface CacheSummary {
   cached: number;
   skipped: number;
   fresh: number;
+  /** Absolute path to the persisted cache file (set when persistence is active). */
+  persistedPath?: string;
+  /** True when the cache file was successfully loaded from disk before this run. */
+  loadedFromDisk?: boolean;
+  /** True when the cache file was successfully saved to disk after this run. */
+  savedToDisk?: boolean;
 }
 
 /**
@@ -44,7 +80,12 @@ export interface CacheSummary {
 export function computeCacheKeyString(key: JudgeCacheKey): string {
   const normalized = {
     ...key,
-    criterionIds: [...key.criterionIds].sort()
+    criterionIds: [...key.criterionIds].sort(),
+    fullExpectedScreenHash: key.fullExpectedScreenHash ?? 'none',
+    fullActualScreenHash: key.fullActualScreenHash ?? 'none',
+    annotatedActualScreenHash: key.annotatedActualScreenHash ?? 'none',
+    diagnosticArtifactHash: key.diagnosticArtifactHash ?? 'none',
+    criterionDescription: key.criterionDescription ?? 'none'
   };
   const json = JSON.stringify(normalized, Object.keys(normalized).sort());
   return crypto.createHash('sha256').update(json).digest('hex');
@@ -112,6 +153,7 @@ export class JudgeCache {
    * Creates or overwrites the file at the given path.
    */
   async saveToFile(filePath: string): Promise<void> {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
     const payload = {
       version: 1,
       savedAt: Date.now(),

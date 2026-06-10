@@ -516,6 +516,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
           }
         } else {
           anchorDump = artifact.parsed;
+          if (artifact.warnings?.length) warnings.push(...artifact.warnings);
         }
       }
 
@@ -1021,6 +1022,15 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
             targetMapVersion: (input as any).targetMapVersion ?? '1'
           }
         : undefined;
+      // Persistent cache: only active when judgeCachePath is explicitly configured.
+      // Default is in-memory only to avoid stale results across unrelated runs.
+      const judgeCachePath = input.judgeCachePath
+        ?? (process.env.UI_DIFF_JUDGE_CACHE_PATH || null);
+      let loadedFromDisk = false;
+      if (judgeCachePath) {
+        loadedFromDisk = await judgeCache.loadFromFile(judgeCachePath);
+      }
+
       const criterionAnalyzer = new CriterionJudgeAnalyzer();
       const { results: criterionResults, cacheSummary: cs } = await criterionAnalyzer.run(
         criterionAuditBundles,
@@ -1029,7 +1039,19 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         judgeCache,
         cacheCtx
       );
-      criterionCacheSummary = cs;
+
+      let savedToDisk = false;
+      if (judgeCachePath) {
+        try {
+          await judgeCache.saveToFile(judgeCachePath);
+          savedToDisk = true;
+        } catch { /* non-fatal — pipeline result unaffected */ }
+      }
+
+      criterionCacheSummary = {
+        ...cs,
+        ...(judgeCachePath ? { persistedPath: judgeCachePath, loadedFromDisk, savedToDisk } : {})
+      };
 
       const summaryEntries: CriterionJudgeSummaryEntry[] = [];
 

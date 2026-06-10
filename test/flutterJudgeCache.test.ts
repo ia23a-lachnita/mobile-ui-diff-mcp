@@ -262,3 +262,111 @@ describe('JudgeCache — file persistence', () => {
     expect(b.get(key)?.judgeAuditStatus).toBe('not_run');
   });
 });
+
+describe('JudgeCache — strengthened cache key invalidation', () => {
+  it('changed annotatedActualScreenHash invalidates cache', () => {
+    const cache = new JudgeCache();
+    cache.set(makeKey({ annotatedActualScreenHash: 'original-annotated' }), { judgeAuditStatus: 'pass', cachedAt: Date.now() });
+    expect(cache.has(makeKey({ annotatedActualScreenHash: 'changed-annotated' }))).toBe(false);
+  });
+
+  it('changed criterionDescription (target contract) invalidates cache', () => {
+    const cache = new JudgeCache();
+    cache.set(makeKey({ criterionDescription: 'original contract' }), { judgeAuditStatus: 'pass', cachedAt: Date.now() });
+    expect(cache.has(makeKey({ criterionDescription: 'changed contract' }))).toBe(false);
+  });
+
+  it('changed diagnosticArtifactHash invalidates cache', () => {
+    const cache = new JudgeCache();
+    cache.set(makeKey({ diagnosticArtifactHash: 'original-diagnostic' }), { judgeAuditStatus: 'pass', cachedAt: Date.now() });
+    expect(cache.has(makeKey({ diagnosticArtifactHash: 'changed-diagnostic' }))).toBe(false);
+  });
+
+  it('changed fullExpectedScreenHash invalidates cache', () => {
+    const cache = new JudgeCache();
+    cache.set(makeKey({ fullExpectedScreenHash: 'original-full-expected' }), { judgeAuditStatus: 'pass', cachedAt: Date.now() });
+    expect(cache.has(makeKey({ fullExpectedScreenHash: 'changed-full-expected' }))).toBe(false);
+  });
+
+  it('changed fullActualScreenHash invalidates cache', () => {
+    const cache = new JudgeCache();
+    cache.set(makeKey({ fullActualScreenHash: 'original-full-actual' }), { judgeAuditStatus: 'pass', cachedAt: Date.now() });
+    expect(cache.has(makeKey({ fullActualScreenHash: 'changed-full-actual' }))).toBe(false);
+  });
+
+  it('absent optional fields hash the same as "none" (backward compat)', () => {
+    const k1 = computeCacheKeyString(makeKey());
+    const k2 = computeCacheKeyString(makeKey({
+      fullExpectedScreenHash: undefined,
+      annotatedActualScreenHash: undefined,
+      criterionDescription: undefined
+    }));
+    expect(k1).toBe(k2);
+  });
+});
+
+describe('JudgeCache — primary/reviewer provenance', () => {
+  it('stores and retrieves primary result provenance', () => {
+    const cache = new JudgeCache();
+    const key = makeKey();
+    cache.set(key, {
+      judgeAuditStatus: 'pass',
+      targetStatus: 'matched',
+      confidence: 0.9,
+      cachedAt: Date.now(),
+      primaryResult: { targetStatus: 'matched', judgeAuditStatus: 'pass', confidence: 0.9, reasoning: 'looks good' },
+      primaryProvider: 'openrouter',
+      primaryModel: 'gpt-4o'
+    });
+    const hit = cache.get(key);
+    expect(hit?.primaryResult?.judgeAuditStatus).toBe('pass');
+    expect(hit?.primaryResult?.reasoning).toBe('looks good');
+    expect(hit?.primaryProvider).toBe('openrouter');
+  });
+
+  it('stores and retrieves reviewer result provenance', () => {
+    const cache = new JudgeCache();
+    const key = makeKey();
+    cache.set(key, {
+      judgeAuditStatus: 'caveat',
+      targetStatus: 'matched',
+      confidence: 0.8,
+      cachedAt: Date.now(),
+      primaryResult: { targetStatus: 'matched', judgeAuditStatus: 'pass', confidence: 0.9 },
+      reviewerResult: { targetStatus: 'matched', judgeAuditStatus: 'caveat', confidence: 0.7, reasoning: 'minor crowding' },
+      reviewerProvider: 'nvidia',
+      reviewerModel: 'llama-vision'
+    });
+    const hit = cache.get(key);
+    expect(hit?.reviewerResult?.judgeAuditStatus).toBe('caveat');
+    expect(hit?.reviewerResult?.reasoning).toBe('minor crowding');
+    expect(hit?.reviewerProvider).toBe('nvidia');
+  });
+
+  it('provenance survives file round-trip', async () => {
+    const tmpFile = path.join(os.tmpdir(), `judge-cache-provenance-${Date.now()}.json`);
+    try {
+      const a = new JudgeCache();
+      const key = makeKey();
+      a.set(key, {
+        judgeAuditStatus: 'pass',
+        cachedAt: 1000,
+        primaryResult: { targetStatus: 'matched', judgeAuditStatus: 'pass', confidence: 0.95, reasoning: 'primary ok' },
+        reviewerResult: { targetStatus: 'matched', judgeAuditStatus: 'pass', confidence: 0.88, reasoning: 'reviewer ok' },
+        primaryProvider: 'openrouter',
+        reviewerProvider: 'nvidia'
+      });
+      await a.saveToFile(tmpFile);
+
+      const b = new JudgeCache();
+      await b.loadFromFile(tmpFile);
+      const hit = b.get(key);
+      expect(hit?.primaryResult?.reasoning).toBe('primary ok');
+      expect(hit?.reviewerResult?.reasoning).toBe('reviewer ok');
+      expect(hit?.primaryProvider).toBe('openrouter');
+      expect(hit?.reviewerProvider).toBe('nvidia');
+    } finally {
+      await fs.rm(tmpFile, { force: true });
+    }
+  });
+});

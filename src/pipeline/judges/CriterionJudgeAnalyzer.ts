@@ -66,7 +66,12 @@ async function buildCacheKey(bundle: CriterionAuditBundle, ctx: CriterionCacheCo
     expectedImageHash: await hashFile(bundle.artifacts.expectedCrop),
     sourceFactsHash: bundle.deterministicSummary ? hashContent(bundle.deterministicSummary) : 'no-facts',
     deterministicMeasurementHash: bundle.deterministicSummary ?? 'none',
-    targetMapVersion: ctx.targetMapVersion
+    targetMapVersion: ctx.targetMapVersion,
+    fullExpectedScreenHash: await hashFile(bundle.artifacts.fullExpectedScreen),
+    fullActualScreenHash: await hashFile(bundle.artifacts.fullActualScreen),
+    annotatedActualScreenHash: await hashFile(bundle.artifacts.annotatedActualScreen),
+    diagnosticArtifactHash: await hashFile(bundle.artifacts.diagnosticArtifact),
+    criterionDescription: bundle.criterionDescription ?? 'none'
   };
 }
 
@@ -163,15 +168,44 @@ export class CriterionJudgeAnalyzer {
         const hit = cache.get(key);
         if (hit) {
           cacheSummary.cached++;
-          const cachedResult: CriterionJudgeResult = {
+          const cacheNote = `[cache hit] cached at ${new Date(hit.cachedAt).toISOString()}`;
+          // Reconstruct primary from provenance when available.
+          const cachedPrimary: CriterionJudgeResult = hit.primaryResult
+            ? {
+                criterionId: bundle.criterionId,
+                targetStatus: hit.primaryResult.targetStatus as CriterionJudgeResult['targetStatus'],
+                judgeAuditStatus: hit.primaryResult.judgeAuditStatus as CriterionJudgeResult['judgeAuditStatus'],
+                reasoning: hit.primaryResult.reasoning ?? cacheNote,
+                confidence: hit.primaryResult.confidence ?? 1,
+                fromCache: true
+              }
+            : {
+                criterionId: bundle.criterionId,
+                targetStatus: hit.targetStatus ?? 'matched',
+                judgeAuditStatus: hit.judgeAuditStatus,
+                reasoning: cacheNote,
+                confidence: hit.confidence ?? 1,
+                fromCache: true
+              };
+          const cachedReviewer: CriterionJudgeResult | undefined = hit.reviewerResult
+            ? {
+                criterionId: bundle.criterionId,
+                targetStatus: hit.reviewerResult.targetStatus as CriterionJudgeResult['targetStatus'],
+                judgeAuditStatus: hit.reviewerResult.judgeAuditStatus as CriterionJudgeResult['judgeAuditStatus'],
+                reasoning: hit.reviewerResult.reasoning ?? cacheNote,
+                confidence: hit.reviewerResult.confidence ?? 1,
+                fromCache: true
+              }
+            : undefined;
+          const cachedFinal: CriterionJudgeResult = {
             criterionId: bundle.criterionId,
             targetStatus: hit.targetStatus ?? 'matched',
             judgeAuditStatus: hit.judgeAuditStatus,
-            reasoning: `[cache hit] cached at ${new Date(hit.cachedAt).toISOString()}`,
+            reasoning: cacheNote,
             confidence: hit.confidence ?? 1,
             fromCache: true
           };
-          results.set(bundle.criterionId, { primary: cachedResult, final: cachedResult });
+          results.set(bundle.criterionId, { primary: cachedPrimary, reviewer: cachedReviewer, final: cachedFinal });
           continue;
         }
       }
@@ -219,7 +253,13 @@ export class CriterionJudgeAnalyzer {
               judgeAuditStatus: final.judgeAuditStatus,
               targetStatus: final.targetStatus,
               confidence: final.confidence,
-              cachedAt: Date.now()
+              cachedAt: Date.now(),
+              primaryResult: { targetStatus: primary.targetStatus, judgeAuditStatus: primary.judgeAuditStatus, confidence: primary.confidence, reasoning: primary.reasoning },
+              reviewerResult: reviewer ? { targetStatus: reviewer.targetStatus, judgeAuditStatus: reviewer.judgeAuditStatus, confidence: reviewer.confidence, reasoning: reviewer.reasoning } : undefined,
+              primaryProvider: cacheCtx.provider,
+              primaryModel: cacheCtx.model,
+              reviewerProvider: cacheCtx.reviewerProvider,
+              reviewerModel: cacheCtx.reviewerModel
             });
           }
         }
@@ -238,7 +278,13 @@ export class CriterionJudgeAnalyzer {
               judgeAuditStatus: final.judgeAuditStatus,
               targetStatus: final.targetStatus,
               confidence: final.confidence,
-              cachedAt: Date.now()
+              cachedAt: Date.now(),
+              primaryResult: { targetStatus: primary.targetStatus, judgeAuditStatus: primary.judgeAuditStatus, confidence: primary.confidence, reasoning: primary.reasoning },
+              reviewerResult: reviewer ? { targetStatus: reviewer.targetStatus, judgeAuditStatus: reviewer.judgeAuditStatus, confidence: reviewer.confidence, reasoning: reviewer.reasoning } : undefined,
+              primaryProvider: cacheCtx.provider,
+              primaryModel: cacheCtx.model,
+              reviewerProvider: cacheCtx.reviewerProvider,
+              reviewerModel: cacheCtx.reviewerModel
             });
           }
         }

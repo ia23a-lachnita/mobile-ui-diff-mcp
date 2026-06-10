@@ -689,7 +689,7 @@ export interface DiffReport {
   criterionJudgesSummary?: CriterionJudgesSummary;
   targetResolutionSummary?: import('./flutter/types').TargetResolutionSummary;
   measurementBoxSource?: 'flutter_anchor' | 'manual_fallback' | 'none';
-  cacheSummary?: { attempted: number; cached: number; skipped: number; fresh?: number };
+  cacheSummary?: { attempted: number; cached: number; skipped: number; fresh?: number; persistedPath?: string; loadedFromDisk?: boolean; savedToDisk?: boolean };
   blockedModelFindings?: Array<{ claimId: string; reason: string; sourceFact?: string }>;
   warnings?: string[];
   reportJsonPath?: string;
