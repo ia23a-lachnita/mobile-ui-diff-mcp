@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { flutterAnchorDumpSchema } from '../src/flutter/anchorDumpSchema';
+import { parseFlutterAnchorDump } from '../src/flutter/anchorDumpParser';
 
 function makeValidDump(overrides: Record<string, unknown> = {}) {
   return {
@@ -227,5 +228,86 @@ describe('flutterAnchorDumpSchema', () => {
     const dump = makeValidDump();
     const result = flutterAnchorDumpSchema.safeParse({ ...dump, device: { ...dump.device, screenshotWidthPx: 1080.5 } });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('parseFlutterAnchorDump — extra field warnings', () => {
+  it('returns no warnings for a clean dump', () => {
+    const result = parseFlutterAnchorDump(makeValidDump());
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.warnings).toBeUndefined();
+  });
+
+  it('emits anchor_dump_extra_framework_fields_stripped warning when renderObject present', () => {
+    const dump = makeValidDump();
+    const anchors = [
+      {
+        id: 'today.kcalLeftPill',
+        rectLogical: { x: 12, y: 100, width: 80, height: 24 },
+        visible: true,
+        visibility: { visibleFraction: 1.0 },
+        renderObject: { size: { width: 80, height: 24 } }
+      }
+    ];
+    const result = parseFlutterAnchorDump({ ...dump, anchors });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.warnings).toBeDefined();
+      expect(result.warnings!.some(w => w.includes('anchor_dump_extra_framework_fields_stripped'))).toBe(true);
+      expect(result.warnings!.some(w => w.includes('today.kcalLeftPill'))).toBe(true);
+      expect(result.warnings!.some(w => w.includes('renderObject'))).toBe(true);
+    }
+  });
+
+  it('emits warning for multiple extra anchor fields (context, owner)', () => {
+    const dump = makeValidDump();
+    const anchors = [
+      {
+        id: 'today.macroRing',
+        rectLogical: { x: 0, y: 0, width: 40, height: 40 },
+        visible: true,
+        visibility: { visibleFraction: 1.0 },
+        context: { widget: 'Container' },
+        owner: { debugDoingLayout: false }
+      }
+    ];
+    const result = parseFlutterAnchorDump({ ...dump, anchors });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const joined = result.warnings!.join(' ');
+      expect(joined).toContain('context');
+      expect(joined).toContain('owner');
+    }
+  });
+
+  it('emits warning when visibility has extra fields', () => {
+    const dump = makeValidDump();
+    const anchors = [
+      {
+        id: 'today.kcalLeftPill',
+        rectLogical: { x: 12, y: 100, width: 80, height: 24 },
+        visible: true,
+        visibility: { visibleFraction: 1.0, renderObjectRef: 'abc123' }
+      }
+    ];
+    const result = parseFlutterAnchorDump({ ...dump, anchors });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.warnings!.some(w => w.includes('renderObjectRef'))).toBe(true);
+    }
+  });
+
+  it('emits separate warnings per anchor', () => {
+    const dump = makeValidDump();
+    const anchors = [
+      { id: 'a', rectLogical: { x: 0, y: 0, width: 10, height: 10 }, visible: true, visibility: { visibleFraction: 1.0 }, extra1: true },
+      { id: 'b', rectLogical: { x: 0, y: 0, width: 10, height: 10 }, visible: true, visibility: { visibleFraction: 1.0 }, extra2: true }
+    ];
+    const result = parseFlutterAnchorDump({ ...dump, anchors });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.warnings!.some(w => w.includes("anchor 'a'"))).toBe(true);
+      expect(result.warnings!.some(w => w.includes("anchor 'b'"))).toBe(true);
+    }
   });
 });

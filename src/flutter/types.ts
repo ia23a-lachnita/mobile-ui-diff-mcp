@@ -177,4 +177,6 @@ export interface AnchorArtifactResult {
   status: AnchorArtifactStatus;
   parsed?: ParsedAnchorDump;
   error?: string;
+  /** Non-fatal warnings about extra fields stripped from the anchor dump. */
+  warnings?: string[];
 }

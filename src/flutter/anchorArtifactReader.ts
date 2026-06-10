@@ -146,7 +146,11 @@ async function attemptParse(jsonPath: string): Promise<AnchorArtifactResult> {
     };
   }
 
-  return { status: 'ready', parsed: result.data };
+  return {
+    status: 'ready',
+    parsed: result.data,
+    ...(result.warnings?.length ? { warnings: result.warnings } : {})
+  };
 }
 
 function sleep(ms: number): Promise<void> {

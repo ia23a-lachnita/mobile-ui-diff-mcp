@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import fs from 'fs/promises';
 
 export interface JudgeCacheKey {
   provider: string;
@@ -70,8 +71,11 @@ export function hashRect(rect: { x: number; y: number; width: number; height: nu
 }
 
 /**
- * In-memory judge result cache.
+ * In-memory judge result cache with optional file persistence.
  * Keyed by the string produced by computeCacheKeyString.
+ *
+ * Cross-run persistence: call loadFromFile() at startup and saveToFile() after each run
+ * to avoid redundant LLM calls across runs when pixels haven't changed.
  */
 export class JudgeCache {
   private store = new Map<string, JudgeCacheEntry>();
@@ -101,5 +105,42 @@ export class JudgeCache {
   /** Return cache entries matching a target ID (for debugging/reporting). */
   entriesForTarget(targetId: string): JudgeCacheEntry[] {
     return [...this.store.values()].filter((e) => e.originalKey.targetId === targetId);
+  }
+
+  /**
+   * Persist all cache entries to a JSON file for cross-run reuse.
+   * Creates or overwrites the file at the given path.
+   */
+  async saveToFile(filePath: string): Promise<void> {
+    const payload = {
+      version: 1,
+      savedAt: Date.now(),
+      entries: [...this.store.values()]
+    };
+    await fs.writeFile(filePath, JSON.stringify(payload, null, 2), 'utf-8');
+  }
+
+  /**
+   * Load cache entries from a previously saved file, merging into the current store.
+   * Returns true if the file was loaded, false if it did not exist or was invalid.
+   * Never throws — an unreadable or corrupt cache file is silently ignored.
+   */
+  async loadFromFile(filePath: string): Promise<boolean> {
+    try {
+      const text = await fs.readFile(filePath, 'utf-8');
+      const payload = JSON.parse(text) as { version?: number; entries?: unknown[] };
+      if (!Array.isArray(payload.entries)) return false;
+      let loaded = 0;
+      for (const entry of payload.entries) {
+        const e = entry as JudgeCacheEntry;
+        if (e && typeof e.cacheKey === 'string' && e.originalKey) {
+          this.store.set(e.cacheKey, e);
+          loaded++;
+        }
+      }
+      return loaded > 0;
+    } catch {
+      return false;
+    }
   }
 }

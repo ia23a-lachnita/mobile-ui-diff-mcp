@@ -136,12 +136,13 @@ export class CriterionJudgeAnalyzer {
    * Run criterion audit for each bundle.
    *
    * Cache scope: the JudgeCache passed in is a per-run in-memory deduplication cache.
-   * It deduplicates identical bundles within a single pipeline run but does NOT persist
-   * across runs. Cross-run caching (skip LLM when pixels are unchanged) is not yet
-   * implemented and is not claimed by this implementation.
+   * For cross-run persistence, callers should call JudgeCache.loadFromFile() before
+   * the run and JudgeCache.saveToFile() after to skip LLM calls when pixels are unchanged.
    *
-   * Batching: bundles are processed one at a time (no multi-criteria batching per request).
-   * Batching multiple criteria into a single provider call is not yet implemented.
+   * Batching: bundles are grouped by targetId. If the primary provider implements
+   * analyzeCriteriaBatch, all cache-miss bundles for the same target are sent in one
+   * provider call. Providers that do not implement analyzeCriteriaBatch fall back to
+   * sequential analyzeCriterion calls.
    */
   async run(
     bundles: CriterionAuditBundle[],
@@ -153,10 +154,10 @@ export class CriterionJudgeAnalyzer {
     const results = new Map<string, CriterionDualResult>();
     const cacheSummary: CacheSummary = { attempted: 0, cached: 0, skipped: 0, fresh: 0 };
 
+    // Phase 1: serve cache hits, collect misses.
+    const freshBundles: CriterionAuditBundle[] = [];
     for (const bundle of bundles) {
       cacheSummary.attempted++;
-
-      // Check cache before calling provider
       if (cache && cacheCtx) {
         const key = await buildCacheKey(bundle, cacheCtx);
         const hit = cache.get(key);
@@ -174,22 +175,73 @@ export class CriterionJudgeAnalyzer {
           continue;
         }
       }
+      freshBundles.push(bundle);
+    }
 
-      cacheSummary.fresh++;
-      const primary = await runSingleCriterion(bundle, primaryProvider);
-      const reviewer = reviewerProvider ? await runSingleCriterion(bundle, reviewerProvider) : undefined;
-      const final = mergeCriterionResults(primary, reviewer);
-      results.set(bundle.criterionId, { primary, reviewer, final });
+    // Phase 2: group cache misses by target and run (batched if provider supports it).
+    const byTarget = new Map<string, CriterionAuditBundle[]>();
+    for (const bundle of freshBundles) {
+      const groupKey = bundle.targetId ?? bundle.criterionId;
+      const group = byTarget.get(groupKey) ?? [];
+      group.push(bundle);
+      byTarget.set(groupKey, group);
+    }
 
-      // Store in cache for subsequent runs
-      if (cache && cacheCtx) {
-        const key = await buildCacheKey(bundle, cacheCtx);
-        cache.set(key, {
-          judgeAuditStatus: final.judgeAuditStatus,
-          targetStatus: final.targetStatus,
-          confidence: final.confidence,
-          cachedAt: Date.now()
-        });
+    for (const group of byTarget.values()) {
+      const useBatch =
+        group.length > 1 &&
+        typeof primaryProvider.analyzeCriteriaBatch === 'function';
+
+      if (useBatch) {
+        // Batch path: one provider call for all criteria in this target group.
+        cacheSummary.fresh += group.length;
+        const primaryResults = await primaryProvider.analyzeCriteriaBatch!(group);
+        const reviewerResults = reviewerProvider?.analyzeCriteriaBatch
+          ? await reviewerProvider.analyzeCriteriaBatch(group)
+          : undefined;
+
+        for (let i = 0; i < group.length; i++) {
+          const bundle = group[i];
+          const primary = primaryResults[i] ?? {
+            criterionId: bundle.criterionId,
+            targetStatus: 'ambiguous' as const,
+            judgeAuditStatus: 'unavailable' as const,
+            reasoning: 'Batch result missing for this criterion',
+            confidence: 0
+          };
+          const reviewer = reviewerResults?.[i];
+          const final = mergeCriterionResults(primary, reviewer);
+          results.set(bundle.criterionId, { primary, reviewer, final });
+
+          if (cache && cacheCtx) {
+            const key = await buildCacheKey(bundle, cacheCtx);
+            cache.set(key, {
+              judgeAuditStatus: final.judgeAuditStatus,
+              targetStatus: final.targetStatus,
+              confidence: final.confidence,
+              cachedAt: Date.now()
+            });
+          }
+        }
+      } else {
+        // Sequential fallback: one provider call per criterion.
+        for (const bundle of group) {
+          cacheSummary.fresh++;
+          const primary = await runSingleCriterion(bundle, primaryProvider);
+          const reviewer = reviewerProvider ? await runSingleCriterion(bundle, reviewerProvider) : undefined;
+          const final = mergeCriterionResults(primary, reviewer);
+          results.set(bundle.criterionId, { primary, reviewer, final });
+
+          if (cache && cacheCtx) {
+            const key = await buildCacheKey(bundle, cacheCtx);
+            cache.set(key, {
+              judgeAuditStatus: final.judgeAuditStatus,
+              targetStatus: final.targetStatus,
+              confidence: final.confidence,
+              cachedAt: Date.now()
+            });
+          }
+        }
       }
     }
 

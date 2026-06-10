@@ -542,6 +542,8 @@ export interface CriterionTargetConfig {
 /** A criterion-focused judge audit packet for one overlap/legibility region. */
 export interface CriterionAuditBundle {
   criterionId: string;
+  /** Parent target ID — used to group multiple criteria for the same target into one batch call. */
+  targetId?: string;
   criterionLabel: string;
   criterionDescription?: string;
   resolvedBox?: { x0: number; y0: number; x1: number; y1: number };

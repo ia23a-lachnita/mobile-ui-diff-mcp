@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
 import { JudgeCache, computeCacheKeyString, hashContent, hashRect } from '../src/flutter/judgeCache';
 import type { JudgeCacheKey } from '../src/flutter/judgeCache';
 
@@ -182,5 +185,80 @@ describe('hashContent and hashRect', () => {
     const h1 = hashRect({ x: 10, y: 20, width: 100, height: 50 });
     const h2 = hashRect({ x: 11, y: 20, width: 100, height: 50 });
     expect(h1).not.toBe(h2);
+  });
+});
+
+describe('JudgeCache — file persistence', () => {
+  let tmpFile: string;
+
+  afterEach(async () => {
+    if (tmpFile) {
+      await fs.rm(tmpFile, { force: true });
+      tmpFile = '';
+    }
+  });
+
+  it('saveToFile + loadFromFile round-trips entries', async () => {
+    tmpFile = path.join(os.tmpdir(), `judge-cache-test-${Date.now()}.json`);
+
+    const a = new JudgeCache();
+    const key = makeKey();
+    a.set(key, { judgeAuditStatus: 'pass', confidence: 0.95, cachedAt: 1000 });
+    await a.saveToFile(tmpFile);
+
+    const b = new JudgeCache();
+    const loaded = await b.loadFromFile(tmpFile);
+    expect(loaded).toBe(true);
+    expect(b.size()).toBe(1);
+    const hit = b.get(key);
+    expect(hit?.judgeAuditStatus).toBe('pass');
+    expect(hit?.confidence).toBe(0.95);
+  });
+
+  it('loadFromFile returns false for non-existent file', async () => {
+    tmpFile = '';
+    const cache = new JudgeCache();
+    const loaded = await cache.loadFromFile('/nonexistent/path/cache.json');
+    expect(loaded).toBe(false);
+    expect(cache.size()).toBe(0);
+  });
+
+  it('loadFromFile returns false for empty/corrupt file', async () => {
+    tmpFile = path.join(os.tmpdir(), `judge-cache-corrupt-${Date.now()}.json`);
+    await fs.writeFile(tmpFile, 'not json', 'utf-8');
+    const cache = new JudgeCache();
+    const loaded = await cache.loadFromFile(tmpFile);
+    expect(loaded).toBe(false);
+  });
+
+  it('loadFromFile merges into existing in-memory entries', async () => {
+    tmpFile = path.join(os.tmpdir(), `judge-cache-merge-${Date.now()}.json`);
+
+    const a = new JudgeCache();
+    const k1 = makeKey({ actualCropHash: 'crop-a' });
+    a.set(k1, { judgeAuditStatus: 'pass', cachedAt: 1000 });
+    await a.saveToFile(tmpFile);
+
+    const b = new JudgeCache();
+    const k2 = makeKey({ actualCropHash: 'crop-b' });
+    b.set(k2, { judgeAuditStatus: 'fail', cachedAt: 2000 });
+    await b.loadFromFile(tmpFile);
+
+    // Should have both k1 (from file) and k2 (in-memory)
+    expect(b.size()).toBe(2);
+    expect(b.has(k1)).toBe(true);
+    expect(b.has(k2)).toBe(true);
+  });
+
+  it('persists not_run status across file round-trip', async () => {
+    tmpFile = path.join(os.tmpdir(), `judge-cache-notrun-${Date.now()}.json`);
+    const a = new JudgeCache();
+    const key = makeKey();
+    a.set(key, { judgeAuditStatus: 'not_run', cachedAt: 500 });
+    await a.saveToFile(tmpFile);
+
+    const b = new JudgeCache();
+    await b.loadFromFile(tmpFile);
+    expect(b.get(key)?.judgeAuditStatus).toBe('not_run');
   });
 });
