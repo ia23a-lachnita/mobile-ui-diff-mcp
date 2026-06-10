@@ -10,6 +10,19 @@ function isProviderErrorEvidence(e: Evidence): boolean {
   return !!(e.measurements?.error) || /-(error|parse-error)-/.test(e.claimId);
 }
 
+/**
+ * Invariant: every JudgeProviderError must carry diagnostic fields.
+ * Fills in normalized failure sentinels when the upstream did not provide them,
+ * preventing the report from containing status:error with no explanation.
+ */
+export function ensureJudgeErrorHasDiagnostics(err: JudgeProviderError): JudgeProviderError {
+  return {
+    ...err,
+    failureReason: err.failureReason ?? 'unknown_empty_failure',
+    rawResponsePreview: err.rawResponsePreview ?? '<missing_error_detail>'
+  };
+}
+
 /** polarity:'match' evidence is never a visual caveat — it is confirmation only. Config metadata is not a visual finding. Data-value observations are not visual defects. */
 function isCaveatEligible(e: Evidence): boolean {
   const polarity = (e as any).polarity as string | undefined;
@@ -269,9 +282,12 @@ export class ModelJudgeAnalyzer {
           try {
             const bundleEvidence = await provider.analyze(bundle, allEvidence);
             // Separate execution errors from real visual evidence
+            let bundleHadEvidence = false;
+            let bundleHadError = false;
             for (const item of bundleEvidence) {
               if (isProviderErrorEvidence(item)) {
-                judgeProviderErrors.push({
+                bundleHadError = true;
+                judgeProviderErrors.push(ensureJudgeErrorHasDiagnostics({
                   source: 'modelJudgeRuntime',
                   kind: 'provider_error',
                   provider: cfg.primary.provider,
@@ -281,15 +297,32 @@ export class ModelJudgeAnalyzer {
                   message: String(item.measurements?.error ?? item.claim),
                   ...(typeof item.measurements?.failureReason === 'string' ? { failureReason: item.measurements.failureReason } : {}),
                   ...(typeof item.measurements?.rawResponsePreview === 'string' ? { rawResponsePreview: item.measurements.rawResponsePreview } : {})
-                });
+                }));
                 warnings.push(`ModelJudgeAnalyzer: primary provider returned error for ROI '${bundle.roiId}': ${item.measurements?.error ?? item.claim}`);
               } else {
+                bundleHadEvidence = true;
                 primaryEvidence.push(item);
                 primaryHadSuccess = true;
               }
             }
+            // Guard: provider returned neither evidence nor an explicit error — synthesize a diagnostic
+            // entry so the report cannot contain status:error with empty failedRois.
+            if (!bundleHadEvidence && !bundleHadError) {
+              judgeProviderErrors.push({
+                source: 'modelJudgeRuntime',
+                kind: 'provider_error',
+                provider: cfg.primary.provider,
+                model: cfg.primary.model,
+                roiId: bundle.roiId,
+                blocking: isRequired,
+                message: `Primary judge '${cfg.primary.provider}' returned empty evidence for ROI '${bundle.roiId}'`,
+                failureReason: 'unknown_empty_failure',
+                rawResponsePreview: '<missing_error_detail>'
+              });
+              warnings.push(`ModelJudgeAnalyzer: primary provider returned empty evidence for ROI '${bundle.roiId}' (no items, no explicit error)`);
+            }
           } catch (err: any) {
-            judgeProviderErrors.push({
+            judgeProviderErrors.push(ensureJudgeErrorHasDiagnostics({
               source: 'modelJudgeRuntime',
               kind: 'provider_error',
               provider: cfg.primary.provider,
@@ -297,7 +330,7 @@ export class ModelJudgeAnalyzer {
               roiId: bundle.roiId,
               blocking: isRequired,
               message: err?.message ?? String(err)
-            });
+            }));
             warnings.push(`ModelJudgeAnalyzer: primary provider failed for ROI '${bundle.roiId}': ${err?.message ?? String(err)}`);
           }
         }

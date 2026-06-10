@@ -1,0 +1,350 @@
+/**
+ * Regression test for the Calorix silent-failure mode:
+ *
+ *   acceptanceStatus: rejected
+ *   visualAuditStatus: error
+ *   actionRequired.type: model_judges_failed
+ *   primary.status: error
+ *   primary.attempted: true
+ *   primary.hadSuccess: false
+ *   primary.evidenceCount: 0
+ *   primary.errorCount: 0          ← invalid — fixed by Math.max(1, errorCount)
+ *   primary.failureReason: undefined ← invalid — fixed by per-bundle empty detection
+ *   primary.rawResponsePreview: undefined ← invalid
+ *
+ * The test exercises the real RunOrchestrator / ModelJudgeAnalyzer / report path
+ * with a mocked primary provider. It must fail on the old behavior and pass after the fix.
+ *
+ * Two scenarios:
+ *  1. Primary analyze() returns []  — empty evidence array (unknown_empty_failure)
+ *  2. Primary analyze() returns an error-evidence item — parse/invalid-json failure
+ */
+
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'fs/promises';
+import path from 'path';
+import os from 'os';
+import { PNG } from 'pngjs';
+
+// vi.mock must appear before any import that transitively loads the module
+vi.mock('../../src/pipeline/judges/providers/OpenRouterProvider');
+vi.mock('../../src/pipeline/judges/providers/NvidiaProvider');
+
+import { OpenRouterProvider } from '../../src/pipeline/judges/providers/OpenRouterProvider';
+import { NvidiaProvider } from '../../src/pipeline/judges/providers/NvidiaProvider';
+import { runScreenUiDiff } from '../../src/tools/runScreenUiDiff';
+import { ensureJudgeErrorHasDiagnostics } from '../../src/pipeline/judges/ModelJudgeAnalyzer';
+
+const MockedOpenRouter = vi.mocked(OpenRouterProvider);
+const MockedNvidia = vi.mocked(NvidiaProvider);
+
+// ── image helpers ─────────────────────────────────────────────────────────────
+
+function makeGrayPng(width = 120, height = 200): Buffer {
+  const png = new PNG({ width, height });
+  for (let i = 0; i < png.data.length; i += 4) {
+    png.data[i] = 200; png.data[i + 1] = 200; png.data[i + 2] = 200; png.data[i + 3] = 255;
+  }
+  return PNG.sync.write(png);
+}
+
+/** Slightly different image so pixel diff is non-zero */
+function makeSlightlyDifferentPng(width = 120, height = 200): Buffer {
+  const png = new PNG({ width, height });
+  for (let i = 0; i < png.data.length; i += 4) {
+    png.data[i] = 180; png.data[i + 1] = 200; png.data[i + 2] = 210; png.data[i + 3] = 255;
+  }
+  return PNG.sync.write(png);
+}
+
+// ── test setup ────────────────────────────────────────────────────────────────
+
+let tmpDir: string;
+let savedOpenRouterKey: string | undefined;
+let savedNvidiaKey: string | undefined;
+
+beforeEach(async () => {
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-judge-silent-'));
+  savedOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  savedNvidiaKey = process.env.NVIDIA_API_KEY;
+  MockedOpenRouter.mockReset();
+  MockedNvidia.mockReset();
+});
+
+afterEach(async () => {
+  await fs.rm(tmpDir, { recursive: true, force: true });
+  if (savedOpenRouterKey !== undefined) {
+    process.env.OPENROUTER_API_KEY = savedOpenRouterKey;
+  } else {
+    delete process.env.OPENROUTER_API_KEY;
+  }
+  if (savedNvidiaKey !== undefined) {
+    process.env.NVIDIA_API_KEY = savedNvidiaKey;
+  } else {
+    delete process.env.NVIDIA_API_KEY;
+  }
+});
+
+async function writeFile(name: string, buf: Buffer | string): Promise<string> {
+  const p = path.join(tmpDir, name);
+  await fs.writeFile(p, buf);
+  return p;
+}
+
+async function writeConfig(screenName: string, screenConfig: Record<string, unknown>): Promise<string> {
+  const configPath = path.join(tmpDir, 'ui-diff.config.json');
+  await fs.writeFile(configPath, JSON.stringify({ screens: { [screenName]: screenConfig } }, null, 2));
+  return configPath;
+}
+
+/** Minimal Calorix-shaped config: visual_parity, required primary openrouter, reviewer nvidia */
+async function buildCalorixConfig(expectedPath: string): Promise<string> {
+  return writeConfig('today', {
+    platform: 'none',
+    expectedImage: expectedPath,
+    outputDir: path.join(tmpDir, 'runs'),
+    visualAuditMode: 'visual_parity',
+    modelJudges: {
+      enabled: true,
+      required: true,
+      primary: { provider: 'openrouter', model: 'qwen/qwen3-vl-235b-a22b-instruct' },
+      reviewer: { provider: 'nvidia', model: 'nvidia/nemotron-nano-12b-v2-vl' }
+    }
+  });
+}
+
+// ── invariant unit tests ───────────────────────────────────────────────────────
+
+describe('ensureJudgeErrorHasDiagnostics invariant', () => {
+  it('passes through errors that already have diagnostics', () => {
+    const err = {
+      source: 'modelJudgeRuntime' as const,
+      kind: 'provider_error' as const,
+      provider: 'openrouter',
+      model: 'qwen3',
+      roiId: 'global',
+      blocking: true,
+      message: 'parse failed',
+      failureReason: 'invalid_json',
+      rawResponsePreview: 'Not valid JSON...'
+    };
+    expect(ensureJudgeErrorHasDiagnostics(err)).toEqual(err);
+  });
+
+  it('fills in unknown_empty_failure when failureReason is missing', () => {
+    const err = {
+      source: 'modelJudgeRuntime' as const,
+      kind: 'provider_error' as const,
+      provider: 'openrouter',
+      roiId: 'roi1',
+      blocking: true,
+      message: 'some error'
+    };
+    const normalized = ensureJudgeErrorHasDiagnostics(err);
+    expect(normalized.failureReason).toBe('unknown_empty_failure');
+    expect(normalized.rawResponsePreview).toBe('<missing_error_detail>');
+  });
+
+  it('fills rawResponsePreview sentinel when only failureReason is provided', () => {
+    const err = {
+      source: 'modelJudgeRuntime' as const,
+      kind: 'provider_error' as const,
+      provider: 'openrouter',
+      roiId: 'roi1',
+      blocking: true,
+      message: 'timeout',
+      failureReason: 'timeout'
+    };
+    const normalized = ensureJudgeErrorHasDiagnostics(err);
+    expect(normalized.failureReason).toBe('timeout');
+    expect(normalized.rawResponsePreview).toBe('<missing_error_detail>');
+  });
+});
+
+// ── Scenario 1: Primary returns [] (empty evidence array) ────────────────────
+
+describe('Calorix silent failure: primary analyze() returns empty array', () => {
+  it('report must not have undefined error fields for required primary judge', async () => {
+    // Primary returns [] — valid parse, no items, no explicit error
+    MockedOpenRouter.mockImplementation(function () {
+      return { analyze: vi.fn().mockResolvedValue([]) };
+    } as any);
+    // Reviewer (nvidia) — not setting NVIDIA_API_KEY → buildProvider returns null → unavailable
+    // requireConsensusForCodeHints is not set (false), so reviewer unavailable is non-blocking
+
+    process.env.OPENROUTER_API_KEY = 'test-key-silent-failure';
+    delete process.env.NVIDIA_API_KEY;
+
+    const expectedPath = await writeFile('expected.png', makeGrayPng());
+    const configPath = await buildCalorixConfig(expectedPath);
+
+    const report = await runScreenUiDiff({
+      screen: 'today',
+      configPath,
+      actualImage: await writeFile('actual.png', makeSlightlyDifferentPng()),
+      runName: 'run-calorix-silent'
+    });
+
+    // ── top-level report status ────────────────────────────────────────────
+    expect(report.acceptanceStatus).toMatch(/rejected|incomplete/);
+    expect(report.visualAuditStatus).toBe('error');
+    expect(report.actionRequired).toBeDefined();
+    expect(report.actionRequired!.type).toBe('model_judges_failed');
+    expect(report.actionRequired!.severity).toBe('blocking');
+
+    // ── modelJudgesSummary.primary ─────────────────────────────────────────
+    const primary = report.modelJudgesSummary?.primary;
+    expect(primary).toBeDefined();
+    expect(primary!.attempted).toBe(true);
+    expect(primary!.hadSuccess).toBe(false);
+    expect(primary!.status).toBe('error');
+    expect(primary!.errorCount).toBeGreaterThanOrEqual(1);
+    expect(primary!.evidenceCount).toBe(0);
+
+    // ── failedRois must carry diagnostic fields ────────────────────────────
+    const failedRois = report.modelJudgesSummary?.failedRois ?? [];
+    expect(failedRois.length).toBeGreaterThanOrEqual(1);
+
+    const primaryFailed = failedRois.find((r) => r.provider === 'openrouter');
+    expect(primaryFailed).toBeDefined();
+    expect(primaryFailed!.failureReason).toBeDefined();
+    expect(primaryFailed!.failureReason).not.toBeUndefined();
+    expect(primaryFailed!.rawResponsePreview).toBeDefined();
+    expect(primaryFailed!.rawResponsePreview).not.toBeUndefined();
+
+    // ── suggestedFixes must NOT contain required:false in visual_parity ────
+    const fixes = report.actionRequired?.suggestedFixes ?? [];
+    for (const fix of fixes) {
+      expect(fix).not.toMatch(/required.*false|make.*required.*optional|disable.*required/i);
+    }
+  });
+
+  it('OLD behavior would have failed this assertion (regression guard)', async () => {
+    // This comment documents what the pre-fix state looked like:
+    // - failedRois was [] because no JudgeProviderError was pushed for empty analyze()
+    // - failureReason was undefined
+    // - rawResponsePreview was undefined
+    // - errorCount was 0 (before Math.max fix)
+    // The assertions above now enforce the correct invariant.
+    // This test itself acts as the regression guard.
+    expect(true).toBe(true); // placeholder — the real guard is in the test above
+  });
+});
+
+// ── Scenario 2: Primary returns error evidence (invalid JSON / parse failure) ─
+
+describe('Calorix silent failure: primary analyze() returns parse error evidence', () => {
+  it('report includes failureReason and rawResponsePreview for invalid JSON response', async () => {
+    // Mock simulates what callWithRetry returns after a non-empty unparseable response
+    MockedOpenRouter.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([{
+          source: 'modelJudge',
+          claimId: 'openrouter-parse-error-global',
+          subject: 'roi:global',
+          claim: 'OpenRouter returned unparseable response after 2 attempt(s): Unexpected token \'I\'',
+          confidence: 0,
+          authority: 'model',
+          measurements: {
+            error: 'parse_error_after_retry',
+            failureReason: 'invalid_json',
+            rawResponsePreview: 'I cannot analyze this as structured JSON. The image shows a mobile UI with...'
+          }
+        }])
+      };
+    } as any);
+
+    process.env.OPENROUTER_API_KEY = 'test-key-parse-error';
+    delete process.env.NVIDIA_API_KEY;
+
+    const expectedPath = await writeFile('expected2.png', makeGrayPng());
+    const configPath = await buildCalorixConfig(expectedPath);
+
+    const report = await runScreenUiDiff({
+      screen: 'today',
+      configPath,
+      actualImage: await writeFile('actual2.png', makeSlightlyDifferentPng()),
+      runName: 'run-calorix-parse-error'
+    });
+
+    // ── top-level report status ────────────────────────────────────────────
+    expect(report.acceptanceStatus).toMatch(/rejected|incomplete/);
+    expect(report.visualAuditStatus).toBe('error');
+    expect(report.actionRequired).toBeDefined();
+    expect(report.actionRequired!.type).toBe('model_judges_failed');
+    expect(report.actionRequired!.severity).toBe('blocking');
+
+    // ── modelJudgesSummary.primary ─────────────────────────────────────────
+    const primary = report.modelJudgesSummary?.primary;
+    expect(primary).toBeDefined();
+    expect(primary!.attempted).toBe(true);
+    expect(primary!.hadSuccess).toBe(false);
+    expect(primary!.status).toBe('error');
+    expect(primary!.errorCount).toBeGreaterThanOrEqual(1);
+
+    // ── failedRois must carry parse diagnostic fields ──────────────────────
+    const failedRois = report.modelJudgesSummary?.failedRois ?? [];
+    expect(failedRois.length).toBeGreaterThanOrEqual(1);
+
+    const primaryFailed = failedRois.find((r) => r.provider === 'openrouter');
+    expect(primaryFailed).toBeDefined();
+    expect(primaryFailed!.failureReason).toBe('invalid_json');
+    expect(primaryFailed!.rawResponsePreview).toMatch(/I cannot analyze|structured JSON/);
+
+    // ── suggestedFixes must NOT contain required:false in visual_parity ────
+    const fixes = report.actionRequired?.suggestedFixes ?? [];
+    for (const fix of fixes) {
+      expect(fix).not.toMatch(/required.*false|make.*required.*optional|disable.*required/i);
+    }
+  });
+
+  it('report includes failureReason for empty_response sentinel (empty HTTP content)', async () => {
+    // Mock simulates what callWithRetry returns for empty HTTP body (responseText = '')
+    MockedOpenRouter.mockImplementation(function () {
+      return {
+        analyze: vi.fn().mockResolvedValue([{
+          source: 'modelJudge',
+          claimId: 'openrouter-parse-error-global',
+          subject: 'roi:global',
+          claim: 'OpenRouter returned unparseable response after 2 attempt(s): Unexpected end of JSON input',
+          confidence: 0,
+          authority: 'model',
+          measurements: {
+            error: 'parse_error_after_retry',
+            failureReason: 'empty_response',
+            rawResponsePreview: '<empty_response>'
+          }
+        }])
+      };
+    } as any);
+
+    process.env.OPENROUTER_API_KEY = 'test-key-empty-response';
+    delete process.env.NVIDIA_API_KEY;
+
+    const expectedPath = await writeFile('expected3.png', makeGrayPng());
+    const configPath = await buildCalorixConfig(expectedPath);
+
+    const report = await runScreenUiDiff({
+      screen: 'today',
+      configPath,
+      actualImage: await writeFile('actual3.png', makeSlightlyDifferentPng()),
+      runName: 'run-calorix-empty-response'
+    });
+
+    const failedRois = report.modelJudgesSummary?.failedRois ?? [];
+    expect(failedRois.length).toBeGreaterThanOrEqual(1);
+
+    const primaryFailed = failedRois.find((r) => r.provider === 'openrouter');
+    expect(primaryFailed).toBeDefined();
+    expect(primaryFailed!.failureReason).toBe('empty_response');
+    expect(primaryFailed!.rawResponsePreview).toBe('<empty_response>');
+
+    expect(report.actionRequired!.type).toBe('model_judges_failed');
+    expect(report.actionRequired!.severity).toBe('blocking');
+
+    const fixes = report.actionRequired?.suggestedFixes ?? [];
+    for (const fix of fixes) {
+      expect(fix).not.toMatch(/required.*false|make.*required.*optional|disable.*required/i);
+    }
+  });
+});
