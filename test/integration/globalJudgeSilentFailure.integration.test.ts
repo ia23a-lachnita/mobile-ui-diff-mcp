@@ -207,10 +207,8 @@ describe('Calorix silent failure: primary analyze() returns empty array', () => 
 
     const primaryFailed = failedRois.find((r) => r.provider === 'openrouter');
     expect(primaryFailed).toBeDefined();
-    expect(primaryFailed!.failureReason).toBeDefined();
-    expect(primaryFailed!.failureReason).not.toBeUndefined();
-    expect(primaryFailed!.rawResponsePreview).toBeDefined();
-    expect(primaryFailed!.rawResponsePreview).not.toBeUndefined();
+    expect(primaryFailed!.failureReason).toBe('unknown_empty_failure');
+    expect(primaryFailed!.rawResponsePreview).toBe('<missing_error_detail>');
 
     // ── suggestedFixes must NOT contain required:false in visual_parity ────
     const fixes = report.actionRequired?.suggestedFixes ?? [];
@@ -406,8 +404,8 @@ describe('Calorix silent failure: required reviewer analyze() returns empty arra
     const failedRois = report.modelJudgesSummary?.failedRois ?? [];
     const reviewerFailed = failedRois.find((r) => r.provider === 'nvidia');
     expect(reviewerFailed).toBeDefined();
-    expect(reviewerFailed!.failureReason).toBeDefined();
-    expect(reviewerFailed!.rawResponsePreview).toBeDefined();
+    expect(reviewerFailed!.failureReason).toBe('unknown_empty_failure');
+    expect(reviewerFailed!.rawResponsePreview).toBe('<missing_error_detail>');
   });
 
   it('reviewer returns malformed error evidence — failureReason and rawResponsePreview still present', async () => {
@@ -473,7 +471,7 @@ describe('Calorix silent failure: required reviewer analyze() returns empty arra
     const reviewerFailed = failedRois.find((r) => r.provider === 'nvidia');
     expect(reviewerFailed).toBeDefined();
     // ensureJudgeErrorHasDiagnostics must have filled in sentinels
-    expect(reviewerFailed!.failureReason).toBeDefined();
-    expect(reviewerFailed!.rawResponsePreview).toBeDefined();
+    expect(reviewerFailed!.failureReason).toBe('unknown_empty_failure');
+    expect(reviewerFailed!.rawResponsePreview).toBe('<missing_error_detail>');
   });
 });
