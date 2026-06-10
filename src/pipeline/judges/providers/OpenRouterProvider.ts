@@ -650,7 +650,16 @@ export class OpenRouterProvider implements IModelJudgeProvider {
             measurements: {
               error: String(item.measurements?.error ?? item.claim),
               failureReason: String(item.measurements?.failureReason ?? 'provider_error'),
-              rawResponsePreview: String(item.measurements?.rawResponsePreview ?? rawPreview).slice(0, RAW_PREVIEW_LIMIT)
+              rawResponsePreview: String(item.measurements?.rawResponsePreview ?? rawPreview).slice(0, RAW_PREVIEW_LIMIT),
+              ...(typeof item.measurements?.schemaErrorPreview === 'string'
+                ? { schemaErrorPreview: item.measurements.schemaErrorPreview.slice(0, RAW_PREVIEW_LIMIT) }
+                : {}),
+              ...(typeof item.measurements?.lastFailureReason === 'string'
+                ? { lastFailureReason: item.measurements.lastFailureReason }
+                : {}),
+              ...(item.measurements?.diagnosticIntegrity === 'adapter_defect' || item.measurements?.diagnosticIntegrity === 'internal_missing_error_detail'
+                ? { diagnosticIntegrity: item.measurements.diagnosticIntegrity }
+                : {})
             }
           } as Evidence);
           continue;

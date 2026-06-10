@@ -130,6 +130,41 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
     expect(result[0].source).toBe('adversarialReviewer');
   });
 
+  it('preserves diagnostic metadata from polarity error evidence', async () => {
+    const responseBody = JSON.stringify({
+      evidence: [{
+        claimId: 'provider-structured-error',
+        subject: 'roi:macro-ring-hero',
+        polarity: 'error',
+        claim: 'Provider emitted a structured error packet',
+        confidence: 0,
+        source: 'modelJudge',
+        measurements: {
+          error: 'schema_parse_error',
+          failureReason: 'schema_parse_error',
+          rawResponsePreview: '{"evidence":[{"claimId":"bad"}]}',
+          schemaErrorPreview: 'item provider-structured-error failed schema validation',
+          lastFailureReason: 'invalid_json',
+          diagnosticIntegrity: 'adapter_defect'
+        }
+      }]
+    });
+
+    mockFetch.mockResolvedValueOnce(makeOkResponse(responseBody));
+    const provider = new OpenRouterProvider('test-key', 'test-model');
+    const result = await provider.analyze(makeBundle(), []);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].measurements).toMatchObject({
+      error: 'schema_parse_error',
+      failureReason: 'schema_parse_error',
+      rawResponsePreview: '{"evidence":[{"claimId":"bad"}]}',
+      schemaErrorPreview: 'item provider-structured-error failed schema validation',
+      lastFailureReason: 'invalid_json',
+      diagnosticIntegrity: 'adapter_defect'
+    });
+  });
+
   it('preserves source role: sourceAwareReviewer', async () => {
     const responseBody = JSON.stringify({
       evidence: [{
