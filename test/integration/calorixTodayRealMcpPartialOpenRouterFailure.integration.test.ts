@@ -393,24 +393,36 @@ describe('calorixTodayRealMcpPartialOpenRouterFailure', () => {
     expect(primary!.provider, 'primary provider is openrouter').toBe('openrouter');
     expect(primary!.model, 'primary model is qwen3').toBe('qwen/qwen3-vl-235b-a22b-instruct');
 
-    // ── failedRois diagnostics — no forbidden sentinels ───────────────────
+    // ── Exact Calorix failure topology ────────────────────────────────────
+    // macro-ring-hero, meal-cards, and global must each appear in failedRois.
+    // macro-rows must not — it was the one ROI that returned valid evidence.
     const failedRois = report.modelJudgesSummary?.failedRois ?? [];
-    expect(failedRois.length, 'at least one ROI must have failed').toBeGreaterThanOrEqual(1);
-
     const openrouterFailed = failedRois.filter((r) => r.provider === 'openrouter');
-    expect(openrouterFailed.length, 'at least one OpenRouter failure').toBeGreaterThanOrEqual(1);
 
-    for (const failed of openrouterFailed) {
-      expect(failed.failureReason, `${failed.roiId} failureReason must not be empty`).toBeTruthy();
-      expect(failed.rawResponsePreview, `${failed.roiId} rawResponsePreview must not be empty`).toBeTruthy();
-      expect(failed.failureReason, `${failed.roiId} must not have unknown sentinel`).not.toBe('unknown_empty_failure');
-      expect(failed.rawResponsePreview, `${failed.roiId} must not have missing_detail sentinel`).not.toBe('<missing_error_detail>');
-      expect(failed.failureReason, `${failed.roiId} failure reason must be provider_response_missing_content`).toBe('provider_response_missing_content');
-    }
-
-    // ── macro-rows must NOT be in failedRois (it succeeded) ──────────────
     const failedIds = failedRois.map((r) => r.roiId);
     expect(failedIds, 'macro-rows succeeded and must not be in failedRois').not.toContain('macro-rows');
+
+    const EXPECTED_FAILED = ['macro-ring-hero', 'meal-cards', 'global'] as const;
+    const VALID_FAILURE_REASONS = new Set(['provider_response_missing_content', 'empty_response']);
+
+    for (const roiId of EXPECTED_FAILED) {
+      const entry = openrouterFailed.find((r) => r.roiId === roiId);
+      expect(entry, `${roiId} must be present in failedRois`).toBeDefined();
+      expect(
+        VALID_FAILURE_REASONS.has(entry!.failureReason),
+        `${roiId} failureReason must be provider_response_missing_content or empty_response, got '${entry!.failureReason}'`
+      ).toBe(true);
+      expect(entry!.rawResponsePreview, `${roiId} rawResponsePreview must be non-empty`).toBeTruthy();
+      expect(entry!.rawResponsePreview, `${roiId} must not have empty string preview`).not.toBe('');
+      expect(entry!.rawResponsePreview, `${roiId} must not have <missing_error_detail> sentinel`).not.toBe('<missing_error_detail>');
+      expect(entry!.failureReason, `${roiId} must not have unknown_empty_failure sentinel`).not.toBe('unknown_empty_failure');
+    }
+
+    // Exactly those three failed — not more, not fewer from OpenRouter primary
+    const openrouterFailedIds = openrouterFailed.map((r) => r.roiId).sort();
+    expect(openrouterFailedIds, 'OpenRouter primary failed on exactly macro-ring-hero, meal-cards, global').toEqual(
+      [...EXPECTED_FAILED].sort()
+    );
 
     // ── Flutter anchor target resolution ──────────────────────────────────
     expect(
@@ -456,9 +468,34 @@ describe('calorixTodayRealMcpPartialOpenRouterFailure', () => {
       ).toBeUndefined();
     }
 
-    // ── fetch was actually called (sanity check that real providers ran) ──
-    expect(mockFetch.mock.calls.length, 'at least one HTTP call must have been made').toBeGreaterThan(0);
-    const openrouterCalls = mockFetch.mock.calls.filter(([u]) => String(u).includes('openrouter.ai'));
-    expect(openrouterCalls.length, 'OpenRouter must have been called at least once').toBeGreaterThanOrEqual(1);
+    // ── Mock routing counts — real pipeline generated the expected calls ──
+    // Separate criterion calls from ROI/global audit calls by inspecting the prompt.
+    const isRoiAuditCall = ([, init]: [unknown, RequestInit | undefined]) => {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      const prompt = extractPromptText(body?.messages?.[0]?.content ?? '');
+      return !prompt.includes('CRITERION ID:') && !prompt.includes('CRITERIA TO EVALUATE');
+    };
+
+    const openrouterAllCalls = mockFetch.mock.calls.filter(([u]) => String(u).includes('openrouter.ai'));
+    expect(openrouterAllCalls.length, 'OpenRouter must have been called at least once').toBeGreaterThanOrEqual(1);
+
+    // ROI audit calls: exactly 4 (macro-ring-hero, macro-rows, meal-cards, global) — no retries
+    // because provider_response_missing_content is a hard return, not a parse-error retry.
+    const openrouterRoiAuditCalls = openrouterAllCalls.filter(isRoiAuditCall);
+    expect(openrouterRoiAuditCalls.length, 'OpenRouter must receive exactly 4 ROI/global audit calls').toBe(4);
+
+    // Verify each of the 3 failing ROIs and global actually triggered an OpenRouter call.
+    // This proves the real pipeline constructed and dispatched those bundles.
+    for (const roiId of [...EXPECTED_FAILED, 'macro-rows'] as const) {
+      const call = openrouterRoiAuditCalls.find(([, init]) => {
+        const body = JSON.parse((init?.body as string) ?? '{}');
+        const prompt = extractPromptText(body?.messages?.[0]?.content ?? '');
+        return prompt.includes(`ROI: ${roiId}`);
+      });
+      expect(call, `OpenRouter must have received a ROI audit call for ${roiId}`).toBeDefined();
+    }
+
+    // No OpenRouter request fell through an unrecognized route — the mock only returns
+    // MISSING_CONTENT for non-macro-rows, non-criterion calls and throws on unknown URLs.
   });
 });
