@@ -446,8 +446,9 @@ describe('calorixTodayRealMcpPartialOpenRouterFailure', () => {
       'pill criterion measurement must produce an honest result (not forced pass)'
     ).toContain(legibilityRegion!.measurementStatus);
     expect(legibilityRegion!.pillMaskPixelCount, 'pill mask must have pixels (pill box is non-empty)').toBeGreaterThan(0);
-    expect(legibilityRegion!.diagnosticLayers, 'diagnostic layers must use renamed pill_mask label').toContain('pill_mask');
+    expect(legibilityRegion!.diagnosticLayers?.some((l: string) => l.startsWith('pill_mask')), 'diagnostic layers must contain pill_mask entry').toBe(true);
     expect(legibilityRegion!.diagnosticLayers, 'must not contain legacy pill_text_mask label').not.toContain('pill_text_mask');
+    expect(legibilityRegion!.measurementReason, 'macroRingBox path must report exact_arc_geometry_unavailable').toBe('exact_arc_geometry_unavailable');
 
     // ── Reviewer success does not override required primary failure ────────
     const reviewer = report.modelJudgesSummary?.reviewer;

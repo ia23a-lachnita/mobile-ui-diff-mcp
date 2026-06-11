@@ -236,9 +236,11 @@ describe('kcalLeftClearance', () => {
     expect(report.targetResolutionSummary?.resolvedViaFlutterAnchor).toBe(2);
     expect(report.targetResolutionSummary?.resolvedViaManualFallback).toBe(0);
     expect(region.targetStatus).toBe('matched');
-    expect(region.measurementStatus).toBe('pass');
+    // measurementStatus is always 'caveat' for macroRingBox: color-heuristic cannot confirm absence of arc intrusion.
+    expect(region.measurementStatus).toBe('caveat');
+    expect(region.measurementReason).toBe('exact_arc_geometry_unavailable');
     const final = report.criterionJudgesSummary?.entries.find((e) => e.criterionId === region.id);
-    expect(final?.finalMeasurementStatus).toBe('pass');
+    expect(final?.finalMeasurementStatus).toBe('caveat');
     expect(region.coloredPixelCountInBox).toBe(0);
     expect(region.pillMaskPixelCount).toBeGreaterThan(0);
     expect(region.macroRingArcPixelCount).toBeGreaterThan(0);
@@ -253,11 +255,12 @@ describe('kcalLeftClearance', () => {
 
     expect(region.targetStatus).toBe('matched');
     expect(['fail', 'caveat']).toContain(region.measurementStatus);
+    expect(region.measurementReason).toBe('exact_arc_geometry_unavailable');
     expect(region.clearancePx).toBeLessThan(region.minClearancePx);
     expect(region.artifactPath).toBeTruthy();
     await expect(fs.access(region.artifactPath)).resolves.toBeUndefined();
     expect(region.diagnosticLayers).toEqual(
-      expect.arrayContaining(['pill_mask', 'macro_ring_arc_mask', 'clearance_band', 'closest_distance_vector'])
+      expect.arrayContaining(['pill_mask (bounding box)', 'macro_ring_arc_mask (color heuristic)', 'clearance_band', 'closest_distance_vector'])
     );
   });
 

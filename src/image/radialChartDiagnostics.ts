@@ -263,6 +263,14 @@ function analyzePng(png: PNG, config: RadialChartGeometryDiagnosticsConfig, dyna
     }
   }
 
+  // Color segmentation is a diagnostic heuristic — it is not a source of truth for arc ownership.
+  // Results depend on rendered colors and may be unreliable under theming, anti-aliasing, or low saturation.
+  if (hints.length === 0) {
+    warnings.push('No colorHints provided; arc pixels identified by saturation only (heuristic — not exact arc geometry).');
+  } else {
+    warnings.push(`Arc pixels identified by color proximity to ${hints.length} hint(s) (heuristic — not exact arc geometry).`);
+  }
+
   if (points.length < 40) {
     warnings.push('Insufficient high-saturation radial arc pixels were detected.');
     return { points, mask, confidence: 0, warnings };
@@ -675,7 +683,7 @@ export async function runRadialChartDiagnostics(input: RadialChartDiagnosticsInp
         message: 'Radial chart diagnostics failed before geometry could be estimated.'
       }],
       verdict: 'insufficientSignal',
-      agentHint: 'Radial geometry diagnostics failed. Inspect crop artifacts and diagnostic warnings before changing app code.',
+      agentHint: 'Radial geometry diagnostics (color segmentation heuristic) failed. Inspect crop artifacts and diagnostic warnings before changing app code.',
       artifacts,
       warnings: [err?.message ?? String(err)]
     };

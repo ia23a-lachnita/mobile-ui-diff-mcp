@@ -498,6 +498,8 @@ export interface OverlapLegibilityRegionResult {
   targetStatus?: 'matched' | 'not_matched' | 'ambiguous' | 'not_checked';
   /** Deterministic overlap/clearance outcome. Set to not_evaluated when targetStatus is not_matched or ambiguous. */
   measurementStatus?: 'pass' | 'caveat' | 'fail' | 'not_evaluated';
+  /** Reason code when measurementStatus is caveat or not_evaluated (e.g. "exact_arc_geometry_unavailable"). */
+  measurementReason?: string;
   /** Criterion-specific judge verdict on legibility and measurement credibility. */
   judgeAuditStatus?: 'pass' | 'caveat' | 'fail' | 'target_mismatch' | 'unavailable' | 'not_run';
   skipReason?: string;
@@ -542,6 +544,17 @@ export interface CriterionTargetConfig {
   /** Text strings that must NOT be visible in the targeted element. Presence means wrong box. */
   mustNotMatch?: string[];
 }
+
+/**
+ * Future: generic locator / ROI proposal layer.
+ * A `locateAnything(prompt, image)` call finds a named target in an image using a text prompt
+ * (e.g. "980 kcal left pill inside macro ring") and returns a resolved ROI record:
+ *   { rect, confidence, source: 'locator', evidence, warnings }
+ * Locator output feeds the same target-resolution structure as Flutter anchors.
+ * No app-specific MCP code is required for new screens — only a text description of the target.
+ *
+ * @see LocatorROIProposal (not yet implemented)
+ */
 
 /** A criterion-focused judge audit packet for one overlap/legibility region. */
 export interface CriterionAuditBundle {

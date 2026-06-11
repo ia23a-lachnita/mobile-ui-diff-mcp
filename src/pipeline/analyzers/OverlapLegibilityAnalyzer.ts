@@ -83,6 +83,12 @@ function setPixel(data: Buffer, w: number, cx: number, cy: number, r: number, g:
 type PixelPoint = { x: number; y: number };
 type PixelBox = { x: number; y: number; width: number; height: number };
 
+function boxClearancePx(a: PixelBox, b: PixelBox): number {
+  const gapX = Math.max(0, Math.max(a.x, b.x) - Math.min(a.x + a.width, b.x + b.width));
+  const gapY = Math.max(0, Math.max(a.y, b.y) - Math.min(a.y + a.height, b.y + b.height));
+  return Math.sqrt(gapX * gapX + gapY * gapY);
+}
+
 function clampPixelBox(box: PixelBox, imgWidth: number, imgHeight: number): PixelBox | null {
   const x = Math.max(0, Math.round(box.x));
   const y = Math.max(0, Math.round(box.y));
@@ -590,6 +596,8 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
 
         const clearance = region.minClearancePx ?? 0;
         const pillMask = collectPillMask(png, pillBox);
+        // Color-based arc mask: diagnostic heuristic — avoidColors identify candidate arc pixels by
+        // rendered color. Not exact arc geometry; results depend on theming and rendering artifacts.
         const arcMask = collectMacroRingArcMask(png, macroRingBox, avoidColors, colorThreshold, pillBox);
         const clearanceMeasurement = measureMaskClearance(pillMask, arcMask, clearance, pillBox);
         const clearancePx = clearanceMeasurement.clearancePx;
@@ -597,16 +605,19 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
         const overlapPercent = pillMask.length > 0 ? clearanceMeasurement.arcOverlapCount / pillMask.length : 0;
         const sev = region.severity ?? 'high';
         const isBlocking = sev === 'critical' || sev === 'high';
+
+        // measurementStatus is always 'caveat': color-segmented arc detection is a heuristic and
+        // cannot confirm absence of arc intrusion. exact_arc_geometry_unavailable is the reason.
         const measurementStatus: OverlapLegibilityRegionResult['measurementStatus'] =
-          hasViolation ? (isBlocking ? 'fail' : 'caveat') : 'pass';
+          hasViolation ? (isBlocking ? 'fail' : 'caveat') : 'caveat';
         const regionStatus: OverlapLegibilityRegionResult['status'] = hasViolation ? 'caveat' : 'pass';
 
         graph.add({
           source: 'overlapLegibility',
           claimId: `overlap-legibility-${region.id}`,
           subject: `region:${region.id}`,
-          claim: `Region '${region.label ?? region.id}' macro-ring arc clearance: ${clearancePx === null ? 'not measurable' : `${clearancePx.toFixed(2)}px`}`,
-          confidence: 0.85,
+          claim: `Region '${region.label ?? region.id}' macro-ring arc clearance (color heuristic): ${clearancePx === null ? 'not measurable' : `${clearancePx.toFixed(2)}px`}. Exact arc geometry unavailable.`,
+          confidence: 0.75,
           authority: 'deterministic',
           measurements: {
             overlapPercent,
@@ -660,6 +671,7 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
           status: regionStatus,
           targetStatus: 'not_checked',
           measurementStatus,
+          measurementReason: 'exact_arc_geometry_unavailable',
           judgeAuditStatus: 'not_run',
           overlapPercent,
           clearancePx,
@@ -668,7 +680,7 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
           coloredPixelCountInClearanceBand: clearanceMeasurement.arcPixelsInClearanceBand,
           pillMaskPixelCount: pillMask.length,
           macroRingArcPixelCount: arcMask.length,
-          diagnosticLayers: ['pill_mask', 'macro_ring_arc_mask', 'clearance_band', 'closest_distance_vector'],
+          diagnosticLayers: ['pill_mask (bounding box)', 'macro_ring_arc_mask (color heuristic)', 'clearance_band', 'closest_distance_vector'],
           minClearancePx: clearance,
           artifactPath: artifactPath ?? null,
           resolvedBox: { x: x0, y: y0, width: x1 - x0, height: y1 - y0, coordinateSpace: 'expected' },
@@ -677,8 +689,8 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
         });
 
         const deterministicSummary = hasViolation
-          ? `Clearance violation: macro-ring arc mask is ${clearancePx?.toFixed(1) ?? 'N/A'}px from the pill mask (min ${clearance}px). Pill mask pixels: ${pillMask.length}. Macro-ring arc mask pixels: ${arcMask.length}.`
-          : `No clearance violation: macro-ring arc mask is ${clearancePx?.toFixed(1) ?? 'N/A'}px from the pill mask (min ${clearance}px). Pill mask pixels: ${pillMask.length}. Macro-ring arc mask pixels: ${arcMask.length}.`;
+          ? `Color-heuristic clearance violation: arc mask is ${clearancePx?.toFixed(1) ?? 'N/A'}px from the pill mask (min ${clearance}px). Measurement is caveat — exact arc geometry unavailable; color segmentation used as diagnostic heuristic. Pill mask: ${pillMask.length}px. Arc mask: ${arcMask.length}px.`
+          : `No color-heuristic clearance violation detected: arc mask is ${clearancePx?.toFixed(1) ?? 'N/A'}px from the pill mask (min ${clearance}px). Measurement status is caveat — exact arc geometry unavailable; a clear color result cannot confirm true arc clearance.`;
 
         criterionAuditBundles.push({
           criterionId: region.id,
@@ -703,8 +715,8 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
             subject: `region:${region.id}`,
             severity: sev,
             blocking: isBlocking,
-            message: `Region '${region.label ?? region.id}' has ${clearancePx?.toFixed(1) ?? 'N/A'}px macro-ring arc to pill clearance (min ${clearance}px).`,
-            confidence: 0.85,
+            message: `Region '${region.label ?? region.id}' has ${clearancePx?.toFixed(1) ?? 'N/A'}px macro-ring arc to pill clearance (min ${clearance}px). Color heuristic — exact arc geometry unavailable.`,
+            confidence: 0.75,
             measurements: {
               overlapPercent,
               maxOverlapPercent: (region.maxOverlapPercent ?? 5) / 100,

@@ -725,6 +725,28 @@ describe('NvidiaProvider — analyzeCriteriaBatch image evidence', () => {
   });
 });
 
+// ─── Structural diff legend in judge prompts ──────────────────────────────────
+
+describe('OpenRouterProvider — structural diff legend in analyze() prompt', () => {
+  const mockFetch = vi.fn();
+
+  beforeEach(() => { vi.stubGlobal('fetch', mockFetch); mockFetch.mockClear(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('analyze() prompt contains the structural diff color legend', async () => {
+    const responseBody = JSON.stringify({ evidence: [{ claimId: 'ok', subject: 'roi:test', polarity: 'match', claim: 'ok', confidence: 0.9, blocking: false }] });
+    mockFetch.mockResolvedValueOnce(makeOkResponse(responseBody));
+    const provider = new OpenRouterProvider('key', 'model');
+    await provider.analyze(makeBundle(), []);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const text = extractPromptText(body.messages[0].content);
+    expect(text).toMatch(/red.*magenta.*expected/i);
+    expect(text).toMatch(/cyan.*blue.*actual/i);
+    expect(text).toMatch(/STRUCTURAL DIFF LEGEND/i);
+  });
+});
+
 // ─── judgeCachePath contract ──────────────────────────────────────────────────
 
 describe('judgeCachePath — persistence is opt-in', () => {

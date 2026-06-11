@@ -4,6 +4,7 @@ import { Evidence, EvidenceBundle } from '../../types';
 import { CriterionAuditBundle, CriterionJudgeResult } from '../../../types';
 import { VALID_CHANGE_VECTORS } from '../../constants';
 import { EVIDENCE_JSON_SCHEMA } from './evidenceSchema';
+import { STRUCTURAL_DIFF_LEGEND } from '../../../image/diff';
 
 const CRITERION_JUDGE_SCHEMA = {
   name: 'CriterionJudgeResult',
@@ -151,6 +152,7 @@ export class OpenRouterProvider implements IModelJudgeProvider {
       '  1. EXPECTED MOCKUP (design reference / what the UI should look like)',
       '  2. ACTUAL APP SCREENSHOT (what is currently rendered in the app)',
       '  3. STRUCTURAL DIFF (pixel diff, may be omitted)',
+      `  STRUCTURAL DIFF LEGEND: ${STRUCTURAL_DIFF_LEGEND}`,
       'Compare ACTUAL against EXPECTED. Do NOT invert expected/actual.',
       '',
       'DETERMINISTIC GEOMETRY/PIXEL MEASUREMENTS:',
