@@ -299,6 +299,21 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
         error.failureReason,
         `failedRoi[${error.roiId}/${error.provider}]: must not contain unknown_empty_failure sentinel`
       ).not.toBe('unknown_empty_failure');
+
+      // provider_adapter_returned_empty_array means the adapter lost the real provider cause.
+      // When this failureReason is present, rawResponsePreview must be the actual response
+      // content (not the sentinel), so the cause can be diagnosed.
+      if (error.failureReason === 'provider_adapter_returned_empty_array') {
+        expect(
+          error.rawResponsePreview,
+          `failedRoi[${error.roiId}/${error.provider}]: adapter_empty row must carry real response content, not the '<provider_adapter_returned_empty_array>' sentinel`
+        ).not.toBe('<provider_adapter_returned_empty_array>');
+
+        expect(
+          error.rawResponsePreview,
+          `failedRoi[${error.roiId}/${error.provider}]: adapter_empty rawResponsePreview must be non-empty`
+        ).toBeTruthy();
+      }
     }
 
     // ── Assertion 5: Required primary failure must block acceptance ──────────

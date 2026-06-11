@@ -741,8 +741,12 @@ describe('OpenRouterProvider — structural diff legend in analyze() prompt', ()
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     const text = extractPromptText(body.messages[0].content);
-    expect(text).toMatch(/red.*magenta.*expected/i);
-    expect(text).toMatch(/cyan.*blue.*actual/i);
+    // Legend must name expected-side color (magenta) and actual-side color (cyan)
+    expect(text).toMatch(/magenta.*expected/i);
+    expect(text).toMatch(/cyan.*actual/i);
+    // Legend must describe shared overlap and identify diff as alignment aid
+    expect(text).toMatch(/yellow|shared|overlap/i);
+    expect(text).toMatch(/alignment aid|source of truth/i);
     expect(text).toMatch(/STRUCTURAL DIFF LEGEND/i);
   });
 });

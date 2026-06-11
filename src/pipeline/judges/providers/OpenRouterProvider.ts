@@ -685,12 +685,21 @@ export class OpenRouterProvider implements IModelJudgeProvider {
         });
       }
       if (evidence.length === 0) {
+        // Preserve real response content so downstream can diagnose root cause.
+        // Never emit the sentinel '<provider_adapter_returned_empty_array>' as rawResponsePreview —
+        // that hides the actual provider response and prevents diagnosis.
+        const rawItems: any[] = Array.isArray(parsed) ? parsed : (parsed.evidence ?? parsed.items ?? []);
+        const droppedCount = rawItems.length;
+        const dropDetail = droppedCount > 0
+          ? `${droppedCount} item(s) received but all dropped (missing claimId/claim or unsupported polarity); first: ${safeJsonPreview(rawItems[0], 120)}`
+          : 'provider returned an empty evidence array';
         return providerErrorEvidence({
           roiId,
-          claim: 'OpenRouter returned no usable evidence items after an attempted judge call',
+          claim: `OpenRouter returned no usable evidence items: ${dropDetail}`,
           error: 'provider_adapter_returned_empty_array',
           failureReason: 'provider_adapter_returned_empty_array',
-          rawResponsePreview: '<provider_adapter_returned_empty_array>',
+          rawResponsePreview: rawPreview,
+          schemaErrorPreview: dropDetail,
           diagnosticIntegrity: 'adapter_defect'
         });
       }

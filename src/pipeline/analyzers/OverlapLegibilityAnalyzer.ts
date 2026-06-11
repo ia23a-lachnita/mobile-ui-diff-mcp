@@ -604,13 +604,12 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
         const hasViolation = clearancePx !== null && clearancePx < clearance;
         const overlapPercent = pillMask.length > 0 ? clearanceMeasurement.arcOverlapCount / pillMask.length : 0;
         const sev = region.severity ?? 'high';
-        const isBlocking = sev === 'critical' || sev === 'high';
 
-        // measurementStatus is always 'caveat': color-segmented arc detection is a heuristic and
-        // cannot confirm absence of arc intrusion. exact_arc_geometry_unavailable is the reason.
-        const measurementStatus: OverlapLegibilityRegionResult['measurementStatus'] =
-          hasViolation ? (isBlocking ? 'fail' : 'caveat') : 'caveat';
-        const regionStatus: OverlapLegibilityRegionResult['status'] = hasViolation ? 'caveat' : 'pass';
+        // measurementStatus and regionStatus are always 'caveat': color-segmented arc detection is a
+        // heuristic (exact_arc_geometry_unavailable). It must never produce 'fail' or 'pass' —
+        // geometry is unavailable so neither a definitive violation nor a clean bill of health is valid.
+        const measurementStatus: OverlapLegibilityRegionResult['measurementStatus'] = 'caveat';
+        const regionStatus: OverlapLegibilityRegionResult['status'] = 'caveat';
 
         graph.add({
           source: 'overlapLegibility',
@@ -714,7 +713,7 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
             source: 'overlapLegibility',
             subject: `region:${region.id}`,
             severity: sev,
-            blocking: isBlocking,
+            blocking: false, // heuristic — must not block deterministic acceptance
             message: `Region '${region.label ?? region.id}' has ${clearancePx?.toFixed(1) ?? 'N/A'}px macro-ring arc to pill clearance (min ${clearance}px). Color heuristic — exact arc geometry unavailable.`,
             confidence: 0.75,
             measurements: {

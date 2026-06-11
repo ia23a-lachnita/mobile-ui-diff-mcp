@@ -231,6 +231,103 @@ describe('OverlapLegibilityAnalyzer — coordinate resolution', () => {
     expect(r.artifactPath).toBeTruthy();
   });
 
+  // ── macroRingBox heuristic path ─────────────────────────────────────────────
+
+  it('macroRingBox path with no violation: status and measurementStatus are both caveat, not pass', async () => {
+    // exact_arc_geometry_unavailable — geometry not available so neither 'pass' nor 'fail' is valid
+    const png = makePng(100, 100); // plain gray, no avoid-color pixels
+    const outDir = path.join(tmpDir, 'macro-ring-no-violation');
+    await fs.mkdir(outDir, { recursive: true });
+    const ctx = makeCtx(png, [], {
+      enabled: true,
+      regions: [{
+        id: 'macro-ring-pill',
+        label: 'Macro ring pill',
+        box: { x: 30, y: 20, width: 20, height: 20 },
+        macroRingBox: { x: 5, y: 5, width: 80, height: 40 },
+        avoidColors: ['#ff0000'], // red — not present in the gray image
+        maxOverlapPercent: 5,
+        severity: 'high'
+      }]
+    });
+    (ctx as any).outputDir = outDir;
+
+    const result = await new OverlapLegibilityAnalyzer().run(ctx, new EvidenceGraph());
+    const r = result.overlapLegibilitySummary!.regions[0];
+    expect(r.checked).toBe(true);
+    expect(r.measurementStatus).toBe('caveat'); // geometry unavailable → never 'pass'
+    expect(r.status).toBe('caveat');            // geometry unavailable → never 'pass'
+    expect(r.measurementReason).toBe('exact_arc_geometry_unavailable');
+  });
+
+  it('macroRingBox path with violation: measurementStatus is caveat, not fail', async () => {
+    // Even when the color heuristic reports a clearance violation, the measurement is still
+    // 'caveat' because exact geometry is unavailable — we cannot confirm a hard fail.
+    const png = makePng(100, 100);
+    // Paint red (avoid-color) pixels throughout the macroRingBox and pill areas
+    for (let y = 0; y < 100; y++) {
+      for (let x = 0; x < 100; x++) {
+        const idx = (y * 100 + x) << 2;
+        png.data[idx] = 255; png.data[idx + 1] = 0; png.data[idx + 2] = 0; png.data[idx + 3] = 255;
+      }
+    }
+    const outDir = path.join(tmpDir, 'macro-ring-violation');
+    await fs.mkdir(outDir, { recursive: true });
+    const ctx = makeCtx(png, [], {
+      enabled: true,
+      regions: [{
+        id: 'macro-ring-pill-violation',
+        label: 'Macro ring pill',
+        box: { x: 30, y: 20, width: 20, height: 20 },
+        macroRingBox: { x: 5, y: 5, width: 80, height: 40 },
+        avoidColors: ['#ff0000'],
+        maxOverlapPercent: 0,
+        severity: 'critical'
+      }]
+    });
+    (ctx as any).outputDir = outDir;
+
+    const result = await new OverlapLegibilityAnalyzer().run(ctx, new EvidenceGraph());
+    const r = result.overlapLegibilitySummary!.regions[0];
+    expect(r.checked).toBe(true);
+    expect(r.measurementStatus).toBe('caveat'); // never 'fail' — geometry unavailable
+    expect(r.status).toBe('caveat');            // never 'fail'
+    expect(r.measurementReason).toBe('exact_arc_geometry_unavailable');
+  });
+
+  it('macroRingBox path violation: blocking is always false regardless of severity', async () => {
+    // Heuristic color measurements must not block deterministic acceptance.
+    // Even critical severity must produce blocking:false for the macroRingBox path.
+    const png = makePng(100, 100);
+    for (let y = 0; y < 100; y++) {
+      for (let x = 0; x < 100; x++) {
+        const idx = (y * 100 + x) << 2;
+        png.data[idx] = 255; png.data[idx + 1] = 0; png.data[idx + 2] = 0; png.data[idx + 3] = 255;
+      }
+    }
+    const outDir = path.join(tmpDir, 'macro-ring-blocking');
+    await fs.mkdir(outDir, { recursive: true });
+    const ctx = makeCtx(png, [], {
+      enabled: true,
+      regions: [{
+        id: 'macro-ring-pill-critical',
+        box: { x: 30, y: 20, width: 20, height: 20 },
+        macroRingBox: { x: 5, y: 5, width: 80, height: 40 },
+        avoidColors: ['#ff0000'],
+        maxOverlapPercent: 0,
+        severity: 'critical'
+      }]
+    });
+    (ctx as any).outputDir = outDir;
+
+    const result = await new OverlapLegibilityAnalyzer().run(ctx, new EvidenceGraph());
+    for (const caveat of (result.visualCaveats ?? [])) {
+      if (caveat.source === 'overlapLegibility') {
+        expect(caveat.blocking).toBe(false);
+      }
+    }
+  });
+
   it('unknown ROI id → error with imageSize and skipReason for debugging', async () => {
     const png = makePng(IMG_W, IMG_H);
     const ctx = makeCtx(png, [ROI], {
