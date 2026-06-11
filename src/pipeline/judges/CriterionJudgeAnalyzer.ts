@@ -91,6 +91,9 @@ async function runSingleCriterion(
   try {
     return await provider.analyzeCriterion(bundle);
   } catch (err: any) {
+    // DEFERRED: CriterionJudgeResult has no structured error fields (failureReason, rawResponsePreview).
+    // Error detail is preserved only in `reasoning`. A follow-up should add diagnostics fields to
+    // CriterionJudgeResult and surface them through RunOrchestrator into the report's criterionErrors.
     return {
       criterionId: bundle.criterionId,
       targetStatus: 'ambiguous',

@@ -614,13 +614,14 @@ export class OpenRouterProvider implements IModelJudgeProvider {
     } catch (err: any) {
       const isTimeout = err?.name === 'AbortError';
       const message = err?.message ?? String(err);
+      const isHttpError = /^OpenRouter API error \d+/.test(message);
       return providerErrorEvidence({
         roiId,
         claim: isTimeout
           ? `OpenRouter analysis timed out after ${this.timeoutMs}ms`
           : `OpenRouter analysis failed: ${message}`,
         error: message,
-        failureReason: isTimeout ? 'timeout' : 'provider_request_failed',
+        failureReason: isTimeout ? 'timeout' : isHttpError ? 'provider_http_error' : 'provider_request_failed',
         rawResponsePreview: responseEnvelope ? safeJsonPreview(responseEnvelope, ENVELOPE_PREVIEW_LIMIT) : safeJsonPreview(message)
       });
     }

@@ -514,16 +514,24 @@ export class NvidiaProvider implements IModelJudgeProvider {
       responseText = data?.choices?.[0]?.message?.content ?? '';
     } catch (err: any) {
       const isTimeout = err?.name === 'AbortError';
+      const message = err?.message ?? String(err);
+      const isHttpError = /^NVIDIA API error \d+/.test(message);
+      const failureReason = isTimeout ? 'timeout' : isHttpError ? 'provider_http_error' : 'provider_request_failed';
       return [{
         source: 'modelJudge',
-        claimId: `nvidia-error-${roiId}`,
+        claimId: `nvidia-error-${failureReason}-${roiId}`,
         subject: `roi:${roiId}`,
         claim: isTimeout
           ? `NVIDIA analysis timed out after ${this.timeoutMs}ms`
-          : `NVIDIA analysis failed: ${err?.message ?? String(err)}`,
+          : `NVIDIA analysis failed: ${message}`,
         confidence: 0,
         authority: 'model' as const,
-        measurements: { error: err?.message ?? String(err) }
+        polarity: 'error' as any,
+        measurements: {
+          error: message,
+          failureReason,
+          rawResponsePreview: message.slice(0, 200)
+        }
       }];
     }
 
@@ -562,14 +570,21 @@ export class NvidiaProvider implements IModelJudgeProvider {
       if (this.retryOnParseError && attempt < this.maxRetries) {
         return this.callWithRetry(messages, roiId, attempt + 1);
       }
+      const exhausted = this.retryOnParseError && this.maxRetries > 0 && attempt >= this.maxRetries;
+      const parseFailureReason = exhausted ? 'retry_exhausted' : 'schema_parse_error';
       return [{
         source: 'modelJudge',
-        claimId: `nvidia-parse-error-${roiId}`,
+        claimId: `nvidia-parse-error-${parseFailureReason}-${roiId}`,
         subject: `roi:${roiId}`,
         claim: `NVIDIA returned unparseable response after ${attempt + 1} attempt(s): ${parseErr?.message ?? 'parse error'}`,
         confidence: 0,
         authority: 'model' as const,
-        measurements: { error: 'parse_error_after_retry' }
+        polarity: 'error' as any,
+        measurements: {
+          error: parseFailureReason,
+          failureReason: parseFailureReason,
+          rawResponsePreview: (responseText.length > 0 ? responseText : '<empty_response>').slice(0, 200)
+        }
       }];
     }
   }

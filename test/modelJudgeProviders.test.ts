@@ -549,7 +549,7 @@ describe('NvidiaProvider — real provider with mocked fetch', () => {
     const provider = new NvidiaProvider('test-key', 'test-model', 45000, 1, true);
     const result = await provider.analyze(makeBundle('roi-n'), []);
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(result[0].measurements).toMatchObject({ error: 'parse_error_after_retry' });
+    expect(result[0].measurements).toMatchObject({ error: 'retry_exhausted', failureReason: 'retry_exhausted' });
   });
 
   it('maxRetries honored — retries up to configured limit', async () => {

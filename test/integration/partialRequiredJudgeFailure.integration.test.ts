@@ -83,6 +83,15 @@ async function writeConfig(expectedPath: string, outputDir: string): Promise<str
             box: { x: 45, y: 75, width: 90, height: 90 },
             coordinateSpace: 'expected',
             maxDiffPercent: 1
+          },
+          {
+            id: 'meal-cards',
+            label: 'Meal cards',
+            type: 'component',
+            critical: true,
+            box: { x: 10, y: 170, width: 160, height: 60 },
+            coordinateSpace: 'expected',
+            maxDiffPercent: 1
           }
         ],
         modelJudges: {
@@ -99,6 +108,8 @@ async function writeConfig(expectedPath: string, outputDir: string): Promise<str
 
 describe('visualParity', () => {
   it('partialRequiredJudgeFailureBlocksAcceptance', async () => {
+    // Mirrors the real Calorix partial failure: macro-rows succeeds; macro-ring-hero, meal-cards,
+    // and global all fail with missing content (OpenRouter returned choices without message.content).
     MockedOpenRouter.mockImplementation(function () {
       return {
         analyze: vi.fn().mockImplementation(async (bundle: any) => {
@@ -114,23 +125,21 @@ describe('visualParity', () => {
               blocking: false
             }];
           }
-          if (bundle.roiId === 'macro-ring-hero') {
-            return [{
-              source: 'modelJudge',
-              claimId: 'openrouter-error-macro-ring-hero',
-              subject: 'roi:macro-ring-hero',
-              claim: 'OpenRouter response had no usable message content.',
-              confidence: 0,
-              authority: 'model',
-              polarity: 'error',
-              measurements: {
-                error: 'provider_response_missing_content',
-                failureReason: 'provider_response_missing_content',
-                rawResponsePreview: '{"choices":[{"message":{}}]}'
-              }
-            }];
-          }
-          return [];
+          const failedRoiId = bundle.roiId as string;
+          return [{
+            source: 'modelJudge',
+            claimId: `openrouter-error-${failedRoiId}`,
+            subject: `roi:${failedRoiId}`,
+            claim: 'OpenRouter response had no usable message content.',
+            confidence: 0,
+            authority: 'model',
+            polarity: 'error',
+            measurements: {
+              error: 'provider_response_missing_content',
+              failureReason: 'provider_response_missing_content',
+              rawResponsePreview: '{"choices":[{"message":{}}]}'
+            }
+          }];
         })
       };
     } as any);
@@ -170,7 +179,8 @@ describe('visualParity', () => {
     expect(report.modelJudgesSummary?.primary?.status).toBe('partial');
     expect(report.modelJudgesSummary?.primary?.hadSuccess).toBe(true);
     expect(report.modelJudgesSummary?.primary?.evidenceCount).toBeGreaterThanOrEqual(1);
-    expect(report.modelJudgesSummary?.primary?.errorCount).toBeGreaterThanOrEqual(1);
+    // macro-ring-hero + meal-cards + global all fail → at least 3 errors
+    expect(report.modelJudgesSummary?.primary?.errorCount).toBeGreaterThanOrEqual(3);
     expect(report.modelJudgesSummary?.reviewer?.status).toBe('success');
 
     const openRouterEvidence = report.visualCaveats?.find((c) => c.id === 'openrouter-macro-rows-match')
@@ -180,12 +190,17 @@ describe('visualParity', () => {
       expect.arrayContaining([expect.objectContaining({ claimId: 'openrouter-macro-rows-match' })])
     );
 
-    const failed = report.modelJudgesSummary?.failedRois.find(
-      (r) => r.provider === 'openrouter' && r.roiId === 'macro-ring-hero'
+    // All three Calorix-shaped regions must appear as failed OpenRouter ROIs.
+    const failedByRoi = (roiId: string) => report.modelJudgesSummary?.failedRois.find(
+      (r) => r.provider === 'openrouter' && r.roiId === roiId
     );
-    expect(failed).toBeDefined();
-    expect(failed!.failureReason).toMatch(/^(empty_response|invalid_json|provider_response_missing_content)$/);
-    expect(failed!.rawResponsePreview).toBe('{"choices":[{"message":{}}]}');
+    const expectedFailedRois = ['macro-ring-hero', 'meal-cards', 'global'];
+    for (const roiId of expectedFailedRois) {
+      const failed = failedByRoi(roiId);
+      expect(failed, `OpenRouter failed ROI '${roiId}' must appear in failedRois`).toBeDefined();
+      expect(failed!.failureReason).toMatch(/^(empty_response|invalid_json|provider_response_missing_content)$/);
+      expect(failed!.rawResponsePreview).toBe('{"choices":[{"message":{}}]}');
+    }
 
     expect(report.visualAuditStatus).toBe('error');
     expect(report.acceptanceStatus).toBe('rejected');

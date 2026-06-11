@@ -117,11 +117,14 @@ function collectMacroRingArcMask(
   png: PNG,
   macroRingBox: PixelBox,
   avoidColors: { r: number; g: number; b: number }[],
-  colorThreshold: number
+  colorThreshold: number,
+  pillBox?: PixelBox
 ): PixelPoint[] {
   const points: PixelPoint[] = [];
   for (let y = macroRingBox.y; y < macroRingBox.y + macroRingBox.height; y++) {
     for (let x = macroRingBox.x; x < macroRingBox.x + macroRingBox.width; x++) {
+      // Pill-owned pixels must not become arc pixels, even if they match avoidColors.
+      if (pillBox && x >= pillBox.x && x < pillBox.x + pillBox.width && y >= pillBox.y && y < pillBox.y + pillBox.height) continue;
       const idx = (y * png.width + x) << 2;
       const r = png.data[idx];
       const g = png.data[idx + 1];
@@ -586,7 +589,7 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
 
         const clearance = region.minClearancePx ?? 0;
         const pillMask = collectPillMask(png, pillBox);
-        const arcMask = collectMacroRingArcMask(png, macroRingBox, avoidColors, colorThreshold);
+        const arcMask = collectMacroRingArcMask(png, macroRingBox, avoidColors, colorThreshold, pillBox);
         const clearanceMeasurement = measureMaskClearance(pillMask, arcMask, clearance, pillBox);
         const clearancePx = clearanceMeasurement.clearancePx;
         const hasViolation = clearancePx !== null && clearancePx < clearance;
