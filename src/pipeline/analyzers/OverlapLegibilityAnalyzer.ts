@@ -102,7 +102,7 @@ function distanceBetweenPoints(a: PixelPoint, b: PixelPoint): number {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-function collectPillTextMask(png: PNG, pillBox: PixelBox): PixelPoint[] {
+function collectPillMask(png: PNG, pillBox: PixelBox): PixelPoint[] {
   const points: PixelPoint[] = [];
   for (let y = pillBox.y; y < pillBox.y + pillBox.height; y++) {
     for (let x = pillBox.x; x < pillBox.x + pillBox.width; x++) {
@@ -585,7 +585,7 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
         }
 
         const clearance = region.minClearancePx ?? 0;
-        const pillMask = collectPillTextMask(png, pillBox);
+        const pillMask = collectPillMask(png, pillBox);
         const arcMask = collectMacroRingArcMask(png, macroRingBox, avoidColors, colorThreshold);
         const clearanceMeasurement = measureMaskClearance(pillMask, arcMask, clearance, pillBox);
         const clearancePx = clearanceMeasurement.clearancePx;
@@ -611,7 +611,7 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
             proximityViolation: hasViolation,
             ...(clearancePx !== null ? { clearancePx } : {}),
             minClearancePx: clearance,
-            pillTextMaskPixelCount: pillMask.length,
+            pillMaskPixelCount: pillMask.length,
             macroRingArcPixelCount: arcMask.length,
             coloredPixelCountInBox: clearanceMeasurement.arcOverlapCount,
             coloredPixelCountInClearanceBand: clearanceMeasurement.arcPixelsInClearanceBand
@@ -662,9 +662,9 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
           nearestAvoidColorDistancePx: clearancePx,
           coloredPixelCountInBox: clearanceMeasurement.arcOverlapCount,
           coloredPixelCountInClearanceBand: clearanceMeasurement.arcPixelsInClearanceBand,
-          pillTextMaskPixelCount: pillMask.length,
+          pillMaskPixelCount: pillMask.length,
           macroRingArcPixelCount: arcMask.length,
-          diagnosticLayers: ['pill_text_mask', 'macro_ring_arc_mask', 'clearance_band', 'closest_distance_vector'],
+          diagnosticLayers: ['pill_mask', 'macro_ring_arc_mask', 'clearance_band', 'closest_distance_vector'],
           minClearancePx: clearance,
           artifactPath: artifactPath ?? null,
           resolvedBox: { x: x0, y: y0, width: x1 - x0, height: y1 - y0, coordinateSpace: 'expected' },
@@ -673,8 +673,8 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
         });
 
         const deterministicSummary = hasViolation
-          ? `Clearance violation: macro-ring arc mask is ${clearancePx?.toFixed(1) ?? 'N/A'}px from the pill/text mask (min ${clearance}px). Pill/text mask pixels: ${pillMask.length}. Macro-ring arc mask pixels: ${arcMask.length}.`
-          : `No clearance violation: macro-ring arc mask is ${clearancePx?.toFixed(1) ?? 'N/A'}px from the pill/text mask (min ${clearance}px). Pill/text mask pixels: ${pillMask.length}. Macro-ring arc mask pixels: ${arcMask.length}.`;
+          ? `Clearance violation: macro-ring arc mask is ${clearancePx?.toFixed(1) ?? 'N/A'}px from the pill mask (min ${clearance}px). Pill mask pixels: ${pillMask.length}. Macro-ring arc mask pixels: ${arcMask.length}.`
+          : `No clearance violation: macro-ring arc mask is ${clearancePx?.toFixed(1) ?? 'N/A'}px from the pill mask (min ${clearance}px). Pill mask pixels: ${pillMask.length}. Macro-ring arc mask pixels: ${arcMask.length}.`;
 
         criterionAuditBundles.push({
           criterionId: region.id,
@@ -699,7 +699,7 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
             subject: `region:${region.id}`,
             severity: sev,
             blocking: isBlocking,
-            message: `Region '${region.label ?? region.id}' has ${clearancePx?.toFixed(1) ?? 'N/A'}px macro-ring arc to pill/text clearance (min ${clearance}px).`,
+            message: `Region '${region.label ?? region.id}' has ${clearancePx?.toFixed(1) ?? 'N/A'}px macro-ring arc to pill clearance (min ${clearance}px).`,
             confidence: 0.85,
             measurements: {
               overlapPercent,
@@ -709,7 +709,7 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
               minClearancePx: clearance,
               coloredPixelCountInBox: clearanceMeasurement.arcOverlapCount,
               coloredPixelCountInClearanceBand: clearanceMeasurement.arcPixelsInClearanceBand,
-              pillTextMaskPixelCount: pillMask.length,
+              pillMaskPixelCount: pillMask.length,
               macroRingArcPixelCount: arcMask.length
             },
             artifacts: artifactPath ? [artifactPath] : []

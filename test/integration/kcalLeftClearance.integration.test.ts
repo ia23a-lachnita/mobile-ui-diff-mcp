@@ -240,7 +240,7 @@ describe('kcalLeftClearance', () => {
     const final = report.criterionJudgesSummary?.entries.find((e) => e.criterionId === region.id);
     expect(final?.finalMeasurementStatus).toBe('pass');
     expect(region.coloredPixelCountInBox).toBe(0);
-    expect(region.pillTextMaskPixelCount).toBeGreaterThan(0);
+    expect(region.pillMaskPixelCount).toBeGreaterThan(0);
     expect(region.macroRingArcPixelCount).toBeGreaterThan(0);
     expect(region.clearancePx).toBeGreaterThanOrEqual(region.minClearancePx);
     expect(report.visualCaveats ?? []).not.toEqual(
@@ -257,7 +257,7 @@ describe('kcalLeftClearance', () => {
     expect(region.artifactPath).toBeTruthy();
     await expect(fs.access(region.artifactPath)).resolves.toBeUndefined();
     expect(region.diagnosticLayers).toEqual(
-      expect.arrayContaining(['pill_text_mask', 'macro_ring_arc_mask', 'clearance_band', 'closest_distance_vector'])
+      expect.arrayContaining(['pill_mask', 'macro_ring_arc_mask', 'clearance_band', 'closest_distance_vector'])
     );
   });
 

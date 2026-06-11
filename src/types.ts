@@ -506,7 +506,7 @@ export interface OverlapLegibilityRegionResult {
   nearestAvoidColorDistancePx?: number | null;
   coloredPixelCountInBox?: number;
   coloredPixelCountInClearanceBand?: number;
-  pillTextMaskPixelCount?: number;
+  pillMaskPixelCount?: number;
   macroRingArcPixelCount?: number;
   diagnosticLayers?: string[];
   minClearancePx?: number;
