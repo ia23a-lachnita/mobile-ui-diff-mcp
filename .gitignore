@@ -50,3 +50,11 @@ logs/
 .sentryclirc
 *.local
 api-keys.txt
+
+# Live test output
+.ui-diff-live/
+
+# Codex / tooling
+.codex/
+codex-mem/
+nul
