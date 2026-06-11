@@ -5,6 +5,7 @@
   "scripts": {
     "test": "vitest run",
     "test:integration": "vitest run test/integration",
+    "test:live:calorix": "vitest run --config vitest.config.live.ts --testTimeout=300000",
     "build": "tsc",
     "start": "node dist/index.js",
     "compare": "ts-node src/cli/compare.ts"
