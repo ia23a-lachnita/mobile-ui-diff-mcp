@@ -16,7 +16,7 @@
  * with a mocked primary provider. It must fail on the old behavior and pass after the fix.
  *
  * Two scenarios:
- *  1. Primary analyze() returns []  — empty evidence array (unknown_empty_failure)
+ *  1. Primary analyze() returns []  — empty evidence array (provider_adapter_returned_empty_array)
  *  2. Primary analyze() returns an error-evidence item — parse/invalid-json failure
  */
 
@@ -412,7 +412,7 @@ describe('Calorix silent failure: required reviewer analyze() returns empty arra
       };
     } as any);
 
-    // Reviewer returns [] — empty evidence array (unknown_empty_failure)
+    // Reviewer returns [] — empty evidence array (provider_adapter_returned_empty_array)
     MockedNvidia.mockImplementation(function () {
       return { analyze: vi.fn().mockResolvedValue([]) };
     } as any);
