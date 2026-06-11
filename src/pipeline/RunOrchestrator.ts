@@ -570,7 +570,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         }
         const needsTransform = srcW !== targetWidth || srcH !== targetHeight;
 
-        const anchorOverlapRegions: NonNullable<CompareImagesInput['overlapLegibility']>['regions'] = [];
+        const comparisonRectsByTargetId = new Map<string, BoxLike>();
         for (const resolved of resolution.results) {
           if (resolved.source !== 'flutter_anchor' || !resolved.rect) continue;
           const target = targetMap.targets.find((t) => t.id === resolved.targetId);
@@ -587,7 +587,20 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
             (resolved.mappingMetadata as any).rectComparisonPx = rectComp;
             (resolved.mappingMetadata as any).transformActualToComparison = needsTransform;
           }
+          comparisonRectsByTargetId.set(resolved.targetId, rectComp);
+        }
 
+        const macroRingHeroBox =
+          comparisonRectsByTargetId.get('today.macroRingHero') ??
+          comparisonRectsByTargetId.get('macro-ring-hero');
+
+        const anchorOverlapRegions: NonNullable<CompareImagesInput['overlapLegibility']>['regions'] = [];
+        for (const resolved of resolution.results) {
+          if (resolved.source !== 'flutter_anchor' || !resolved.rect) continue;
+          const target = targetMap.targets.find((t) => t.id === resolved.targetId);
+          if (!target) continue;
+          const rectComp = comparisonRectsByTargetId.get(resolved.targetId);
+          if (!rectComp) continue;
           for (const criterion of target.criteria) {
             if (criterion.domain !== 'legibility.overlap') continue;
             anchorOverlapRegions.push({
@@ -604,7 +617,10 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
                 anchorDescription: criterion.anchorDescription,
                 mustContainText: criterion.mustContainText,
                 mustNotMatch: criterion.mustNotMatch
-              }
+              },
+              ...(target.id === 'today.kcalLeftPill' && macroRingHeroBox
+                ? { macroRingBox: macroRingHeroBox, macroRingAnchorId: 'today.macroRingHero' }
+                : {})
             } as any);
           }
         }
@@ -1188,8 +1204,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
           recommendedUserPrompt: 'Check provider status, API key validity, and model compatibility.',
           suggestedFixes: [
             'Run model_judges_health with deep:true to test provider connectivity',
-            'Verify API keys are valid and not rate-limited',
-            "Set modelJudges.required: false to make failures non-blocking"
+            'Verify API keys are valid and not rate-limited'
           ]
         };
       }
@@ -1365,6 +1380,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
     const failedRois = (judgeProviderErrors ?? []).map((pe: any) => ({
       roiId: pe.roiId,
       provider: pe.provider,
+      ...(pe.providerRole !== undefined ? { providerRole: pe.providerRole } : {}),
       error: pe.message,
       ...(pe.failureReason !== undefined ? { failureReason: pe.failureReason } : {}),
       ...(pe.rawResponsePreview !== undefined ? { rawResponsePreview: pe.rawResponsePreview } : {}),

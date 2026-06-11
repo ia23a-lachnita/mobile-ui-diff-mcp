@@ -45,6 +45,7 @@ export interface JudgeProviderError {
   source: 'modelJudgeRuntime';
   kind: 'provider_error';
   provider: string;
+  providerRole?: 'primary' | 'reviewer';
   model?: string;
   roiId: string;
   blocking: boolean;

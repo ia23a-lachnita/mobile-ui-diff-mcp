@@ -80,6 +80,199 @@ function setPixel(data: Buffer, w: number, cx: number, cy: number, r: number, g:
   data[idx] = r; data[idx + 1] = g; data[idx + 2] = b; data[idx + 3] = a;
 }
 
+type PixelPoint = { x: number; y: number };
+type PixelBox = { x: number; y: number; width: number; height: number };
+
+function clampPixelBox(box: PixelBox, imgWidth: number, imgHeight: number): PixelBox | null {
+  const x = Math.max(0, Math.round(box.x));
+  const y = Math.max(0, Math.round(box.y));
+  const right = Math.min(imgWidth, Math.round(box.x + box.width));
+  const bottom = Math.min(imgHeight, Math.round(box.y + box.height));
+  if (right <= x || bottom <= y) return null;
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+function pointInBox(point: PixelPoint, box: PixelBox): boolean {
+  return point.x >= box.x && point.x < box.x + box.width && point.y >= box.y && point.y < box.y + box.height;
+}
+
+function distanceBetweenPoints(a: PixelPoint, b: PixelPoint): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function collectPillTextMask(png: PNG, pillBox: PixelBox): PixelPoint[] {
+  const points: PixelPoint[] = [];
+  for (let y = pillBox.y; y < pillBox.y + pillBox.height; y++) {
+    for (let x = pillBox.x; x < pillBox.x + pillBox.width; x++) {
+      const idx = (y * png.width + x) << 2;
+      if (png.data[idx + 3] > 0) points.push({ x, y });
+    }
+  }
+  return points;
+}
+
+function collectMacroRingArcMask(
+  png: PNG,
+  macroRingBox: PixelBox,
+  avoidColors: { r: number; g: number; b: number }[],
+  colorThreshold: number
+): PixelPoint[] {
+  const points: PixelPoint[] = [];
+  for (let y = macroRingBox.y; y < macroRingBox.y + macroRingBox.height; y++) {
+    for (let x = macroRingBox.x; x < macroRingBox.x + macroRingBox.width; x++) {
+      const idx = (y * png.width + x) << 2;
+      const r = png.data[idx];
+      const g = png.data[idx + 1];
+      const b = png.data[idx + 2];
+      if (avoidColors.some((c) => colorDistance(r, g, b, c.r, c.g, c.b) < colorThreshold)) {
+        points.push({ x, y });
+      }
+    }
+  }
+  return points;
+}
+
+function measureMaskClearance(
+  pillMask: PixelPoint[],
+  arcMask: PixelPoint[],
+  minClearancePx: number,
+  pillBox: PixelBox
+): {
+  clearancePx: number | null;
+  closestPillPoint?: PixelPoint;
+  closestArcPoint?: PixelPoint;
+  arcOverlapCount: number;
+  arcPixelsInClearanceBand: number;
+} {
+  if (pillMask.length === 0 || arcMask.length === 0) {
+    return { clearancePx: null, arcOverlapCount: 0, arcPixelsInClearanceBand: 0 };
+  }
+
+  let clearancePx = Infinity;
+  let closestPillPoint: PixelPoint | undefined;
+  let closestArcPoint: PixelPoint | undefined;
+  let arcOverlapCount = 0;
+  let arcPixelsInClearanceBand = 0;
+  const seenArcInBand = new Set<string>();
+
+  for (const arcPoint of arcMask) {
+    if (pointInBox(arcPoint, pillBox)) arcOverlapCount++;
+    for (const pillPoint of pillMask) {
+      const dist = distanceBetweenPoints(pillPoint, arcPoint);
+      if (dist < clearancePx) {
+        clearancePx = dist;
+        closestPillPoint = pillPoint;
+        closestArcPoint = arcPoint;
+      }
+      if (dist < minClearancePx) {
+        seenArcInBand.add(`${arcPoint.x},${arcPoint.y}`);
+      }
+    }
+  }
+
+  arcPixelsInClearanceBand = seenArcInBand.size;
+  return {
+    clearancePx: Number.isFinite(clearancePx) ? clearancePx : null,
+    closestPillPoint,
+    closestArcPoint,
+    arcOverlapCount,
+    arcPixelsInClearanceBand
+  };
+}
+
+async function writeMaskClearanceArtifact(
+  ctx: AnalyzerContext,
+  regionId: string,
+  png: PNG,
+  pillBox: PixelBox,
+  macroRingBox: PixelBox,
+  pillMask: PixelPoint[],
+  arcMask: PixelPoint[],
+  minClearancePx: number,
+  closestPillPoint?: PixelPoint,
+  closestArcPoint?: PixelPoint
+): Promise<string | null> {
+  try {
+    const margin = Math.max(24, minClearancePx + 12);
+    const cx0 = Math.max(0, Math.min(pillBox.x, macroRingBox.x) - margin);
+    const cy0 = Math.max(0, Math.min(pillBox.y, macroRingBox.y) - margin);
+    const cx1 = Math.min(png.width, Math.max(pillBox.x + pillBox.width, macroRingBox.x + macroRingBox.width) + margin);
+    const cy1 = Math.min(png.height, Math.max(pillBox.y + pillBox.height, macroRingBox.y + macroRingBox.height) + margin);
+    const cropW = cx1 - cx0;
+    const cropH = cy1 - cy0;
+    if (cropW <= 0 || cropH <= 0) return null;
+
+    const crop = new PNG({ width: cropW, height: cropH });
+    for (let y = 0; y < cropH; y++) {
+      for (let x = 0; x < cropW; x++) {
+        const srcIdx = ((cy0 + y) * png.width + (cx0 + x)) << 2;
+        const dstIdx = (y * cropW + x) << 2;
+        crop.data[dstIdx] = Math.round(png.data[srcIdx] * 0.45);
+        crop.data[dstIdx + 1] = Math.round(png.data[srcIdx + 1] * 0.45);
+        crop.data[dstIdx + 2] = Math.round(png.data[srcIdx + 2] * 0.45);
+        crop.data[dstIdx + 3] = 255;
+      }
+    }
+
+    for (const point of pillMask) {
+      const x = point.x - cx0;
+      const y = point.y - cy0;
+      setPixel(crop.data, cropW, x, y, 0, 180, 255, 230);
+    }
+
+    for (const point of arcMask) {
+      const x = point.x - cx0;
+      const y = point.y - cy0;
+      setPixel(crop.data, cropW, x, y, 0, 255, 80, 255);
+    }
+
+    const rx0 = pillBox.x - cx0;
+    const ry0 = pillBox.y - cy0;
+    const rx1 = rx0 + pillBox.width;
+    const ry1 = ry0 + pillBox.height;
+    const cbx0 = Math.max(0, rx0 - minClearancePx);
+    const cby0 = Math.max(0, ry0 - minClearancePx);
+    const cbx1 = Math.min(cropW - 1, rx1 + minClearancePx);
+    const cby1 = Math.min(cropH - 1, ry1 + minClearancePx);
+
+    for (let x = cbx0; x <= cbx1; x++) {
+      if (x % 4 < 2) {
+        setPixel(crop.data, cropW, x, cby0, 255, 150, 0, 240);
+        setPixel(crop.data, cropW, x, cby1, 255, 150, 0, 240);
+      }
+    }
+    for (let y = cby0; y <= cby1; y++) {
+      if (y % 4 < 2) {
+        setPixel(crop.data, cropW, cbx0, y, 255, 150, 0, 240);
+        setPixel(crop.data, cropW, cbx1, y, 255, 150, 0, 240);
+      }
+    }
+
+    if (closestPillPoint && closestArcPoint) {
+      const x0 = closestPillPoint.x - cx0;
+      const y0 = closestPillPoint.y - cy0;
+      const x1 = closestArcPoint.x - cx0;
+      const y1 = closestArcPoint.y - cy0;
+      const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), 1);
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const x = Math.round(x0 + (x1 - x0) * t);
+        const y = Math.round(y0 + (y1 - y0) * t);
+        setPixel(crop.data, cropW, x, y, 255, 255, 0, 255);
+        setPixel(crop.data, cropW, x + 1, y, 255, 255, 0, 255);
+      }
+    }
+
+    const artifactPath = path.join(ctx.outputDir, `overlap-legibility-${regionId}-mask-clearance.png`);
+    await fs.writeFile(artifactPath, PNG.sync.write(crop));
+    return artifactPath;
+  } catch {
+    return null;
+  }
+}
+
 async function writeOverlayArtifact(
   ctx: AnalyzerContext,
   regionId: string,
@@ -370,6 +563,161 @@ export class OverlapLegibilityAnalyzer implements IAnalyzer {
       }
 
       const totalPixels = Math.max(1, (x1 - x0) * (y1 - y0));
+      const macroRingBoxRaw = (region as any).macroRingBox as PixelBox | undefined;
+
+      if (macroRingBoxRaw) {
+        const pillBox = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+        const macroRingBox = clampPixelBox(macroRingBoxRaw, imgWidth, imgHeight);
+        if (!macroRingBox) {
+          regionResults.push({
+            id: region.id,
+            roiId: region.roiId,
+            checked: false,
+            status: 'error',
+            targetStatus: 'not_checked',
+            measurementStatus: 'not_evaluated',
+            judgeAuditStatus: 'not_run',
+            skipReason: 'Macro-ring anchor box is empty or out of image bounds',
+            resolvedBox: { x: x0, y: y0, width: x1 - x0, height: y1 - y0, coordinateSpace: 'expected' },
+            imageSize: { width: imgWidth, height: imgHeight }
+          });
+          continue;
+        }
+
+        const clearance = region.minClearancePx ?? 0;
+        const pillMask = collectPillTextMask(png, pillBox);
+        const arcMask = collectMacroRingArcMask(png, macroRingBox, avoidColors, colorThreshold);
+        const clearanceMeasurement = measureMaskClearance(pillMask, arcMask, clearance, pillBox);
+        const clearancePx = clearanceMeasurement.clearancePx;
+        const hasViolation = clearancePx !== null && clearancePx < clearance;
+        const overlapPercent = pillMask.length > 0 ? clearanceMeasurement.arcOverlapCount / pillMask.length : 0;
+        const sev = region.severity ?? 'high';
+        const isBlocking = sev === 'critical' || sev === 'high';
+        const measurementStatus: OverlapLegibilityRegionResult['measurementStatus'] =
+          hasViolation ? (isBlocking ? 'fail' : 'caveat') : 'pass';
+        const regionStatus: OverlapLegibilityRegionResult['status'] = hasViolation ? 'caveat' : 'pass';
+
+        graph.add({
+          source: 'overlapLegibility',
+          claimId: `overlap-legibility-${region.id}`,
+          subject: `region:${region.id}`,
+          claim: `Region '${region.label ?? region.id}' macro-ring arc clearance: ${clearancePx === null ? 'not measurable' : `${clearancePx.toFixed(2)}px`}`,
+          confidence: 0.85,
+          authority: 'deterministic',
+          measurements: {
+            overlapPercent,
+            maxOverlapPercent: (region.maxOverlapPercent ?? 5) / 100,
+            regionId: region.id,
+            proximityViolation: hasViolation,
+            ...(clearancePx !== null ? { clearancePx } : {}),
+            minClearancePx: clearance,
+            pillTextMaskPixelCount: pillMask.length,
+            macroRingArcPixelCount: arcMask.length,
+            coloredPixelCountInBox: clearanceMeasurement.arcOverlapCount,
+            coloredPixelCountInClearanceBand: clearanceMeasurement.arcPixelsInClearanceBand
+          }
+        });
+
+        const artifactPath = await writeMaskClearanceArtifact(
+          ctx,
+          region.id,
+          png,
+          pillBox,
+          macroRingBox,
+          pillMask,
+          arcMask,
+          clearance,
+          clearanceMeasurement.closestPillPoint,
+          clearanceMeasurement.closestArcPoint
+        );
+
+        const GENEROUS_MARGIN = Math.max(100, clearance + 60);
+        const annotatedActualPath = await writeAnnotatedFullScreen(ctx, region.id, x0, y0, x1, y1);
+        const expectedCropPath = await writeGenerousCrop(
+          ctx.expectedPng,
+          path.join(ctx.outputDir, `overlap-legibility-${region.id}-expected-crop.png`),
+          x0, y0, x1, y1, GENEROUS_MARGIN
+        );
+        const actualCropPath = await writeGenerousCrop(
+          png,
+          path.join(ctx.outputDir, `overlap-legibility-${region.id}-actual-crop.png`),
+          x0, y0, x1, y1, GENEROUS_MARGIN
+        );
+
+        const criterionArtifacts: OverlapLegibilityRegionResult['criterionArtifacts'] = {};
+        if (annotatedActualPath) criterionArtifacts.annotatedActualScreen = annotatedActualPath;
+        if (expectedCropPath) criterionArtifacts.expectedCrop = expectedCropPath;
+        if (actualCropPath) criterionArtifacts.actualCrop = actualCropPath;
+
+        regionResults.push({
+          id: region.id,
+          roiId: region.roiId,
+          checked: true,
+          status: regionStatus,
+          targetStatus: 'not_checked',
+          measurementStatus,
+          judgeAuditStatus: 'not_run',
+          overlapPercent,
+          clearancePx,
+          nearestAvoidColorDistancePx: clearancePx,
+          coloredPixelCountInBox: clearanceMeasurement.arcOverlapCount,
+          coloredPixelCountInClearanceBand: clearanceMeasurement.arcPixelsInClearanceBand,
+          pillTextMaskPixelCount: pillMask.length,
+          macroRingArcPixelCount: arcMask.length,
+          diagnosticLayers: ['pill_text_mask', 'macro_ring_arc_mask', 'clearance_band', 'closest_distance_vector'],
+          minClearancePx: clearance,
+          artifactPath: artifactPath ?? null,
+          resolvedBox: { x: x0, y: y0, width: x1 - x0, height: y1 - y0, coordinateSpace: 'expected' },
+          imageSize: { width: imgWidth, height: imgHeight },
+          ...(Object.keys(criterionArtifacts).length > 0 ? { criterionArtifacts } : {})
+        });
+
+        const deterministicSummary = hasViolation
+          ? `Clearance violation: macro-ring arc mask is ${clearancePx?.toFixed(1) ?? 'N/A'}px from the pill/text mask (min ${clearance}px). Pill/text mask pixels: ${pillMask.length}. Macro-ring arc mask pixels: ${arcMask.length}.`
+          : `No clearance violation: macro-ring arc mask is ${clearancePx?.toFixed(1) ?? 'N/A'}px from the pill/text mask (min ${clearance}px). Pill/text mask pixels: ${pillMask.length}. Macro-ring arc mask pixels: ${arcMask.length}.`;
+
+        criterionAuditBundles.push({
+          criterionId: region.id,
+          criterionLabel: region.label ?? region.id,
+          criterionDescription: buildCriterionDescription(region as any),
+          resolvedBox: { x0, y0, x1, y1 },
+          deterministicSummary,
+          artifacts: {
+            fullExpectedScreen: ctx.expectedImagePath,
+            fullActualScreen: ctx.actualImagePath,
+            ...(annotatedActualPath ? { annotatedActualScreen: annotatedActualPath } : {}),
+            ...(expectedCropPath ? { expectedCrop: expectedCropPath } : {}),
+            ...(actualCropPath ? { actualCrop: actualCropPath } : {}),
+            ...(artifactPath ? { diagnosticArtifact: artifactPath } : {})
+          }
+        });
+
+        if (hasViolation) {
+          visualCaveats.push({
+            id: `overlap-legibility-${region.id}`,
+            source: 'overlapLegibility',
+            subject: `region:${region.id}`,
+            severity: sev,
+            blocking: isBlocking,
+            message: `Region '${region.label ?? region.id}' has ${clearancePx?.toFixed(1) ?? 'N/A'}px macro-ring arc to pill/text clearance (min ${clearance}px).`,
+            confidence: 0.85,
+            measurements: {
+              overlapPercent,
+              maxOverlapPercent: (region.maxOverlapPercent ?? 5) / 100,
+              proximityViolation: true,
+              ...(clearancePx !== null ? { clearancePx } : {}),
+              minClearancePx: clearance,
+              coloredPixelCountInBox: clearanceMeasurement.arcOverlapCount,
+              coloredPixelCountInClearanceBand: clearanceMeasurement.arcPixelsInClearanceBand,
+              pillTextMaskPixelCount: pillMask.length,
+              macroRingArcPixelCount: arcMask.length
+            },
+            artifacts: artifactPath ? [artifactPath] : []
+          });
+        }
+
+        continue;
+      }
 
       let matchCount = 0;
       for (let y = y0; y < y1; y++) {

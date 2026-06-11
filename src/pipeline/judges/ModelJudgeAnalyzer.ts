@@ -38,6 +38,7 @@ function attemptedProviderReturnedNoEvidenceError(input: {
     source: 'modelJudgeRuntime',
     kind: 'provider_error',
     provider: input.provider,
+    providerRole: input.role === 'Primary' ? 'primary' : 'reviewer',
     ...(input.model ? { model: input.model } : {}),
     roiId: input.roiId,
     blocking: input.blocking,
@@ -316,6 +317,7 @@ export class ModelJudgeAnalyzer {
                   source: 'modelJudgeRuntime',
                   kind: 'provider_error',
                   provider: cfg.primary.provider,
+                  providerRole: 'primary',
                   model: cfg.primary.model,
                   roiId: bundle.roiId,
                   blocking: isRequired,
@@ -352,6 +354,7 @@ export class ModelJudgeAnalyzer {
               source: 'modelJudgeRuntime',
               kind: 'provider_error',
               provider: cfg.primary.provider,
+              providerRole: 'primary',
               model: cfg.primary.model,
               roiId: bundle.roiId,
               blocking: isRequired,
@@ -387,6 +390,7 @@ export class ModelJudgeAnalyzer {
                   source: 'modelJudgeRuntime',
                   kind: 'provider_error',
                   provider: cfg.reviewer.provider,
+                  providerRole: 'reviewer',
                   model: cfg.reviewer.model,
                   roiId: bundle.roiId,
                   blocking: cfg.requireConsensusForCodeHints ?? false,
@@ -425,6 +429,7 @@ export class ModelJudgeAnalyzer {
               source: 'modelJudgeRuntime',
               kind: 'provider_error',
               provider: cfg.reviewer.provider,
+              providerRole: 'reviewer',
               model: cfg.reviewer.model,
               roiId: bundle.roiId,
               blocking: cfg.requireConsensusForCodeHints ?? false,
@@ -440,16 +445,30 @@ export class ModelJudgeAnalyzer {
     // ---- Build actionRequired with full context from both providers ----
     // This runs after both primary and reviewer so messages accurately reflect both outcomes.
     if (!actionRequired) {
-      if (isRequired && cfg.primary && !primaryHadSuccess) {
+      if (isRequired && cfg.primary) {
         // Primary failed. Determine exact reason and incorporate reviewer outcome.
-        const primaryErrors = judgeProviderErrors.filter((e) => e.provider === cfg.primary!.provider);
+        const primaryErrors = judgeProviderErrors.filter((e) => e.providerRole === 'primary');
         const reviewerSucceeded = reviewerHadSuccess;
         const reviewerNote = reviewerSucceeded ? `; reviewer '${cfg.reviewer?.provider ?? 'reviewer'}' succeeded` : '';
 
         if (!primaryAttempted) {
           // Provider was not built (missing API key — already handled above as model_judges_unavailable)
           // Fall through to consensus checks
-        } else if (primaryErrors.length > 0) {
+        } else if (primaryHadSuccess && primaryErrors.length > 0) {
+          const failedRois = primaryErrors.map((e) => e.roiId).filter(Boolean);
+          const failedRoiText = failedRois.length > 0 ? ` for ROI(s): ${Array.from(new Set(failedRois)).join(', ')}` : '';
+          actionRequired = {
+            type: 'model_judges_failed',
+            severity: 'blocking',
+            message: `Required primary judge '${cfg.primary.provider}' had operational provider failure(s)${failedRoiText} after succeeding for other ROI(s)${reviewerNote}. Visual audit is incomplete.`,
+            recommendedUserPrompt: 'Check primary provider response diagnostics, API status, and model compatibility, then rerun.',
+            suggestedFixes: [
+              'Inspect modelJudgesSummary.failedRois for failureReason and rawResponsePreview',
+              'Run model_judges_health with deep:true to test provider connectivity',
+              'Verify primary API key is valid and not rate-limited'
+            ]
+          };
+        } else if (!primaryHadSuccess && primaryErrors.length > 0) {
           actionRequired = reviewerSucceeded
             ? {
                 type: 'model_judges_failed',
@@ -458,8 +477,7 @@ export class ModelJudgeAnalyzer {
                 recommendedUserPrompt: 'Check primary provider status, API key validity, and model compatibility, then rerun.',
                 suggestedFixes: [
                   'Verify primary API key is valid and not rate-limited',
-                  'Run model_judges_health with deep:true to test provider connectivity',
-                  ...(!isVisualParity ? ["Set modelJudges.required: false to make failures non-blocking"] : [])
+                  'Run model_judges_health with deep:true to test provider connectivity'
                 ]
               }
             : {
@@ -469,11 +487,10 @@ export class ModelJudgeAnalyzer {
                 recommendedUserPrompt: 'Check provider status, API key validity, and model compatibility, then rerun.',
                 suggestedFixes: [
                   'Run model_judges_health with deep:true to test provider connectivity',
-                  'Verify API keys are valid and not rate-limited',
-                  ...(!isVisualParity ? ["Set modelJudges.required: false to make failures non-blocking"] : [])
+                  'Verify API keys are valid and not rate-limited'
                 ]
               };
-        } else {
+        } else if (!primaryHadSuccess) {
           // Primary was attempted, no errors, but produced zero evidence
           actionRequired = {
             type: 'model_judges_failed',
@@ -482,8 +499,7 @@ export class ModelJudgeAnalyzer {
             recommendedUserPrompt: 'Primary judge returned an empty response. Check model configuration and retry.',
             suggestedFixes: [
               'Verify model is configured correctly and the prompt/schema is accepted',
-              'Run model_judges_health with deep:true to test provider schema validation',
-              ...(!isVisualParity ? ["Set modelJudges.required: false to make failures non-blocking"] : [])
+              'Run model_judges_health with deep:true to test provider schema validation'
             ]
           };
         }
@@ -585,9 +601,9 @@ export class ModelJudgeAnalyzer {
 
     const judgeHadSuccessfulResults = primaryHadSuccess;
 
-    const primaryErrorCount = judgeProviderErrors.filter((e) => e.provider === cfg.primary?.provider).length;
+    const primaryErrorCount = judgeProviderErrors.filter((e) => e.providerRole === 'primary').length;
     const reviewerErrorCount = cfg.reviewer
-      ? judgeProviderErrors.filter((e) => e.provider === cfg.reviewer!.provider).length
+      ? judgeProviderErrors.filter((e) => e.providerRole === 'reviewer').length
       : 0;
 
     const judgeProviderRunSummary = {

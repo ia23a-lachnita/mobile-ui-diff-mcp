@@ -502,9 +502,13 @@ export interface OverlapLegibilityRegionResult {
   judgeAuditStatus?: 'pass' | 'caveat' | 'fail' | 'target_mismatch' | 'unavailable' | 'not_run';
   skipReason?: string;
   overlapPercent?: number;
+  clearancePx?: number | null;
   nearestAvoidColorDistancePx?: number | null;
   coloredPixelCountInBox?: number;
   coloredPixelCountInClearanceBand?: number;
+  pillTextMaskPixelCount?: number;
+  macroRingArcPixelCount?: number;
+  diagnosticLayers?: string[];
   minClearancePx?: number;
   artifactPath?: string | null;
   resolvedBox?: { x: number; y: number; width: number; height: number; coordinateSpace: string };
@@ -617,6 +621,7 @@ export interface ModelJudgesSummary {
   failedRois: Array<{
     roiId: string;
     provider: string;
+    providerRole?: 'primary' | 'reviewer';
     error: string;
     failureReason?: string;
     rawResponsePreview?: string;
