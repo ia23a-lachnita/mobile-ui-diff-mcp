@@ -216,6 +216,19 @@ describe('OpenRouterProvider — real provider with mocked fetch', () => {
     expect(result[0].confidence).toBe(0);
     expect(result[0].claim).toMatch(/failed/i);
     expect(result[0].proposedChangeVector).toBeUndefined();
+    expect(result[0].measurements).toMatchObject({ failureReason: 'provider_http_error' });
+  });
+
+  it('empty content response returns rawResponsePreview: <empty_response>', async () => {
+    mockFetch.mockResolvedValueOnce(makeOkResponse(''));
+    const provider = new OpenRouterProvider('test-key', 'test-model');
+    const result = await provider.analyze(makeBundle('roi-empty'), []);
+    expect(result).toHaveLength(1);
+    expect(result[0].confidence).toBe(0);
+    expect(result[0].measurements).toMatchObject({
+      failureReason: 'empty_response',
+      rawResponsePreview: '<empty_response>'
+    });
   });
 
   it('drops unknown proposedChangeVector — does not allow arbitrary strings', async () => {
@@ -489,6 +502,7 @@ describe('NvidiaProvider — real provider with mocked fetch', () => {
     const result = await provider.analyze(makeBundle('roi-y'), []);
     expect(result[0].confidence).toBe(0);
     expect(result[0].claim).toMatch(/failed/i);
+    expect(result[0].measurements).toMatchObject({ failureReason: 'provider_http_error' });
   });
 
   it('drops unknown proposedChangeVector — does not allow arbitrary strings', async () => {
@@ -564,6 +578,10 @@ describe('NvidiaProvider — real provider with mocked fetch', () => {
 });
 
 // ─── analyzeCriteriaBatch visual evidence ────────────────────────────────────
+// TODO(deferred/blocker): criterion judge failures (HTTP errors, empty content, parse errors) return
+// CriterionJudgeResult{judgeAuditStatus:'unavailable'} with no rawResponsePreview or failureReason.
+// Structured diagnostic preservation for criterion judges is a known open item — tracked here until
+// a CriterionJudgeError type or equivalent propagation path is implemented.
 
 function makeCriterionBundle(
   criterionId: string,

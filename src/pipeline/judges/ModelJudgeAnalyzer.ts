@@ -21,8 +21,8 @@ export function ensureJudgeErrorHasDiagnostics(err: JudgeProviderError): JudgePr
   const hasDiagnosticGap = !hasRawPreview || !hasFailureReason;
   return {
     ...err,
-    failureReason: hasFailureReason ? err.failureReason : 'unknown_empty_failure',
-    rawResponsePreview: hasRawPreview ? err.rawResponsePreview : '<missing_error_detail>',
+    failureReason: hasFailureReason ? err.failureReason : 'provider_exception',
+    rawResponsePreview: hasRawPreview ? err.rawResponsePreview : '<no_response_captured>',
     ...(hasDiagnosticGap && !err.diagnosticIntegrity ? { diagnosticIntegrity: 'internal_missing_error_detail' as const } : {})
   };
 }
@@ -43,7 +43,7 @@ function attemptedProviderReturnedNoEvidenceError(input: {
     roiId: input.roiId,
     blocking: input.blocking,
     message: `${input.role} judge '${input.provider}' returned no evidence after an attempted ROI/global judge call for ROI '${input.roiId}'`,
-    failureReason: 'provider_returned_no_evidence',
+    failureReason: 'provider_adapter_returned_empty_array',
     rawResponsePreview: '<provider_adapter_returned_empty_array>',
     diagnosticIntegrity: 'adapter_defect'
   };
@@ -350,6 +350,7 @@ export class ModelJudgeAnalyzer {
               warnings.push(`ModelJudgeAnalyzer: primary provider returned no evidence for ROI '${bundle.roiId}' after an attempted call (adapter defect)`);
             }
           } catch (err: any) {
+            const errMsg = err?.message ?? String(err);
             judgeProviderErrors.push(ensureJudgeErrorHasDiagnostics({
               source: 'modelJudgeRuntime',
               kind: 'provider_error',
@@ -358,9 +359,11 @@ export class ModelJudgeAnalyzer {
               model: cfg.primary.model,
               roiId: bundle.roiId,
               blocking: isRequired,
-              message: err?.message ?? String(err)
+              message: errMsg,
+              failureReason: err?.name === 'AbortError' ? 'timeout' : 'provider_exception',
+              rawResponsePreview: errMsg.slice(0, 200) || '<no_response_captured>'
             }));
-            warnings.push(`ModelJudgeAnalyzer: primary provider failed for ROI '${bundle.roiId}': ${err?.message ?? String(err)}`);
+            warnings.push(`ModelJudgeAnalyzer: primary provider failed for ROI '${bundle.roiId}': ${errMsg}`);
           }
         }
         // NOTE: do NOT set actionRequired here — wait until after reviewer runs so we have full context
@@ -425,6 +428,7 @@ export class ModelJudgeAnalyzer {
               warnings.push(`ModelJudgeAnalyzer: reviewer provider returned no evidence for ROI '${bundle.roiId}' after an attempted call (adapter defect)`);
             }
           } catch (err: any) {
+            const errMsg = err?.message ?? String(err);
             judgeProviderErrors.push(ensureJudgeErrorHasDiagnostics({
               source: 'modelJudgeRuntime',
               kind: 'provider_error',
@@ -433,9 +437,11 @@ export class ModelJudgeAnalyzer {
               model: cfg.reviewer.model,
               roiId: bundle.roiId,
               blocking: cfg.requireConsensusForCodeHints ?? false,
-              message: err?.message ?? String(err)
+              message: errMsg,
+              failureReason: err?.name === 'AbortError' ? 'timeout' : 'provider_exception',
+              rawResponsePreview: errMsg.slice(0, 200) || '<no_response_captured>'
             }));
-            warnings.push(`ModelJudgeAnalyzer: reviewer provider failed for ROI '${bundle.roiId}': ${err?.message ?? String(err)}`);
+            warnings.push(`ModelJudgeAnalyzer: reviewer provider failed for ROI '${bundle.roiId}': ${errMsg}`);
             reviewerUnavailable = true;
           }
         }

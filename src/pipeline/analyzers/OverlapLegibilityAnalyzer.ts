@@ -123,7 +123,8 @@ function collectMacroRingArcMask(
   const points: PixelPoint[] = [];
   for (let y = macroRingBox.y; y < macroRingBox.y + macroRingBox.height; y++) {
     for (let x = macroRingBox.x; x < macroRingBox.x + macroRingBox.width; x++) {
-      // Pill-owned pixels must not become arc pixels, even if they match avoidColors.
+      // Prevents pill-color pixels from being counted as arc pixels (pill-color contamination).
+      // Does NOT exclude arc pixels that visually intrude inside the pill bounding box from other directions.
       if (pillBox && x >= pillBox.x && x < pillBox.x + pillBox.width && y >= pillBox.y && y < pillBox.y + pillBox.height) continue;
       const idx = (y * png.width + x) << 2;
       const r = png.data[idx];

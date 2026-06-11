@@ -686,9 +686,9 @@ export class OpenRouterProvider implements IModelJudgeProvider {
         return providerErrorEvidence({
           roiId,
           claim: 'OpenRouter returned no usable evidence items after an attempted judge call',
-          error: 'provider_returned_no_evidence',
-          failureReason: 'provider_returned_no_evidence',
-          rawResponsePreview: rawPreview,
+          error: 'provider_adapter_returned_empty_array',
+          failureReason: 'provider_adapter_returned_empty_array',
+          rawResponsePreview: '<provider_adapter_returned_empty_array>',
           diagnosticIntegrity: 'adapter_defect'
         });
       }

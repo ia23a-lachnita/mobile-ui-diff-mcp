@@ -141,8 +141,8 @@ describe('ensureJudgeErrorHasDiagnostics invariant', () => {
       message: 'some error'
     };
     const normalized = ensureJudgeErrorHasDiagnostics(err);
-    expect(normalized.failureReason).toBe('unknown_empty_failure');
-    expect(normalized.rawResponsePreview).toBe('<missing_error_detail>');
+    expect(normalized.failureReason).toBe('provider_exception');
+    expect(normalized.rawResponsePreview).toBe('<no_response_captured>');
     expect((normalized as any).diagnosticIntegrity).toBe('internal_missing_error_detail');
   });
 
@@ -158,7 +158,7 @@ describe('ensureJudgeErrorHasDiagnostics invariant', () => {
     };
     const normalized = ensureJudgeErrorHasDiagnostics(err);
     expect(normalized.failureReason).toBe('timeout');
-    expect(normalized.rawResponsePreview).toBe('<missing_error_detail>');
+    expect(normalized.rawResponsePreview).toBe('<no_response_captured>');
     expect((normalized as any).diagnosticIntegrity).toBe('internal_missing_error_detail');
   });
 });
@@ -209,7 +209,7 @@ describe('Calorix silent failure: primary analyze() returns empty array', () => 
 
     const primaryFailed = failedRois.find((r) => r.provider === 'openrouter');
     expect(primaryFailed).toBeDefined();
-    expect(primaryFailed!.failureReason).toBe('provider_returned_no_evidence');
+    expect(primaryFailed!.failureReason).toBe('provider_adapter_returned_empty_array');
     expect(primaryFailed!.rawResponsePreview).toBe('<provider_adapter_returned_empty_array>');
     expect((primaryFailed as any).diagnosticIntegrity).toBe('adapter_defect');
 
@@ -268,7 +268,7 @@ describe('Calorix silent failure: primary analyze() returns empty array', () => 
     expect(report.actionRequired?.message).toMatch(/required|judge|failed|evidence/i);
 
     const failedRoi = report.modelJudgesSummary?.failedRois.find((r) => r.provider === 'openrouter');
-    expect(failedRoi?.failureReason).toBe('provider_returned_no_evidence');
+    expect(failedRoi?.failureReason).toBe('provider_adapter_returned_empty_array');
     expect(failedRoi?.rawResponsePreview).toBe('<provider_adapter_returned_empty_array>');
   });
 
@@ -459,7 +459,7 @@ describe('Calorix silent failure: required reviewer analyze() returns empty arra
     const failedRois = report.modelJudgesSummary?.failedRois ?? [];
     const reviewerFailed = failedRois.find((r) => r.provider === 'nvidia');
     expect(reviewerFailed).toBeDefined();
-    expect(reviewerFailed!.failureReason).toBe('provider_returned_no_evidence');
+    expect(reviewerFailed!.failureReason).toBe('provider_adapter_returned_empty_array');
     expect(reviewerFailed!.rawResponsePreview).toBe('<provider_adapter_returned_empty_array>');
     expect((reviewerFailed as any).diagnosticIntegrity).toBe('adapter_defect');
   });
@@ -527,7 +527,7 @@ describe('Calorix silent failure: required reviewer analyze() returns empty arra
     const reviewerFailed = failedRois.find((r) => r.provider === 'nvidia');
     expect(reviewerFailed).toBeDefined();
     // ensureJudgeErrorHasDiagnostics must have filled in sentinels
-    expect(reviewerFailed!.failureReason).toBe('unknown_empty_failure');
-    expect(reviewerFailed!.rawResponsePreview).toBe('<missing_error_detail>');
+    expect(reviewerFailed!.failureReason).toBe('provider_exception');
+    expect(reviewerFailed!.rawResponsePreview).toBe('<no_response_captured>');
   });
 });
