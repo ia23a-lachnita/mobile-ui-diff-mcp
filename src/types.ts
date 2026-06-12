@@ -623,6 +623,7 @@ export interface ModelJudgesProviderSummary {
   hadSuccess: boolean;
   attempted: boolean;
   skippedReason?: string;
+  successfulRoiIds?: string[];
 }
 
 export interface ModelJudgesSummary {

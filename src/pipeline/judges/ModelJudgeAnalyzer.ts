@@ -243,7 +243,7 @@ export class ModelJudgeAnalyzer {
           durationMs: Date.now() - start,
           judgeHadSuccessfulResults: false,
           judgeProviderRunSummary: {
-            primaryEvidenceCount: 0, primaryErrorCount: 0, primaryHadSuccess: false, primaryAttempted: false,
+            primaryEvidenceCount: 0, primaryErrorCount: 0, primaryHadSuccess: false, primaryAttempted: false, primarySuccessfulRoiIds: [],
             reviewerEvidenceCount: 0, reviewerErrorCount: 0, reviewerHadSuccess: false, reviewerAttempted: false
           },
           actionRequired: {
@@ -609,11 +609,21 @@ export class ModelJudgeAnalyzer {
       ? judgeProviderErrors.filter((e) => e.providerRole === 'reviewer').length
       : 0;
 
+    const primarySuccessfulRoiIds = [
+      ...new Set(
+        primaryEvidence
+          .filter((e) => (e as any).polarity !== 'error')
+          .map((e) => e.subject?.replace(/^roi:/, ''))
+          .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      )
+    ];
+
     const judgeProviderRunSummary = {
       primaryEvidenceCount: primaryEvidence.length,
       primaryErrorCount,
       primaryHadSuccess,
       primaryAttempted,
+      primarySuccessfulRoiIds,
       reviewerEvidenceCount: reviewerEvidence.length,
       reviewerErrorCount,
       reviewerHadSuccess,

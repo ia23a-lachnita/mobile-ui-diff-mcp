@@ -470,5 +470,16 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
         `required ROI '${requiredRoi}' must not appear in OpenRouter failedRois — it must have usable structured evidence`
       ).toBe(false);
     }
+
+    // ── Assertion 9: Positive check — each required ROI must appear in successfulRoiIds ──
+    // Guards against a future false green where a required ROI is silently skipped
+    // (not failed, not succeeded — just never processed) rather than explicitly failed.
+    const successfulRoiIds = new Set(primary!.successfulRoiIds ?? []);
+    for (const requiredRoi of REQUIRED_ROIS) {
+      expect(
+        successfulRoiIds.has(requiredRoi),
+        `required ROI '${requiredRoi}' must appear in primary.successfulRoiIds — at least one non-error evidence item with subject "roi:${requiredRoi}" must exist`
+      ).toBe(true);
+    }
   });
 });

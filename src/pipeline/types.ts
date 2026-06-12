@@ -88,6 +88,7 @@ export interface JudgeProviderRunSummary {
   primaryErrorCount: number;
   primaryHadSuccess: boolean;
   primaryAttempted: boolean;
+  primarySuccessfulRoiIds?: string[];
   reviewerEvidenceCount: number;
   reviewerErrorCount: number;
   reviewerHadSuccess: boolean;

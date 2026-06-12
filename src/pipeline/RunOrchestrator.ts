@@ -1399,7 +1399,8 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
       errorCount: number,
       hadSuccess: boolean,
       attempted: boolean,
-      isProviderRequired: boolean
+      isProviderRequired: boolean,
+      successfulRoiIds?: string[]
     ): ModelJudgesProviderSummary | undefined => {
       if (!providerCfg) return undefined;
       let status: ModelJudgesProviderSummary['status'];
@@ -1420,14 +1421,18 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
         status = isProviderRequired && visualAuditMode === 'visual_parity' ? 'error' : 'skipped';
       }
       const reportedErrorCount = status === 'error' ? Math.max(1, errorCount) : errorCount;
-      return { provider: providerCfg.provider, model: providerCfg.model, status, evidenceCount, errorCount: reportedErrorCount, hadSuccess, attempted };
+      return {
+        provider: providerCfg.provider, model: providerCfg.model, status,
+        evidenceCount, errorCount: reportedErrorCount, hadSuccess, attempted,
+        ...(successfulRoiIds && successfulRoiIds.length > 0 ? { successfulRoiIds } : {})
+      };
     };
 
     modelJudgesSummary = {
       enabled: true,
       required: isRequired,
       policy: String(policy),
-      primary: buildProviderSummary(primaryCfg, prs?.primaryEvidenceCount ?? 0, prs?.primaryErrorCount ?? 0, prs?.primaryHadSuccess ?? false, prs?.primaryAttempted ?? false, isRequired),
+      primary: buildProviderSummary(primaryCfg, prs?.primaryEvidenceCount ?? 0, prs?.primaryErrorCount ?? 0, prs?.primaryHadSuccess ?? false, prs?.primaryAttempted ?? false, isRequired, prs?.primarySuccessfulRoiIds),
       reviewer: buildProviderSummary(reviewerCfg, prs?.reviewerEvidenceCount ?? 0, prs?.reviewerErrorCount ?? 0, prs?.reviewerHadSuccess ?? false, prs?.reviewerAttempted ?? false, (cfg as any).requireConsensusForCodeHints === true),
       failedRois
     };
