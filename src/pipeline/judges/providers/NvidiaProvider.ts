@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import { IModelJudgeProvider } from '../IModelJudge';
-import { Evidence, EvidenceBundle } from '../../types';
+import { Evidence, EvidenceBundle, ProviderDiagnostics, ProviderDiagnosticsAttempt } from '../../types';
 import { CriterionAuditBundle, CriterionJudgeResult } from '../../../types';
 import { VALID_CHANGE_VECTORS } from '../../constants';
 import { EVIDENCE_JSON_SCHEMA } from './evidenceSchema';
@@ -491,8 +491,26 @@ export class NvidiaProvider implements IModelJudgeProvider {
     }
   }
 
-  private async callWithRetry(messages: any[], roiId: string, attempt = 0): Promise<Evidence[]> {
+  private async callWithRetry(
+    messages: any[],
+    roiId: string,
+    attempt = 0,
+    priorRetryFailures: Array<{ attempt: number; failureReason: string; detail?: string }> = []
+  ): Promise<Evidence[]> {
     let responseText = '';
+    let httpStatus: number | undefined;
+    let httpStatusText: string | undefined;
+    let responseBodyPreview: string | undefined;
+
+    const baseDiagnostics = (finalAttempt: ProviderDiagnosticsAttempt): ProviderDiagnostics => ({
+      provider: 'nvidia',
+      model: this.model,
+      roiId,
+      attemptCount: attempt + 1,
+      finalAttempt,
+      ...(priorRetryFailures.length > 0 ? { retryFailures: priorRetryFailures } : {})
+    });
+
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -515,7 +533,11 @@ export class NvidiaProvider implements IModelJudgeProvider {
         clearTimeout(timer);
       }
 
+      httpStatus = response.status;
+      httpStatusText = response.statusText;
       const rawBody = await response.text();
+      responseBodyPreview = rawBody.slice(0, 500);
+
       if (!response.ok) {
         throw new Error(`NVIDIA API error ${response.status}: ${rawBody}`);
       }
@@ -544,12 +566,21 @@ export class NvidiaProvider implements IModelJudgeProvider {
         measurements: {
           error: message,
           failureReason,
-          rawResponsePreview: message.slice(0, 200)
-        }
-      }];
+          rawResponsePreview: (responseBodyPreview ?? message).slice(0, 200)
+        },
+        providerDiagnostics: baseDiagnostics({
+          ...(httpStatus !== undefined ? { httpStatus } : {}),
+          ...(httpStatusText !== undefined ? { httpStatusText } : {}),
+          ...(responseBodyPreview ? { responseBodyPreview } : {}),
+          errorName: err?.name ?? 'Error',
+          errorMessage: message,
+          ...(isTimeout ? { timeoutMs: this.timeoutMs } : {})
+        })
+      } as Evidence];
     }
 
     const VALID_POLARITY = new Set(['match', 'mismatch', 'uncertainty', 'error']);
+    const rawPreview = responseText.length > 0 ? responseText.slice(0, 200) : '<empty_response>';
     try {
       const parsed = JSON.parse(responseText);
       const items: any[] = Array.isArray(parsed) ? parsed : (parsed.evidence ?? parsed.items ?? []);
@@ -581,8 +612,10 @@ export class NvidiaProvider implements IModelJudgeProvider {
       }
       return evidence;
     } catch (parseErr: any) {
+      const schemaErrorPreview = parseErr?.message ?? 'parse error';
       if (this.retryOnParseError && attempt < this.maxRetries) {
-        return this.callWithRetry(messages, roiId, attempt + 1);
+        const retryFailure = { attempt: attempt + 1, failureReason: 'schema_parse_error', detail: schemaErrorPreview.slice(0, 100) };
+        return this.callWithRetry(messages, roiId, attempt + 1, [...priorRetryFailures, retryFailure]);
       }
       const exhausted = this.retryOnParseError && this.maxRetries > 0 && attempt >= this.maxRetries;
       const parseFailureReason = exhausted ? 'retry_exhausted' : 'schema_parse_error';
@@ -590,16 +623,23 @@ export class NvidiaProvider implements IModelJudgeProvider {
         source: 'modelJudge',
         claimId: `nvidia-parse-error-${parseFailureReason}-${roiId}`,
         subject: `roi:${roiId}`,
-        claim: `NVIDIA returned unparseable response after ${attempt + 1} attempt(s): ${parseErr?.message ?? 'parse error'}`,
+        claim: `NVIDIA returned unparseable response after ${attempt + 1} attempt(s): ${schemaErrorPreview}`,
         confidence: 0,
         authority: 'model' as const,
         polarity: 'error' as any,
         measurements: {
           error: parseFailureReason,
           failureReason: parseFailureReason,
-          rawResponsePreview: (responseText.length > 0 ? responseText : '<empty_response>').slice(0, 200)
-        }
-      }];
+          rawResponsePreview: rawPreview
+        },
+        providerDiagnostics: baseDiagnostics({
+          ...(httpStatus !== undefined ? { httpStatus } : {}),
+          ...(httpStatusText !== undefined ? { httpStatusText } : {}),
+          contentPreview: responseText.slice(0, 200),
+          schemaError: schemaErrorPreview,
+          ...(priorRetryFailures.length > 0 ? {} : {})
+        })
+      } as Evidence];
     }
   }
 }
