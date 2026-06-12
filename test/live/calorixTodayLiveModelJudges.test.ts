@@ -131,7 +131,15 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
     // Read modelJudges.timeoutMs from the real config so the live test uses the
     // same timeout as a normal MCP/CLI run — not a divergent hardcoded value.
     const rawConfig = JSON.parse(await fs.readFile(calorixPath('ui-diff.config.json'), 'utf-8'));
-    configuredModelJudgesTimeoutMs = (rawConfig as any)?.screens?.today?.modelJudges?.timeoutMs ?? 120000;
+    const resolvedTimeout = (rawConfig as any)?.screens?.today?.modelJudges?.timeoutMs;
+    if (typeof resolvedTimeout !== 'number') {
+      throw new Error(
+        `ui-diff.config.json must explicitly define screens.today.modelJudges.timeoutMs as a number. ` +
+        `Got: ${JSON.stringify(resolvedTimeout)}. ` +
+        `Set it to 120000 or higher to support the NVIDIA reviewer on large crops.`
+      );
+    }
+    configuredModelJudgesTimeoutMs = resolvedTimeout;
     console.log(`\nmodelJudges.timeoutMs (from ui-diff.config.json): ${configuredModelJudgesTimeoutMs}`);
   });
 
