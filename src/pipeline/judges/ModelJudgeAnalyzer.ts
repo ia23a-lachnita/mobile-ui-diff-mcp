@@ -368,6 +368,7 @@ export class ModelJudgeAnalyzer {
 
     let reviewerUnavailable = false;
     let reviewerMissingKey = false;
+    const reviewerSuccessfulRoiIdSet = new Set<string>();
     if (cfg.reviewer) {
       const provider = buildProvider(cfg.reviewer, timeoutMs, maxRetries, retryOnParseError);
       if (!provider) {
@@ -411,6 +412,7 @@ export class ModelJudgeAnalyzer {
                 reviewerHadSuccess = true;
               }
             }
+            if (bundleHadEvidence) reviewerSuccessfulRoiIdSet.add(bundle.roiId);
             // Guard: reviewer returned neither evidence nor an explicit error — add diagnostics
             // but do NOT set reviewerUnavailable, so the "no usable evidence" actionRequired
             // branch fires (not the "unavailable" branch) and MODEL_DISAGREEMENT blocking is preserved.
@@ -618,14 +620,7 @@ export class ModelJudgeAnalyzer {
       )
     ];
 
-    const reviewerSuccessfulRoiIds = [
-      ...new Set(
-        reviewerEvidence
-          .filter((e) => (e as any).polarity !== 'error')
-          .map((e) => e.subject?.replace(/^roi:/, ''))
-          .filter((id): id is string => typeof id === 'string' && id.length > 0)
-      )
-    ];
+    const reviewerSuccessfulRoiIds = [...reviewerSuccessfulRoiIdSet];
 
     const judgeProviderRunSummary = {
       primaryEvidenceCount: primaryEvidence.length,
