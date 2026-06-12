@@ -160,7 +160,7 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
         reviewer: { provider: 'nvidia', model: 'nvidia/nemotron-nano-12b-v2-vl' },
         requireConsensusForCodeHints: true,
         allowEditSuggestionsOnPass: false,
-        timeoutMs: 45000,
+        timeoutMs: 90000,
         maxRetries: 1,
         retryOnParseError: true
       },
@@ -480,6 +480,51 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
         successfulRoiIds.has(requiredRoi),
         `required ROI '${requiredRoi}' must appear in primary.successfulRoiIds — at least one non-error evidence item with subject "roi:${requiredRoi}" must exist`
       ).toBe(true);
+    }
+
+    // ── Assertion 10: Required reviewer must fully succeed — partial is not acceptable ──
+    // The reviewer is required (requireConsensusForCodeHints:true). Any ROI timeout or
+    // error leaves the audit incomplete. This assertion fails until the NVIDIA reviewer
+    // judges all required ROIs without operational failures (timeout counts as failure).
+    const reviewer = report.modelJudgesSummary!.reviewer;
+    expect(
+      reviewer,
+      'reviewer provider summary must be present in modelJudgesSummary'
+    ).toBeDefined();
+
+    expect(
+      reviewer!.provider,
+      'reviewer provider must be nvidia'
+    ).toBe('nvidia');
+
+    expect(
+      reviewer!.attempted,
+      'reviewer provider must have been attempted'
+    ).toBe(true);
+
+    expect(
+      reviewer!.hadSuccess,
+      'reviewer.hadSuccess must be true — reviewer must produce at least some evidence'
+    ).toBe(true);
+
+    expect(
+      reviewer!.status,
+      'required reviewer must fully succeed — partial means one or more ROIs timed out or failed operationally'
+    ).toBe('success');
+
+    expect(
+      reviewer!.errorCount,
+      'reviewer errorCount must be 0 — no ROI may timeout or fail when reviewer is required'
+    ).toBe(0);
+
+    const nvidiaFailedRoiIds = new Set(
+      failedRois.filter((r) => r.provider === 'nvidia').map((r) => r.roiId)
+    );
+    for (const requiredRoi of REQUIRED_ROIS) {
+      expect(
+        nvidiaFailedRoiIds.has(requiredRoi),
+        `required ROI '${requiredRoi}' must not appear in nvidia failedRois — reviewer timeout is an operational failure, not a visual audit result`
+      ).toBe(false);
     }
   });
 });

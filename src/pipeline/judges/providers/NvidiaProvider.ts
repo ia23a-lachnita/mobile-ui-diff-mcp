@@ -552,6 +552,17 @@ export class NvidiaProvider implements IModelJudgeProvider {
       const isTimeout = err?.name === 'AbortError';
       const message = err?.message ?? String(err);
       const isHttpError = /^NVIDIA API error \d+/.test(message);
+
+      // Retry on timeout using the same retry budget as parse errors
+      if (isTimeout && attempt < this.maxRetries) {
+        const retryFailure = {
+          attempt: attempt + 1,
+          failureReason: 'timeout',
+          detail: `Timed out after ${this.timeoutMs}ms on attempt ${attempt + 1}`
+        };
+        return this.callWithRetry(messages, roiId, attempt + 1, [...priorRetryFailures, retryFailure]);
+      }
+
       const failureReason = isTimeout ? 'timeout' : isHttpError ? 'provider_http_error' : 'provider_request_failed';
       return [{
         source: 'modelJudge',
