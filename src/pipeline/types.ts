@@ -93,6 +93,7 @@ export interface JudgeProviderRunSummary {
   reviewerErrorCount: number;
   reviewerHadSuccess: boolean;
   reviewerAttempted: boolean;
+  reviewerSuccessfulRoiIds?: string[];
 }
 
 export interface AnalyzerResult {

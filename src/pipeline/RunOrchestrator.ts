@@ -1433,7 +1433,7 @@ export async function runPipeline(input: CompareImagesInput): Promise<DiffReport
       required: isRequired,
       policy: String(policy),
       primary: buildProviderSummary(primaryCfg, prs?.primaryEvidenceCount ?? 0, prs?.primaryErrorCount ?? 0, prs?.primaryHadSuccess ?? false, prs?.primaryAttempted ?? false, isRequired, prs?.primarySuccessfulRoiIds),
-      reviewer: buildProviderSummary(reviewerCfg, prs?.reviewerEvidenceCount ?? 0, prs?.reviewerErrorCount ?? 0, prs?.reviewerHadSuccess ?? false, prs?.reviewerAttempted ?? false, (cfg as any).requireConsensusForCodeHints === true),
+      reviewer: buildProviderSummary(reviewerCfg, prs?.reviewerEvidenceCount ?? 0, prs?.reviewerErrorCount ?? 0, prs?.reviewerHadSuccess ?? false, prs?.reviewerAttempted ?? false, (cfg as any).requireConsensusForCodeHints === true, prs?.reviewerSuccessfulRoiIds),
       failedRois
     };
   }

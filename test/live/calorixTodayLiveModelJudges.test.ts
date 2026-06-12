@@ -526,5 +526,18 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
         `required ROI '${requiredRoi}' must not appear in nvidia failedRois — reviewer timeout is an operational failure, not a visual audit result`
       ).toBe(false);
     }
+
+    // ── Assertion 11: Positive reviewer subject coverage ─────────────────────
+    // Guards against a silent reviewer skip: a required ROI that is neither
+    // failed nor succeeded — just never processed. reviewer.status=success is
+    // a necessary but not sufficient condition; every required ROI must also
+    // appear in reviewer.successfulRoiIds with at least one non-error evidence item.
+    const reviewerSuccessfulRoiIds = new Set(reviewer!.successfulRoiIds ?? []);
+    for (const requiredRoi of REQUIRED_ROIS) {
+      expect(
+        reviewerSuccessfulRoiIds.has(requiredRoi),
+        `required ROI '${requiredRoi}' must appear in reviewer.successfulRoiIds — at least one non-error evidence item with subject "roi:${requiredRoi}" must exist from the NVIDIA reviewer`
+      ).toBe(true);
+    }
   });
 });

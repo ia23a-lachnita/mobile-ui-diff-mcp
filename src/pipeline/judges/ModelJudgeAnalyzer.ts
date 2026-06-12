@@ -618,6 +618,15 @@ export class ModelJudgeAnalyzer {
       )
     ];
 
+    const reviewerSuccessfulRoiIds = [
+      ...new Set(
+        reviewerEvidence
+          .filter((e) => (e as any).polarity !== 'error')
+          .map((e) => e.subject?.replace(/^roi:/, ''))
+          .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      )
+    ];
+
     const judgeProviderRunSummary = {
       primaryEvidenceCount: primaryEvidence.length,
       primaryErrorCount,
@@ -627,7 +636,8 @@ export class ModelJudgeAnalyzer {
       reviewerEvidenceCount: reviewerEvidence.length,
       reviewerErrorCount,
       reviewerHadSuccess,
-      reviewerAttempted
+      reviewerAttempted,
+      reviewerSuccessfulRoiIds
     };
 
     return {
