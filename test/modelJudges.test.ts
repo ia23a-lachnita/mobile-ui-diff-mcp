@@ -389,8 +389,7 @@ describe('ModelJudgeAnalyzer — provider diagnostic preservation', () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ choices: [{ message: { content: '' } }] }),
-      text: async () => ''
+      text: async () => JSON.stringify({ choices: [{ message: { content: '' } }] })
     });
 
     try {
@@ -438,8 +437,7 @@ describe('ModelJudgeAnalyzer — provider diagnostic preservation', () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ choices: [{ message: { content: badJson } }] }),
-      text: async () => badJson
+      text: async () => JSON.stringify({ choices: [{ message: { content: badJson } }] })
     });
 
     try {
@@ -474,8 +472,7 @@ describe('ModelJudgeAnalyzer — provider diagnostic preservation', () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ id: 'cmpl-missing-content', choices: [{ message: {} }], usage: { total_tokens: 12 } }),
-      text: async () => ''
+      text: async () => JSON.stringify({ id: 'cmpl-missing-content', choices: [{ message: {} }], usage: { total_tokens: 12 } })
     });
 
     try {

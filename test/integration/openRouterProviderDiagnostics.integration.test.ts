@@ -69,8 +69,7 @@ describe('runScreenUiDiff with real OpenRouterProvider diagnostics', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ choices: [{ message: { content: badJson } }] }),
-      text: async () => ''
+      text: async () => JSON.stringify({ choices: [{ message: { content: badJson } }] })
     });
     vi.stubGlobal('fetch', mockFetch);
 

@@ -21,8 +21,7 @@ function makeOkResponse(content: string) {
   return {
     ok: true,
     status: 200,
-    json: async () => ({ choices: [{ message: { content } }] }),
-    text: async () => content
+    text: async () => JSON.stringify({ choices: [{ message: { content } }] })
   };
 }
 

@@ -459,11 +459,16 @@ export class OpenRouterProvider implements IModelJudgeProvider {
         });
       } finally { clearTimeout(timer); }
 
+      const rawBody = await response.text();
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`OpenRouter API error ${response.status}: ${text}`);
+        throw new Error(`OpenRouter API error ${response.status}: ${rawBody}`);
       }
-      const data = await response.json() as any;
+      let data: any;
+      try {
+        data = JSON.parse(rawBody);
+      } catch (jsonParseErr: any) {
+        throw new Error(`OpenRouter response body is not valid JSON (HTTP ${response.status}): ${jsonParseErr?.message ?? 'parse error'}; body: ${rawBody.slice(0, 150)}`);
+      }
       responseText = data?.choices?.[0]?.message?.content ?? '';
     } catch (err: any) {
       return packets.map((p) => ({
@@ -534,12 +539,16 @@ export class OpenRouterProvider implements IModelJudgeProvider {
         clearTimeout(timer);
       }
 
+      const rawBody = await response.text();
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`OpenRouter API error ${response.status}: ${text}`);
+        throw new Error(`OpenRouter API error ${response.status}: ${rawBody}`);
       }
-
-      const data = await response.json() as any;
+      let data: any;
+      try {
+        data = JSON.parse(rawBody);
+      } catch (jsonParseErr: any) {
+        throw new Error(`OpenRouter response body is not valid JSON (HTTP ${response.status}): ${jsonParseErr?.message ?? 'parse error'}; body: ${rawBody.slice(0, 150)}`);
+      }
       responseText = data?.choices?.[0]?.message?.content ?? '';
     } catch (err: any) {
       return {
@@ -631,13 +640,32 @@ export class OpenRouterProvider implements IModelJudgeProvider {
       httpStatusText = response.statusText;
       responseHeadersPreview = captureHeaders(response.headers);
 
+      const rawBody = await response.text();
+      responseBodyPreview = rawBody.slice(0, 500);
+
       if (!response.ok) {
-        const bodyText = await response.text();
-        responseBodyPreview = bodyText.slice(0, 500);
-        throw new Error(`OpenRouter API error ${response.status}: ${bodyText}`);
+        throw new Error(`OpenRouter API error ${response.status}: ${rawBody}`);
       }
 
-      const data = await response.json() as any;
+      let data: any;
+      try {
+        data = JSON.parse(rawBody);
+      } catch (jsonParseErr: any) {
+        return providerErrorEvidence({
+          roiId,
+          claim: `OpenRouter returned non-JSON response body (HTTP ${httpStatus}): ${jsonParseErr?.message ?? 'parse error'}`,
+          failureReason: 'invalid_json',
+          rawResponsePreview: rawBody.slice(0, RAW_PREVIEW_LIMIT),
+          schemaErrorPreview: jsonParseErr?.message ?? 'JSON parse error',
+          providerDiagnostics: baseDiagnostics({
+            httpStatus,
+            httpStatusText,
+            ...(responseHeadersPreview ? { responseHeadersPreview } : {}),
+            responseBodyPreview: rawBody.slice(0, 200),
+            parseError: jsonParseErr?.message ?? 'JSON parse error'
+          })
+        });
+      }
       responseEnvelope = data;
       const content = data?.choices?.[0]?.message?.content;
       if (typeof content !== 'string') {

@@ -92,7 +92,7 @@ describe('evidenceToVisualCaveat blocking logic', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
   function makeOkResponse(content: string) {
-    return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content } }] }), text: async () => content };
+    return { ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content } }] }) };
   }
 
   it('high-confidence mismatch with blocking:false produces non-blocking caveat', async () => {

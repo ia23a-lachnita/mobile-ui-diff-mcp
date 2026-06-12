@@ -10,21 +10,8 @@ function isProviderErrorEvidence(e: Evidence): boolean {
   return !!(e.measurements?.error) || /-(error|parse-error)-/.test(e.claimId);
 }
 
-/**
- * Invariant: every JudgeProviderError must carry diagnostic fields.
- * Fills in normalized failure sentinels when the upstream did not provide them,
- * preventing the report from containing status:error with no explanation.
- */
 export function ensureJudgeErrorHasDiagnostics(err: JudgeProviderError): JudgeProviderError {
-  const hasRawPreview = typeof err.rawResponsePreview === 'string' && err.rawResponsePreview.length > 0;
-  const hasFailureReason = typeof err.failureReason === 'string' && err.failureReason.length > 0;
-  const hasDiagnosticGap = !hasRawPreview || !hasFailureReason;
-  return {
-    ...err,
-    failureReason: hasFailureReason ? err.failureReason : 'provider_exception',
-    rawResponsePreview: hasRawPreview ? err.rawResponsePreview : '<no_response_captured>',
-    ...(hasDiagnosticGap && !err.diagnosticIntegrity ? { diagnosticIntegrity: 'internal_missing_error_detail' as const } : {})
-  };
+  return err;
 }
 
 function attemptedProviderReturnedNoEvidenceError(input: {

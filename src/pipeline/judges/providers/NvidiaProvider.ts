@@ -369,11 +369,16 @@ export class NvidiaProvider implements IModelJudgeProvider {
         });
       } finally { clearTimeout(timer); }
 
+      const rawBody = await response.text();
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`NVIDIA API error ${response.status}: ${text}`);
+        throw new Error(`NVIDIA API error ${response.status}: ${rawBody}`);
       }
-      const data = await response.json() as any;
+      let data: any;
+      try {
+        data = JSON.parse(rawBody);
+      } catch (jsonParseErr: any) {
+        throw new Error(`NVIDIA response body is not valid JSON (HTTP ${response.status}): ${jsonParseErr?.message ?? 'parse error'}; body: ${rawBody.slice(0, 150)}`);
+      }
       responseText = data?.choices?.[0]?.message?.content ?? '';
     } catch (err: any) {
       return packets.map((p) => ({
@@ -439,11 +444,16 @@ export class NvidiaProvider implements IModelJudgeProvider {
         });
       } finally { clearTimeout(timer); }
 
+      const rawBody = await response.text();
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`NVIDIA API error ${response.status}: ${text}`);
+        throw new Error(`NVIDIA API error ${response.status}: ${rawBody}`);
       }
-      const data = await response.json() as any;
+      let data: any;
+      try {
+        data = JSON.parse(rawBody);
+      } catch (jsonParseErr: any) {
+        throw new Error(`NVIDIA response body is not valid JSON (HTTP ${response.status}): ${jsonParseErr?.message ?? 'parse error'}; body: ${rawBody.slice(0, 150)}`);
+      }
       responseText = data?.choices?.[0]?.message?.content ?? '';
     } catch (err: any) {
       return {
@@ -505,12 +515,16 @@ export class NvidiaProvider implements IModelJudgeProvider {
         clearTimeout(timer);
       }
 
+      const rawBody = await response.text();
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`NVIDIA API error ${response.status}: ${text}`);
+        throw new Error(`NVIDIA API error ${response.status}: ${rawBody}`);
       }
-
-      const data = await response.json() as any;
+      let data: any;
+      try {
+        data = JSON.parse(rawBody);
+      } catch (jsonParseErr: any) {
+        throw new Error(`NVIDIA response body is not valid JSON (HTTP ${response.status}): ${jsonParseErr?.message ?? 'parse error'}; body: ${rawBody.slice(0, 150)}`);
+      }
       responseText = data?.choices?.[0]?.message?.content ?? '';
     } catch (err: any) {
       const isTimeout = err?.name === 'AbortError';

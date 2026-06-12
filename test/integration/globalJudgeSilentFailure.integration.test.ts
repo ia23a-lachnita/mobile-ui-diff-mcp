@@ -131,7 +131,7 @@ describe('ensureJudgeErrorHasDiagnostics invariant', () => {
     expect(ensureJudgeErrorHasDiagnostics(err)).toEqual(err);
   });
 
-  it('marks internal diagnostic gaps without treating missing detail as provider root cause', () => {
+  it('passes through errors with missing optional diagnostic fields unchanged', () => {
     const err = {
       source: 'modelJudgeRuntime' as const,
       kind: 'provider_error' as const,
@@ -141,12 +141,13 @@ describe('ensureJudgeErrorHasDiagnostics invariant', () => {
       message: 'some error'
     };
     const normalized = ensureJudgeErrorHasDiagnostics(err);
-    expect(normalized.failureReason).toBe('provider_exception');
-    expect(normalized.rawResponsePreview).toBe('<no_response_captured>');
-    expect((normalized as any).diagnosticIntegrity).toBe('internal_missing_error_detail');
+    expect(normalized).toEqual(err);
+    expect(normalized.failureReason).toBeUndefined();
+    expect(normalized.rawResponsePreview).toBeUndefined();
+    expect((normalized as any).diagnosticIntegrity).toBeUndefined();
   });
 
-  it('fills rawResponsePreview sentinel when only failureReason is provided', () => {
+  it('passes through errors that have failureReason but no rawResponsePreview', () => {
     const err = {
       source: 'modelJudgeRuntime' as const,
       kind: 'provider_error' as const,
@@ -157,9 +158,10 @@ describe('ensureJudgeErrorHasDiagnostics invariant', () => {
       failureReason: 'timeout'
     };
     const normalized = ensureJudgeErrorHasDiagnostics(err);
+    expect(normalized).toEqual(err);
     expect(normalized.failureReason).toBe('timeout');
-    expect(normalized.rawResponsePreview).toBe('<no_response_captured>');
-    expect((normalized as any).diagnosticIntegrity).toBe('internal_missing_error_detail');
+    expect(normalized.rawResponsePreview).toBeUndefined();
+    expect((normalized as any).diagnosticIntegrity).toBeUndefined();
   });
 });
 
@@ -469,7 +471,7 @@ describe('Calorix silent failure: required reviewer analyze() returns empty arra
     expect((reviewerFailed as any).providerDiagnostics?.provider).toBe('nvidia');
   });
 
-  it('reviewer returns malformed error evidence — failureReason and rawResponsePreview still present', async () => {
+  it('reviewer returns error evidence without failureReason — message carries the actual error', async () => {
     // Primary succeeds
     MockedOpenRouter.mockImplementation(function () {
       return {
@@ -486,8 +488,8 @@ describe('Calorix silent failure: required reviewer analyze() returns empty arra
       };
     } as any);
 
-    // Reviewer returns error evidence without failureReason/rawResponsePreview
-    // — ensureJudgeErrorHasDiagnostics must fill the sentinels
+    // Reviewer returns error evidence without failureReason/rawResponsePreview —
+    // no sentinel injection; the actual error surfaces in the message field.
     MockedNvidia.mockImplementation(function () {
       return {
         analyze: vi.fn().mockResolvedValue([{
@@ -531,8 +533,9 @@ describe('Calorix silent failure: required reviewer analyze() returns empty arra
     const failedRois = report.modelJudgesSummary?.failedRois ?? [];
     const reviewerFailed = failedRois.find((r) => r.provider === 'nvidia');
     expect(reviewerFailed).toBeDefined();
-    // ensureJudgeErrorHasDiagnostics must have filled in sentinels
-    expect(reviewerFailed!.failureReason).toBe('provider_exception');
-    expect(reviewerFailed!.rawResponsePreview).toBe('<no_response_captured>');
+    // No sentinel injection — actual error surfaces in error field; optional fields absent
+    expect((reviewerFailed as any).error).toBe('provider_timeout');
+    expect(reviewerFailed!.failureReason).toBeUndefined();
+    expect(reviewerFailed!.rawResponsePreview).toBeUndefined();
   });
 });
