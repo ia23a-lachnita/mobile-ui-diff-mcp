@@ -160,7 +160,7 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
         reviewer: { provider: 'nvidia', model: 'nvidia/nemotron-nano-12b-v2-vl' },
         requireConsensusForCodeHints: true,
         allowEditSuggestionsOnPass: false,
-        timeoutMs: 90000,
+        timeoutMs: 120000,
         maxRetries: 1,
         retryOnParseError: true
       },
