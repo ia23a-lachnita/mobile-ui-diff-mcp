@@ -641,6 +641,7 @@ export interface ModelJudgesSummary {
     schemaErrorPreview?: string;
     lastFailureReason?: string;
     diagnosticIntegrity?: 'adapter_defect' | 'internal_missing_error_detail';
+    providerDiagnostics?: import('./pipeline/types').ProviderDiagnostics;
   }>;
 }
 

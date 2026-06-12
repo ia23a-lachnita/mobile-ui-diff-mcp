@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import { IModelJudgeProvider } from '../IModelJudge';
-import { Evidence, EvidenceBundle } from '../../types';
+import { Evidence, EvidenceBundle, ProviderDiagnostics, ProviderDiagnosticsAttempt } from '../../types';
 import { CriterionAuditBundle, CriterionJudgeResult } from '../../../types';
 import { VALID_CHANGE_VECTORS } from '../../constants';
 import { EVIDENCE_JSON_SCHEMA } from './evidenceSchema';
@@ -77,13 +77,15 @@ function safeJsonPreview(value: unknown, maxLength = RAW_PREVIEW_LIMIT): string 
 function providerErrorEvidence(input: {
   roiId: string;
   claim: string;
-  error: string;
+  error?: string;
   failureReason: string;
   rawResponsePreview: string;
   schemaErrorPreview?: string;
   lastFailureReason?: string;
   diagnosticIntegrity?: 'adapter_defect' | 'internal_missing_error_detail';
+  providerDiagnostics?: ProviderDiagnostics;
 }): Evidence[] {
+  const errorField = input.error ?? input.failureReason;
   return [{
     source: 'modelJudge',
     claimId: `openrouter-error-${input.failureReason}-${input.roiId}`,
@@ -93,14 +95,32 @@ function providerErrorEvidence(input: {
     authority: 'model' as const,
     polarity: 'error' as any,
     measurements: {
-      error: input.error,
+      error: errorField,
       failureReason: input.failureReason,
       rawResponsePreview: input.rawResponsePreview,
       ...(input.schemaErrorPreview ? { schemaErrorPreview: input.schemaErrorPreview.slice(0, RAW_PREVIEW_LIMIT) } : {}),
       ...(input.lastFailureReason ? { lastFailureReason: input.lastFailureReason } : {}),
       ...(input.diagnosticIntegrity ? { diagnosticIntegrity: input.diagnosticIntegrity } : {})
-    }
+    },
+    ...(input.providerDiagnostics ? { providerDiagnostics: input.providerDiagnostics } : {})
   } as Evidence];
+}
+
+const DIAGNOSTIC_HEADERS = [
+  'x-request-id', 'retry-after',
+  'x-ratelimit-limit-requests', 'x-ratelimit-remaining-requests', 'x-ratelimit-reset-requests'
+];
+
+function captureHeaders(headers: Headers | null | undefined): Record<string, string> | undefined {
+  if (!headers || typeof headers.get !== 'function') return undefined;
+  const out: Record<string, string> = {};
+  for (const h of DIAGNOSTIC_HEADERS) {
+    try {
+      const v = headers.get(h);
+      if (v) out[h] = v;
+    } catch { /* ignore missing header */ }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 export class OpenRouterProvider implements IModelJudgeProvider {
@@ -561,9 +581,30 @@ export class OpenRouterProvider implements IModelJudgeProvider {
     }
   }
 
-  private async callWithRetry(messages: any[], roiId: string, attempt = 0): Promise<Evidence[]> {
+  private async callWithRetry(
+    messages: any[],
+    roiId: string,
+    attempt = 0,
+    priorRetryFailures: Array<{ attempt: number; failureReason: string; detail?: string }> = []
+  ): Promise<Evidence[]> {
     let responseText = '';
     let responseEnvelope: any;
+    let httpStatus: number | undefined;
+    let httpStatusText: string | undefined;
+    let responseBodyPreview: string | undefined;
+    let responseHeadersPreview: Record<string, string> | undefined;
+
+    const baseDiagnostics = (
+      finalAttempt: ProviderDiagnosticsAttempt
+    ): ProviderDiagnostics => ({
+      provider: 'openrouter',
+      model: this.model,
+      roiId,
+      attemptCount: attempt + 1,
+      finalAttempt,
+      ...(priorRetryFailures.length > 0 ? { retryFailures: priorRetryFailures } : {})
+    });
+
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -586,9 +627,14 @@ export class OpenRouterProvider implements IModelJudgeProvider {
         clearTimeout(timer);
       }
 
+      httpStatus = response.status;
+      httpStatusText = response.statusText;
+      responseHeadersPreview = captureHeaders(response.headers);
+
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`OpenRouter API error ${response.status}: ${text}`);
+        const bodyText = await response.text();
+        responseBodyPreview = bodyText.slice(0, 500);
+        throw new Error(`OpenRouter API error ${response.status}: ${bodyText}`);
       }
 
       const data = await response.json() as any;
@@ -598,18 +644,30 @@ export class OpenRouterProvider implements IModelJudgeProvider {
         return providerErrorEvidence({
           roiId,
           claim: 'OpenRouter response envelope did not contain choices[0].message.content',
-          error: 'provider_response_missing_content',
           failureReason: 'provider_response_missing_content',
-          rawResponsePreview: safeJsonPreview(data, ENVELOPE_PREVIEW_LIMIT)
+          rawResponsePreview: safeJsonPreview(data, ENVELOPE_PREVIEW_LIMIT),
+          providerDiagnostics: baseDiagnostics({
+            httpStatus,
+            httpStatusText,
+            ...(responseHeadersPreview ? { responseHeadersPreview } : {}),
+            envelopePreview: safeJsonPreview(data, ENVELOPE_PREVIEW_LIMIT),
+            contentPreview: '<no content field in envelope>'
+          })
         });
       }
       if (content.length === 0) {
         return providerErrorEvidence({
           roiId,
           claim: 'OpenRouter returned empty structured judge content',
-          error: 'empty_response',
           failureReason: 'empty_response',
-          rawResponsePreview: '<empty_response>'
+          rawResponsePreview: '<empty_response>',
+          providerDiagnostics: baseDiagnostics({
+            httpStatus,
+            httpStatusText,
+            ...(responseHeadersPreview ? { responseHeadersPreview } : {}),
+            envelopePreview: safeJsonPreview(data, ENVELOPE_PREVIEW_LIMIT),
+            contentPreview: '<empty string>'
+          })
         });
       }
       responseText = content;
@@ -617,14 +675,25 @@ export class OpenRouterProvider implements IModelJudgeProvider {
       const isTimeout = err?.name === 'AbortError';
       const message = err?.message ?? String(err);
       const isHttpError = /^OpenRouter API error \d+/.test(message);
+      const failureReason = isTimeout ? 'timeout' : isHttpError ? 'provider_http_error' : 'network_error';
+      const rawPreviewForErr = responseBodyPreview
+        ?? (responseEnvelope ? safeJsonPreview(responseEnvelope, ENVELOPE_PREVIEW_LIMIT) : safeJsonPreview(message));
       return providerErrorEvidence({
         roiId,
         claim: isTimeout
           ? `OpenRouter analysis timed out after ${this.timeoutMs}ms`
           : `OpenRouter analysis failed: ${message}`,
-        error: message,
-        failureReason: isTimeout ? 'timeout' : isHttpError ? 'provider_http_error' : 'provider_request_failed',
-        rawResponsePreview: responseEnvelope ? safeJsonPreview(responseEnvelope, ENVELOPE_PREVIEW_LIMIT) : safeJsonPreview(message)
+        failureReason,
+        rawResponsePreview: rawPreviewForErr,
+        providerDiagnostics: baseDiagnostics({
+          ...(httpStatus !== undefined ? { httpStatus } : {}),
+          ...(httpStatusText !== undefined ? { httpStatusText } : {}),
+          ...(responseHeadersPreview ? { responseHeadersPreview } : {}),
+          ...(responseBodyPreview ? { responseBodyPreview } : {}),
+          errorName: err?.name ?? 'Error',
+          errorMessage: message,
+          ...(isTimeout ? { timeoutMs: this.timeoutMs } : {})
+        })
       });
     }
 
@@ -635,8 +704,18 @@ export class OpenRouterProvider implements IModelJudgeProvider {
       const items: any[] = Array.isArray(parsed) ? parsed : (parsed.evidence ?? parsed.items ?? []);
       if (!Array.isArray(items)) throw new Error('evidence is not an array');
       const evidence: Evidence[] = [];
+      const droppedReasons: string[] = [];
       for (const item of items) {
-        if (!item.claimId || !item.claim) continue;
+        if (!item.claimId || !item.claim) {
+          droppedReasons.push(
+            !item.claimId && !item.claim
+              ? `missing claimId and claim: ${safeJsonPreview(item, 80)}`
+              : !item.claimId
+                ? `missing claimId (claim: ${String(item.claim).slice(0, 60)})`
+                : `missing claim (claimId: ${String(item.claimId).slice(0, 60)})`
+          );
+          continue;
+        }
         if (!item.polarity || !VALID_POLARITY.has(String(item.polarity))) {
           throw new Error(`item '${item.claimId}' has missing or invalid polarity: ${JSON.stringify(item.polarity)}`);
         }
@@ -685,23 +764,45 @@ export class OpenRouterProvider implements IModelJudgeProvider {
         });
       }
       if (evidence.length === 0) {
-        // Preserve real response content so downstream can diagnose root cause.
-        // Never emit the sentinel '<provider_adapter_returned_empty_array>' as rawResponsePreview —
-        // that hides the actual provider response and prevents diagnosis.
         const rawItems: any[] = Array.isArray(parsed) ? parsed : (parsed.evidence ?? parsed.items ?? []);
-        const droppedCount = rawItems.length;
-        const dropDetail = droppedCount > 0
-          ? `${droppedCount} item(s) received but all dropped (missing claimId/claim or unsupported polarity); first: ${safeJsonPreview(rawItems[0], 120)}`
-          : 'provider returned an empty evidence array';
-        return providerErrorEvidence({
-          roiId,
-          claim: `OpenRouter returned no usable evidence items: ${dropDetail}`,
-          error: 'provider_adapter_returned_empty_array',
-          failureReason: 'provider_adapter_returned_empty_array',
-          rawResponsePreview: rawPreview,
-          schemaErrorPreview: dropDetail,
-          diagnosticIntegrity: 'adapter_defect'
-        });
+        const receivedCount = rawItems.length;
+        if (receivedCount > 0) {
+          // Items were received but all failed validation — report exact drop reasons
+          const allDropReasons = droppedReasons.length > 0
+            ? droppedReasons
+            : rawItems.slice(0, 5).map((x: any) => safeJsonPreview(x, 80));
+          return providerErrorEvidence({
+            roiId,
+            claim: `OpenRouter returned ${receivedCount} evidence item(s) but all were dropped by validation`,
+            failureReason: 'all_evidence_items_dropped_by_validation',
+            rawResponsePreview: rawPreview,
+            schemaErrorPreview: `${receivedCount} item(s) dropped; reasons: ${allDropReasons.slice(0, 3).join('; ')}`,
+            providerDiagnostics: baseDiagnostics({
+              httpStatus,
+              httpStatusText,
+              ...(responseHeadersPreview ? { responseHeadersPreview } : {}),
+              envelopePreview: responseEnvelope ? safeJsonPreview(responseEnvelope, ENVELOPE_PREVIEW_LIMIT) : undefined,
+              contentPreview: responseText.slice(0, 200),
+              validationDropReasons: allDropReasons
+            })
+          });
+        } else {
+          // Provider returned a genuinely empty evidence array
+          return providerErrorEvidence({
+            roiId,
+            claim: 'OpenRouter returned an empty evidence array',
+            failureReason: 'provider_returned_empty_evidence',
+            rawResponsePreview: rawPreview,
+            schemaErrorPreview: 'provider returned an empty evidence array',
+            providerDiagnostics: baseDiagnostics({
+              httpStatus,
+              httpStatusText,
+              ...(responseHeadersPreview ? { responseHeadersPreview } : {}),
+              envelopePreview: responseEnvelope ? safeJsonPreview(responseEnvelope, ENVELOPE_PREVIEW_LIMIT) : undefined,
+              contentPreview: responseText.slice(0, 200)
+            })
+          });
+        }
       }
       return evidence;
     } catch (parseErr: any) {
@@ -710,14 +811,20 @@ export class OpenRouterProvider implements IModelJudgeProvider {
         return providerErrorEvidence({
           roiId,
           claim: `OpenRouter returned invalid JSON: ${schemaErrorPreview}`,
-          error: 'invalid_json',
           failureReason: 'invalid_json',
           rawResponsePreview: rawPreview,
-          schemaErrorPreview
+          schemaErrorPreview,
+          providerDiagnostics: baseDiagnostics({
+            httpStatus,
+            httpStatusText,
+            contentPreview: responseText.slice(0, 200),
+            parseError: schemaErrorPreview
+          })
         });
       }
       if (this.retryOnParseError && attempt < this.maxRetries) {
-        return this.callWithRetry(messages, roiId, attempt + 1);
+        const retryFailure = { attempt: attempt + 1, failureReason: 'schema_parse_error', detail: schemaErrorPreview.slice(0, 100) };
+        return this.callWithRetry(messages, roiId, attempt + 1, [...priorRetryFailures, retryFailure]);
       }
       const exhausted = this.retryOnParseError && this.maxRetries > 0 && attempt >= this.maxRetries;
       const failureReason = exhausted ? 'retry_exhausted' : 'schema_parse_error';
@@ -726,11 +833,16 @@ export class OpenRouterProvider implements IModelJudgeProvider {
         claim: exhausted
           ? `OpenRouter structured output parse failed after ${attempt + 1} attempt(s): ${schemaErrorPreview}`
           : `OpenRouter structured output parse failed: ${schemaErrorPreview}`,
-        error: failureReason,
         failureReason,
         rawResponsePreview: rawPreview,
         schemaErrorPreview,
-        ...(exhausted ? { lastFailureReason: 'schema_parse_error' } : {})
+        ...(exhausted ? { lastFailureReason: 'schema_parse_error' } : {}),
+        providerDiagnostics: baseDiagnostics({
+          httpStatus,
+          httpStatusText,
+          contentPreview: responseText.slice(0, 200),
+          schemaError: schemaErrorPreview
+        })
       });
     }
   }

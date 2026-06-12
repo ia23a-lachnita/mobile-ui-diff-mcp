@@ -16,7 +16,7 @@
  * with a mocked primary provider. It must fail on the old behavior and pass after the fix.
  *
  * Two scenarios:
- *  1. Primary analyze() returns []  — empty evidence array (provider_adapter_returned_empty_array)
+ *  1. Primary analyze() returns []  — empty evidence array (internal_adapter_diagnostic_loss)
  *  2. Primary analyze() returns an error-evidence item — parse/invalid-json failure
  */
 
@@ -209,9 +209,11 @@ describe('Calorix silent failure: primary analyze() returns empty array', () => 
 
     const primaryFailed = failedRois.find((r) => r.provider === 'openrouter');
     expect(primaryFailed).toBeDefined();
-    expect(primaryFailed!.failureReason).toBe('provider_adapter_returned_empty_array');
-    expect(primaryFailed!.rawResponsePreview).toBe('<provider_adapter_returned_empty_array>');
-    expect((primaryFailed as any).diagnosticIntegrity).toBe('adapter_defect');
+    // analyze() returned [] with no items at all — adapter invariant violation, not a real provider error
+    expect(primaryFailed!.failureReason).toBe('internal_adapter_diagnostic_loss');
+    expect(primaryFailed!.rawResponsePreview).toContain('internal_adapter_diagnostic_loss');
+    expect((primaryFailed as any).providerDiagnostics).toBeDefined();
+    expect((primaryFailed as any).providerDiagnostics?.provider).toBe('openrouter');
 
     // ── suggestedFixes must NOT contain required:false in visual_parity ────
     const fixes = report.actionRequired?.suggestedFixes ?? [];
@@ -268,8 +270,9 @@ describe('Calorix silent failure: primary analyze() returns empty array', () => 
     expect(report.actionRequired?.message).toMatch(/required|judge|failed|evidence/i);
 
     const failedRoi = report.modelJudgesSummary?.failedRois.find((r) => r.provider === 'openrouter');
-    expect(failedRoi?.failureReason).toBe('provider_adapter_returned_empty_array');
-    expect(failedRoi?.rawResponsePreview).toBe('<provider_adapter_returned_empty_array>');
+    // analyze() returned [] with no items — adapter invariant violation
+    expect(failedRoi?.failureReason).toBe('internal_adapter_diagnostic_loss');
+    expect(failedRoi?.rawResponsePreview).toContain('internal_adapter_diagnostic_loss');
   });
 
 });
@@ -412,7 +415,7 @@ describe('Calorix silent failure: required reviewer analyze() returns empty arra
       };
     } as any);
 
-    // Reviewer returns [] — empty evidence array (provider_adapter_returned_empty_array)
+    // Reviewer returns [] — empty evidence array (internal_adapter_diagnostic_loss)
     MockedNvidia.mockImplementation(function () {
       return { analyze: vi.fn().mockResolvedValue([]) };
     } as any);
@@ -459,9 +462,11 @@ describe('Calorix silent failure: required reviewer analyze() returns empty arra
     const failedRois = report.modelJudgesSummary?.failedRois ?? [];
     const reviewerFailed = failedRois.find((r) => r.provider === 'nvidia');
     expect(reviewerFailed).toBeDefined();
-    expect(reviewerFailed!.failureReason).toBe('provider_adapter_returned_empty_array');
-    expect(reviewerFailed!.rawResponsePreview).toBe('<provider_adapter_returned_empty_array>');
-    expect((reviewerFailed as any).diagnosticIntegrity).toBe('adapter_defect');
+    // analyze() returned [] with no items — adapter invariant violation, not a real provider error
+    expect(reviewerFailed!.failureReason).toBe('internal_adapter_diagnostic_loss');
+    expect(reviewerFailed!.rawResponsePreview).toContain('internal_adapter_diagnostic_loss');
+    expect((reviewerFailed as any).providerDiagnostics).toBeDefined();
+    expect((reviewerFailed as any).providerDiagnostics?.provider).toBe('nvidia');
   });
 
   it('reviewer returns malformed error evidence — failureReason and rawResponsePreview still present', async () => {

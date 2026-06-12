@@ -271,48 +271,99 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
       'nearestAvoidColorDistancePx must be present — confirms avoid-color clearance check ran'
     ).toBe('number');
 
-    // ── Assertion 4: Provider errors must be diagnostically valid ────────────
+    // ── Assertion 4: Provider errors must carry concrete, non-sentinel diagnostics ──
+    const VALID_CONCRETE_FAILURE_REASONS = new Set([
+      'provider_http_error',
+      'timeout',
+      'network_error',
+      'empty_response_body',
+      'provider_response_missing_content',
+      'empty_response',
+      'invalid_json',
+      'schema_parse_error',
+      'retry_exhausted',
+      'provider_returned_empty_evidence',
+      'all_evidence_items_dropped_by_validation',
+      'provider_error',
+      'provider_exception'
+    ]);
+
     const failedRois = report.modelJudgesSummary?.failedRois ?? [];
 
     for (const error of failedRois) {
-      expect(
-        error.failureReason,
-        `failedRoi[${error.roiId}/${error.provider}]: failureReason must be non-empty`
-      ).toBeTruthy();
+      const loc = `failedRoi[${error.roiId}/${error.provider}]`;
 
-      expect(
-        error.rawResponsePreview,
-        `failedRoi[${error.roiId}/${error.provider}]: rawResponsePreview must be present`
-      ).toBeTruthy();
-
-      expect(
-        error.rawResponsePreview,
-        `failedRoi[${error.roiId}/${error.provider}]: rawResponsePreview must not be ''`
-      ).not.toBe('');
-
-      expect(
-        error.rawResponsePreview,
-        `failedRoi[${error.roiId}/${error.provider}]: must not contain <missing_error_detail> sentinel`
-      ).not.toBe('<missing_error_detail>');
+      // ── failureReason: must be present and concrete ──────────────────────
+      expect(error.failureReason, `${loc}: failureReason must be non-empty`).toBeTruthy();
 
       expect(
         error.failureReason,
-        `failedRoi[${error.roiId}/${error.provider}]: must not contain unknown_empty_failure sentinel`
+        `${loc}: failureReason must not be the 'provider_adapter_returned_empty_array' diagnostic-loss sentinel`
+      ).not.toBe('provider_adapter_returned_empty_array');
+
+      expect(
+        error.failureReason,
+        `${loc}: failureReason must not be 'internal_adapter_diagnostic_loss' — indicates an adapter bug, not a real provider error`
+      ).not.toBe('internal_adapter_diagnostic_loss');
+
+      expect(
+        error.failureReason,
+        `${loc}: failureReason must not be 'unknown_empty_failure'`
       ).not.toBe('unknown_empty_failure');
 
-      // provider_adapter_returned_empty_array means the adapter lost the real provider cause.
-      // When this failureReason is present, rawResponsePreview must be the actual response
-      // content (not the sentinel), so the cause can be diagnosed.
-      if (error.failureReason === 'provider_adapter_returned_empty_array') {
-        expect(
-          error.rawResponsePreview,
-          `failedRoi[${error.roiId}/${error.provider}]: adapter_empty row must carry real response content, not the '<provider_adapter_returned_empty_array>' sentinel`
-        ).not.toBe('<provider_adapter_returned_empty_array>');
+      expect(
+        VALID_CONCRETE_FAILURE_REASONS.has(error.failureReason ?? ''),
+        `${loc}: failureReason '${error.failureReason}' is not a recognised concrete failure category`
+      ).toBe(true);
 
+      // ── rawResponsePreview: must be real content, never a sentinel ───────
+      expect(error.rawResponsePreview, `${loc}: rawResponsePreview must be present`).toBeTruthy();
+      expect(error.rawResponsePreview, `${loc}: rawResponsePreview must not be ''`).not.toBe('');
+      expect(error.rawResponsePreview, `${loc}: must not contain <missing_error_detail>`).not.toBe('<missing_error_detail>');
+      expect(error.rawResponsePreview, `${loc}: must not contain <provider_adapter_returned_empty_array>`).not.toBe('<provider_adapter_returned_empty_array>');
+      expect(error.rawResponsePreview, `${loc}: must not contain <internal_adapter_diagnostic_loss>`).toSatisfy(
+        (v: string | undefined) => !v?.startsWith('<internal_adapter_diagnostic_loss')
+      );
+
+      // ── diagnosticIntegrity: must not flag adapter_defect ────────────────
+      expect(
+        (error as any).diagnosticIntegrity,
+        `${loc}: diagnosticIntegrity must not be 'adapter_defect'`
+      ).not.toBe('adapter_defect');
+
+      // ── providerDiagnostics: must be present and contain identity + error detail ──
+      const diag = (error as any).providerDiagnostics;
+      expect(diag, `${loc}: providerDiagnostics must be present`).toBeDefined();
+
+      if (diag) {
+        expect(diag.provider, `${loc}: providerDiagnostics.provider must match row`).toBe(error.provider);
+        expect(diag.roiId, `${loc}: providerDiagnostics.roiId must be present`).toBeTruthy();
+        expect(typeof diag.attemptCount, `${loc}: providerDiagnostics.attemptCount must be a number`).toBe('number');
+        expect(diag.finalAttempt, `${loc}: providerDiagnostics.finalAttempt must be present`).toBeDefined();
+
+        // Must carry at least one of: HTTP status, error name/message, or content preview
+        const fa = diag.finalAttempt ?? {};
+        const hasHttpContext = fa.httpStatus !== undefined || fa.httpStatusText !== undefined;
+        const hasErrorContext = fa.errorName !== undefined || fa.errorMessage !== undefined;
+        const hasContentContext = fa.contentPreview !== undefined || fa.responseBodyPreview !== undefined || fa.envelopePreview !== undefined;
         expect(
-          error.rawResponsePreview,
-          `failedRoi[${error.roiId}/${error.provider}]: adapter_empty rawResponsePreview must be non-empty`
-        ).toBeTruthy();
+          hasHttpContext || hasErrorContext || hasContentContext,
+          `${loc}: providerDiagnostics.finalAttempt must contain at least one of httpStatus/httpStatusText, errorName/errorMessage, or contentPreview/responseBodyPreview/envelopePreview`
+        ).toBe(true);
+
+        if (diag.model !== undefined) {
+          expect(typeof diag.model, `${loc}: providerDiagnostics.model must be a string`).toBe('string');
+        }
+
+        // Log for diagnosis
+        console.log(`\n  ${loc} providerDiagnostics:`);
+        console.log(`    failureReason: ${error.failureReason}`);
+        console.log(`    attemptCount:  ${diag.attemptCount}`);
+        if (fa.httpStatus !== undefined) console.log(`    httpStatus:    ${fa.httpStatus} ${fa.httpStatusText ?? ''}`);
+        if (fa.errorMessage) console.log(`    errorMessage:  ${String(fa.errorMessage).slice(0, 120)}`);
+        if (fa.responseBodyPreview) console.log(`    bodyPreview:   ${String(fa.responseBodyPreview).slice(0, 120)}`);
+        if (fa.validationDropReasons?.length) console.log(`    dropReasons:   ${fa.validationDropReasons.slice(0, 2).join('; ')}`);
+        if (diag.retryFailures?.length) console.log(`    retryFailures: ${diag.retryFailures.length}`);
       }
     }
 

@@ -42,10 +42,18 @@ function attemptedProviderReturnedNoEvidenceError(input: {
     ...(input.model ? { model: input.model } : {}),
     roiId: input.roiId,
     blocking: input.blocking,
-    message: `${input.role} judge '${input.provider}' returned no evidence after an attempted ROI/global judge call for ROI '${input.roiId}'`,
-    failureReason: 'provider_adapter_returned_empty_array',
-    rawResponsePreview: '<provider_adapter_returned_empty_array>',
-    diagnosticIntegrity: 'adapter_defect'
+    message: `${input.role} judge '${input.provider}' returned an empty array with no evidence and no error items for ROI '${input.roiId}' — adapter invariant violated`,
+    failureReason: 'internal_adapter_diagnostic_loss',
+    rawResponsePreview: '<internal_adapter_diagnostic_loss: provider.analyze() returned [] without any error item>',
+    providerDiagnostics: {
+      provider: input.provider,
+      model: input.model,
+      roiId: input.roiId,
+      attemptCount: 1,
+      finalAttempt: {
+        errorMessage: 'adapter returned empty array — provider.analyze() must return either evidence or an error item; this is an adapter invariant violation'
+      }
+    }
   };
 }
 
@@ -328,7 +336,8 @@ export class ModelJudgeAnalyzer {
                   ...(typeof item.measurements?.lastFailureReason === 'string' ? { lastFailureReason: item.measurements.lastFailureReason } : {}),
                   ...(item.measurements?.diagnosticIntegrity === 'adapter_defect' || item.measurements?.diagnosticIntegrity === 'internal_missing_error_detail'
                     ? { diagnosticIntegrity: item.measurements.diagnosticIntegrity }
-                    : {})
+                    : {}),
+                  ...(item.providerDiagnostics ? { providerDiagnostics: item.providerDiagnostics } : {})
                 }));
                 warnings.push(`ModelJudgeAnalyzer: primary provider returned error for ROI '${bundle.roiId}': ${item.measurements?.error ?? item.claim}`);
               } else {
@@ -404,7 +413,8 @@ export class ModelJudgeAnalyzer {
                   ...(typeof item.measurements?.lastFailureReason === 'string' ? { lastFailureReason: item.measurements.lastFailureReason } : {}),
                   ...(item.measurements?.diagnosticIntegrity === 'adapter_defect' || item.measurements?.diagnosticIntegrity === 'internal_missing_error_detail'
                     ? { diagnosticIntegrity: item.measurements.diagnosticIntegrity }
-                    : {})
+                    : {}),
+                  ...(item.providerDiagnostics ? { providerDiagnostics: item.providerDiagnostics } : {})
                 }));
                 warnings.push(`ModelJudgeAnalyzer: reviewer provider returned error for ROI '${bundle.roiId}': ${item.measurements?.error ?? item.claim}`);
                 reviewerUnavailable = true;

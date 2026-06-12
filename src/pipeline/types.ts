@@ -1,5 +1,29 @@
 import { ReasonCode } from '../types';
 
+export interface ProviderDiagnosticsAttempt {
+  httpStatus?: number;
+  httpStatusText?: string;
+  responseHeadersPreview?: Record<string, string>;
+  responseBodyPreview?: string;
+  envelopePreview?: string;
+  contentPreview?: string;
+  parseError?: string;
+  schemaError?: string;
+  validationDropReasons?: string[];
+  errorName?: string;
+  errorMessage?: string;
+  timeoutMs?: number;
+}
+
+export interface ProviderDiagnostics {
+  provider: string;
+  model?: string;
+  roiId: string;
+  attemptCount: number;
+  finalAttempt: ProviderDiagnosticsAttempt;
+  retryFailures?: Array<{ attempt: number; failureReason: string; detail?: string }>;
+}
+
 export type AnalyzerStage =
   | 'stage1_deterministic'
   | 'stage1_5_bundle'
@@ -15,6 +39,7 @@ export interface Evidence {
   confidence: number;
   authority: 'deterministic' | 'source' | 'model' | 'user';
   measurements?: Record<string, number | string | boolean>;
+  providerDiagnostics?: ProviderDiagnostics;
   // Structured fields for contradiction detection (replaces keyword heuristics)
   claimType?: string;
   expectedValue?: number | string;
@@ -55,6 +80,7 @@ export interface JudgeProviderError {
   schemaErrorPreview?: string;
   lastFailureReason?: string;
   diagnosticIntegrity?: 'adapter_defect' | 'internal_missing_error_detail';
+  providerDiagnostics?: ProviderDiagnostics;
 }
 
 export interface JudgeProviderRunSummary {
