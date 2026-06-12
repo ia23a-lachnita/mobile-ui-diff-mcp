@@ -407,7 +407,7 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
       }
     }
 
-    // ── Assertion 6: If primary succeeds, log the result ────────────────────
+    // ── Assertion 6: Log primary result ─────────────────────────────────────
     const primarySucceeded = !primaryFailed && (primary?.evidenceCount ?? 0) > 0;
     if (primarySucceeded) {
       console.log('\n=== PRIMARY PROVIDER SUCCEEDED ===');
@@ -417,6 +417,58 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
       console.log(`model:             ${primary!.model}`);
       console.log(`visualAuditStatus: ${report.visualAuditStatus}`);
       console.log(`acceptanceStatus:  ${report.acceptanceStatus}`);
+    }
+
+    // ── Assertion 7: Required primary judge must produce usable evidence ──────
+    // This assertion is the acceptance gate. The test must fail unless the real
+    // OpenRouter primary judge returns structured evidence for each required ROI.
+    // Diagnostics improvements alone must not make this pass.
+    expect(
+      primary!.provider,
+      'primary provider must be openrouter'
+    ).toBe('openrouter');
+
+    expect(
+      primary!.model,
+      'primary model must be qwen/qwen3-vl-235b-a22b-instruct'
+    ).toBe('qwen/qwen3-vl-235b-a22b-instruct');
+
+    expect(
+      primary!.attempted,
+      'primary provider must have been attempted'
+    ).toBe(true);
+
+    expect(
+      primary!.status,
+      'primary OpenRouter judge must succeed — provider_returned_empty_evidence is not acceptable'
+    ).toBe('success');
+
+    expect(
+      primary!.hadSuccess,
+      'primary.hadSuccess must be true'
+    ).toBe(true);
+
+    expect(
+      primary!.evidenceCount,
+      'primary evidenceCount must be > 0 — model must emit at least one evidence item per ROI'
+    ).toBeGreaterThan(0);
+
+    expect(
+      primary!.errorCount,
+      'primary errorCount must be 0 — no ROI may remain with provider_returned_empty_evidence or any other failure'
+    ).toBe(0);
+
+    // ── Assertion 8: Each required Calorix audit item must have evidence ──────
+    const REQUIRED_ROIS = ['macro-ring-hero', 'macro-rows', 'meal-cards', 'global'] as const;
+    const openrouterFailedRoiIds = new Set(
+      failedRois.filter((r) => r.provider === 'openrouter').map((r) => r.roiId)
+    );
+
+    for (const requiredRoi of REQUIRED_ROIS) {
+      expect(
+        openrouterFailedRoiIds.has(requiredRoi),
+        `required ROI '${requiredRoi}' must not appear in OpenRouter failedRois — it must have usable structured evidence`
+      ).toBe(false);
     }
   });
 });
