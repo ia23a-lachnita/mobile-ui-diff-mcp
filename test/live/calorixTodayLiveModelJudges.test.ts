@@ -89,6 +89,10 @@ function getBranchSha(): string {
 // ── Suite ────────────────────────────────────────────────────────────────────
 
 describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
+  // Populated in beforeAll from the real Calorix config — live test uses the
+  // same value as the normal MCP/CLI path, not a divergent hardcoded override.
+  let configuredModelJudgesTimeoutMs = 120000;
+
   beforeAll(async () => {
     const missingKeys: string[] = [];
     if (!process.env.OPENROUTER_API_KEY) missingKeys.push('OPENROUTER_API_KEY');
@@ -123,6 +127,12 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
         .join('\n\n');
       throw new Error(`Required Calorix artifacts missing:\n\n${detail}`);
     }
+
+    // Read modelJudges.timeoutMs from the real config so the live test uses the
+    // same timeout as a normal MCP/CLI run — not a divergent hardcoded value.
+    const rawConfig = JSON.parse(await fs.readFile(calorixPath('ui-diff.config.json'), 'utf-8'));
+    configuredModelJudgesTimeoutMs = (rawConfig as any)?.screens?.today?.modelJudges?.timeoutMs ?? 120000;
+    console.log(`\nmodelJudges.timeoutMs (from ui-diff.config.json): ${configuredModelJudgesTimeoutMs}`);
   });
 
   it('real providers produce a structurally valid, diagnosable report', { timeout: 300_000 }, async () => {
@@ -160,7 +170,7 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
         reviewer: { provider: 'nvidia', model: 'nvidia/nemotron-nano-12b-v2-vl' },
         requireConsensusForCodeHints: true,
         allowEditSuggestionsOnPass: false,
-        timeoutMs: 120000,
+        timeoutMs: configuredModelJudgesTimeoutMs,
         maxRetries: 1,
         retryOnParseError: true
       },
@@ -527,16 +537,18 @@ describe.skipIf(!LIVE_ENABLED)('calorixTodayLiveModelJudges', () => {
       ).toBe(false);
     }
 
-    // ── Assertion 11: Positive reviewer subject coverage ─────────────────────
+    // ── Assertion 11: Positive reviewer bundle coverage ──────────────────────
     // Guards against a silent reviewer skip: a required ROI that is neither
     // failed nor succeeded — just never processed. reviewer.status=success is
     // a necessary but not sufficient condition; every required ROI must also
-    // appear in reviewer.successfulRoiIds with at least one non-error evidence item.
+    // appear in reviewer.successfulRoiIds with at least one accepted non-error
+    // evidence item. Tracked at bundle.roiId level (not by model-provided
+    // subject labels, which NVIDIA can invent, e.g. "Macro Ring Hero Card").
     const reviewerSuccessfulRoiIds = new Set(reviewer!.successfulRoiIds ?? []);
     for (const requiredRoi of REQUIRED_ROIS) {
       expect(
         reviewerSuccessfulRoiIds.has(requiredRoi),
-        `required ROI '${requiredRoi}' must appear in reviewer.successfulRoiIds — at least one non-error evidence item with subject "roi:${requiredRoi}" must exist from the NVIDIA reviewer`
+        `required ROI '${requiredRoi}' must appear in reviewer.successfulRoiIds — reviewer must produce at least one accepted non-error evidence item for bundle.roiId "${requiredRoi}" (tracked at bundle level, not by model-provided subject labels)`
       ).toBe(true);
     }
   });
