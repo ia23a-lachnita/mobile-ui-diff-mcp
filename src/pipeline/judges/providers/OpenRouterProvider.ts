@@ -821,7 +821,27 @@ export class OpenRouterProvider implements IModelJudgeProvider {
             })
           });
         } else {
-          // Provider returned a genuinely empty evidence array
+          // Provider returned a genuinely empty evidence array.
+          // Retry with explicit feedback: inject the model's empty response as
+          // assistant context and demand a non-empty array in the follow-up turn.
+          if (this.retryOnParseError && attempt < this.maxRetries) {
+            const retryMessages = [
+              ...messages,
+              { role: 'assistant', content: responseText },
+              {
+                role: 'user',
+                content: [
+                  `Your previous response for ROI "${roiId}" contained an empty evidence array {"evidence": []}.`,
+                  'This is NOT acceptable. You must emit at least one evidence item.',
+                  `If the UI looks correct, emit a single match item. Example:`,
+                  `{"evidence":[{"claimId":"overall-match","subject":"roi:${roiId}","polarity":"match","claim":"Visual layout matches the expected mockup.","confidence":0.85,"severity":"info","blocking":false}]}`,
+                  'Respond now with a non-empty evidence array. Do NOT return {"evidence": []}.'
+                ].join('\n')
+              }
+            ];
+            const retryFailure = { attempt: attempt + 1, failureReason: 'provider_returned_empty_evidence', detail: 'model returned empty evidence array; retrying with feedback' };
+            return this.callWithRetry(retryMessages, roiId, attempt + 1, [...priorRetryFailures, retryFailure]);
+          }
           return providerErrorEvidence({
             roiId,
             claim: 'OpenRouter returned an empty evidence array',
